@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GitHub Repo Analyzer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="container">
+    <header>
+      <h1 id="repo-name">GitHub Repo Analyzer</h1>
+      <p id="repo-description"></p>
+      <div id="repo-meta">
+        <span id="repo-stars" title="Stars">⭐ —</span>
+        <span id="repo-forks" title="Forks">⑂ —</span>
+        <span id="repo-license"></span>
+        <span id="rate-limit-badge" title="GitHub API calls remaining this hour">API: —</span>
+      </div>
+    </header>
+
+    <div id="not-repo-msg" style="display:none">
+      <div class="empty-state">
+        <div class="empty-state-icon">⬡</div>
+        <p>Navigate to a <strong>GitHub repository</strong> page to use this extension.</p>
+      </div>
+    </div>
+
+    <div id="main-content">
+      <div id="tabs">
+        <button class="tab-btn active" data-tab="issues">Issues</button>
+        <button class="tab-btn" data-tab="tech">Stack</button>
+        <button class="tab-btn" data-tab="maintainers">Maintainers</button>
+        <button class="tab-btn" data-tab="contribute">Contribute</button>
+        <button class="tab-btn" data-tab="chat">Chat</button>
+      </div>
+
+      <main id="tab-content">
+        <!-- Issues Tab -->
+        <div id="issues-tab" class="tab-pane active">
+          <div class="filter-bar">
+            <button class="filter-btn active" data-label="">All</button>
+            <button class="filter-btn" data-label="good-first-issue">Good First</button>
+            <button class="filter-btn" data-label="help-wanted">Help Wanted</button>
+          </div>
+          <ul id="issues-list"></ul>
+        </div>
+
+        <!-- Tech Stack Tab -->
+        <div id="tech-tab" class="tab-pane">
+          <h2>Tech Stack</h2>
+          <ul id="tech-list"></ul>
+        </div>
+
+        <!-- Maintainers Tab -->
+        <div id="maintainers-tab" class="tab-pane">
+          <h2>Top Contributors</h2>
+          <ul id="maintainers-list"></ul>
+        </div>
+
+        <!-- Contribute Tab -->
+        <div id="contribute-tab" class="tab-pane">
+          <div id="health-card"></div>
+
+          <div id="open-prs-section">
+            <h3>Recent Open PRs</h3>
+            <ul id="prs-list"></ul>
+          </div>
+
+          <div id="quickstart-section">
+            <h3>Getting Started Guide</h3>
+            <button id="gen-quickstart-btn">Generate with AI ✨</button>
+            <div id="quickstart-content"></div>
+          </div>
+        </div>
+
+        <!-- Chat Tab -->
+        <div id="chat-tab" class="tab-pane">
+          <div id="chat-header-bar">
+            <span id="chat-context-label">Context: README + CONTRIBUTING + configs</span>
+            <button id="clear-chat-btn">Clear</button>
+          </div>
+          <div id="chat-history"></div>
+          <div id="typing-indicator" style="display:none">
+            <div class="typing-dots"><span></span><span></span><span></span></div>
+            <span>Analyzing...</span>
+          </div>
+          <div id="chat-input-container">
+            <textarea id="chat-input" placeholder="Ask about this repo..."></textarea>
+            <button id="send-btn">Send</button>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+  <script src="sidepanel.js"></script>
+</body>
+</html>
