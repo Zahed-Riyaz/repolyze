@@ -190,6 +190,14 @@ function applyRepoData(data) {
   if (license && license !== "NOASSERTION") {
     document.getElementById("repo-license").textContent = license;
   }
+  // Fork detection — show upstream repo link if this is a fork
+  const forkBadge = document.getElementById("repo-fork-badge");
+  if (data.fork && data.parent) {
+    forkBadge.innerHTML = `⑂ fork of <a href="${data.parent.html_url}" target="_blank">${escapeHtml(data.parent.full_name)}</a>`;
+    forkBadge.style.display = "inline";
+  } else {
+    forkBadge.style.display = "none";
+  }
 }
 
 function formatNumber(n) {
@@ -391,12 +399,73 @@ async function fetchRepoHealth() {
   }
 }
 
+// ── Repo Health Score ──────────────────────────────────────────────────────────
+// Calculates a 0-100 contributor-friendliness score from the health object.
+// Weights: activity (30) + CONTRIBUTING (20) + issue templates (15) +
+//          PR responsiveness (25) + description (5) + has issues (5)
+function calculateHealthScore(h, repoData) {
+  let score = 0;
+
+  // Activity: how recently was the repo pushed to (30 pts)
+  if (h.lastPush) {
+    const days = Math.floor((Date.now() - new Date(h.lastPush)) / 86_400_000);
+    if (days < 7)        score += 30;
+    else if (days < 30)  score += 25;
+    else if (days < 90)  score += 15;
+    else if (days < 180) score +=  5;
+  }
+
+  // Has a CONTRIBUTING.md (20 pts)
+  if (h.hasContributing) score += 20;
+
+  // Has issue templates (15 pts)
+  if (h.hasIssueTemplates) score += 15;
+
+  // PR merge responsiveness (25 pts)
+  if (h.avgMergeDays !== null) {
+    if (h.avgMergeDays < 3)       score += 25;
+    else if (h.avgMergeDays < 7)  score += 20;
+    else if (h.avgMergeDays < 14) score += 12;
+    else if (h.avgMergeDays < 30) score +=  5;
+  }
+
+  // Has a description (5 pts)
+  if (repoData?.description) score += 5;
+
+  // Has open issues to work on (5 pts)
+  if (h.openIssues > 0) score += 5;
+
+  score = Math.min(100, score);
+
+  let grade, color, emoji;
+  if (score >= 80)      { grade = "Excellent";       color = "#3fb950"; emoji = "🟢"; }
+  else if (score >= 60) { grade = "Good";             color = "#58a6ff"; emoji = "🔵"; }
+  else if (score >= 40) { grade = "Fair";             color = "#e3b341"; emoji = "🟡"; }
+  else                  { grade = "Needs attention";  color = "#f85149"; emoji = "🔴"; }
+
+  return { score, grade, color, emoji };
+}
+
 function renderHealthCard(h) {
+  const cacheKey = `${currentRepo.owner}/${currentRepo.repo}`;
+  const repoData = repoCache[cacheKey]?.repoData;
+  const { score, grade, color, emoji } = calculateHealthScore(h, repoData);
+
   const lastPushText = h.lastPush ? daysAgo(h.lastPush) : "unknown";
   const avgMergeText = h.avgMergeDays !== null ? `${h.avgMergeDays}d avg` : "N/A";
 
   document.getElementById("health-card").innerHTML = `
-    <div class="health-section-title">Repo Health</div>
+    <div class="health-score-row">
+      <div class="health-score-circle" style="border-color:${color}">
+        <span class="health-score-num" style="color:${color}">${score}</span>
+        <span class="health-score-denom">/100</span>
+      </div>
+      <div class="health-score-info">
+        <div class="health-score-grade" style="color:${color}">${emoji} ${grade}</div>
+        <div class="health-score-sub">Contributor Friendliness</div>
+      </div>
+    </div>
+    <div class="health-section-title">Details</div>
     <div class="health-grid">
       <div class="health-item ${h.hasContributing ? "good" : "bad"}">
         ${h.hasContributing ? "✓" : "✗"} CONTRIBUTING.md
@@ -404,18 +473,10 @@ function renderHealthCard(h) {
       <div class="health-item ${h.hasIssueTemplates ? "good" : "bad"}">
         ${h.hasIssueTemplates ? "✓" : "✗"} Issue Templates
       </div>
-      <div class="health-item neutral">
-        🕐 Last Push: ${lastPushText}
-      </div>
-      <div class="health-item neutral">
-        🔀 Open PRs: ${h.openPRs}
-      </div>
-      <div class="health-item neutral">
-        ⏱ Merge Time: ${avgMergeText}
-      </div>
-      <div class="health-item neutral">
-        🐛 Open Issues: ${formatNumber(h.openIssues)}
-      </div>
+      <div class="health-item neutral">🕐 Last Push: ${lastPushText}</div>
+      <div class="health-item neutral">🔀 Open PRs: ${h.openPRs}</div>
+      <div class="health-item neutral">⏱ Merge Time: ${avgMergeText}</div>
+      <div class="health-item neutral">🐛 Open Issues: ${formatNumber(h.openIssues)}</div>
     </div>
   `;
 }
@@ -500,14 +561,20 @@ Keep it to the point. Use markdown code blocks for commands. Base it on this rep
 
 ${context}`;
 
-    const result = await callAI([{ role: "user", parts: [{ text: prompt }] }]);
+    // Stream tokens directly into the content area for a premium feel
+    const result = await callAIStreaming([{ role: "user", parts: [{ text: prompt }] }], (partial) => {
+      content.innerHTML = renderMarkdown(partial) + '<span class="streaming-cursor"></span>';
+    });
 
+    content.innerHTML = renderMarkdown(result);
     if (!repoCache[cacheKey]) repoCache[cacheKey] = {};
     repoCache[cacheKey].quickstart = result;
-    content.innerHTML = renderMarkdown(result);
     btn.style.display = "none";
   } catch (err) {
-    content.innerHTML = `<p class="error-item">Error: ${err.message}</p>`;
+    let msg = err.message;
+    if (msg === "OLLAMA_NOT_RUNNING") msg = "Ollama is not running. Start it with: OLLAMA_ORIGINS='*' ollama serve";
+    if (msg === "OLLAMA_CORS")        msg = "Ollama is blocking the extension. Restart with: OLLAMA_ORIGINS='*' ollama serve";
+    content.innerHTML = `<p class="error-item">Error: ${escapeHtml(msg)}</p>`;
     btn.disabled = false;
     btn.textContent = "Retry ✨";
   }
@@ -528,37 +595,57 @@ async function handleChat() {
   appendChatMessage("user", query, false);
   input.value = "";
 
-  const typingEl = document.getElementById("typing-indicator");
+  const typingEl  = document.getElementById("typing-indicator");
+  const chatHistEl = document.getElementById("chat-history");
   typingEl.style.display = "flex";
   document.getElementById("send-btn").disabled = true;
+
+  // Pre-create bot bubble; it will be appended on the first streaming token
+  const botBubble = document.createElement("div");
+  botBubble.className = "chat-msg chat-msg-bot";
+  let streamStarted = false;
+  let fullReply = "";
 
   try {
     const context = await getDeepRepoContext();
     const systemText = `You are an expert on the GitHub repository "${currentRepo.owner}/${currentRepo.repo}". Answer questions based on this context:\n\n${context}\n\nUser question: `;
 
-    // Build multi-turn history (last 6 messages)
     const history = chatMessages.slice(-7, -1).map(m => ({
       role: m.role === "user" ? "user" : "model",
       parts: [{ text: m.text }]
     }));
     history.push({ role: "user", parts: [{ text: systemText + query }] });
 
-    const reply = await callAI(history);
-    chatMessages.push({ role: "bot", text: reply });
-    appendChatMessage("bot", reply, false);
+    // Stream tokens directly into the bot bubble
+    fullReply = await callAIStreaming(history, (partial) => {
+      if (!streamStarted) {
+        streamStarted = true;
+        typingEl.style.display = "none";
+        chatHistEl.appendChild(botBubble);
+      }
+      botBubble.innerHTML = renderMarkdown(partial) + '<span class="streaming-cursor"></span>';
+      chatHistEl.scrollTop = chatHistEl.scrollHeight;
+    });
+
+    // Final render without the blinking cursor
+    botBubble.innerHTML = renderMarkdown(fullReply);
+    chatHistEl.scrollTop = chatHistEl.scrollHeight;
+    chatMessages.push({ role: "bot", text: fullReply });
     saveChatHistory();
   } catch (err) {
     const ollamaErr = err.message === "OLLAMA_NOT_RUNNING" || err.message === "OLLAMA_CORS";
     if (ollamaErr) {
-      // Remove the unanswered user bubble and restore the query to the input
+      // Errors happen before streaming starts — clean up and show guide
       chatMessages.pop();
-      document.getElementById("chat-history").lastElementChild?.remove();
+      chatHistEl.lastElementChild?.remove(); // remove user bubble
       showOllamaGuide(err.message, query);
-    } else {
+    } else if (!streamStarted) {
+      // Error before first token — show error bubble
       const errText = `Error: ${err.message}`;
       chatMessages.push({ role: "bot", text: errText });
       appendChatMessage("bot", errText, false);
     }
+    // Mid-stream error: partial content already visible, leave it as-is
   } finally {
     typingEl.style.display = "none";
     document.getElementById("send-btn").disabled = false;
@@ -970,6 +1057,223 @@ async function callAnthropic(contents) {
   }
   if (!data.content?.[0]) throw new Error("Anthropic returned no response.");
   return data.content[0].text;
+}
+
+// ── AI Streaming ──────────────────────────────────────────────────────────────
+// callAIStreaming mirrors callAI but calls the streaming variant of each
+// provider. `onChunk(cumulativeText)` is called after every received token so
+// the caller can update the UI incrementally.
+
+async function callAIStreaming(contents, onChunk) {
+  if (aiProvider === "groq")      return callGroqStreaming(contents, onChunk);
+  if (aiProvider === "ollama")    return callOllamaStreaming(contents, onChunk);
+  if (aiProvider === "openai")    return callOpenAIStreaming(contents, onChunk);
+  if (aiProvider === "anthropic") return callAnthropicStreaming(contents, onChunk);
+  return callGeminiStreaming(contents, onChunk);
+}
+
+// ── Streaming: Gemini (Server-Sent Events) ────────────────────────────────────
+// Endpoint: streamGenerateContent?alt=sse
+// Each SSE event carries the DELTA text for that chunk.
+async function callGeminiStreaming(contents, onChunk) {
+  let response;
+  try {
+    response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?key=${aiApiKey}&alt=sse`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ contents }) }
+    );
+  } catch {
+    throw new Error("Could not reach Gemini. Check your internet connection.");
+  }
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 400) throw new Error("Gemini: Invalid API key. Go to Settings to update it.");
+    if (response.status === 429) throw new Error("Gemini: Rate limit hit. Try again in a moment.");
+    throw new Error(`Gemini ${response.status}: ${data.error?.message || "Unknown error"}`);
+  }
+  const reader   = response.body.getReader();
+  const decoder  = new TextDecoder();
+  let buf = "", full = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split("\n"); buf = lines.pop();
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const raw = line.slice(6).trim();
+      if (!raw) continue;
+      try {
+        const json  = JSON.parse(raw);
+        const delta = json.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (delta) { full += delta; onChunk(full); }
+      } catch { /* skip malformed */ }
+    }
+  }
+  return full;
+}
+
+// ── Streaming: Groq / OpenAI (OpenAI-compatible SSE) ─────────────────────────
+// Both providers use the same SSE wire format:
+//   data: {"choices":[{"delta":{"content":"..."}}]}
+//   data: [DONE]
+async function callGroqStreaming(contents, onChunk) {
+  const messages = geminiToOpenAI(contents);
+  let response;
+  try {
+    response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${aiApiKey}` },
+      body: JSON.stringify({ model: "llama-3.3-70b-versatile", messages, stream: true })
+    });
+  } catch { throw new Error("Could not reach Groq. Check your internet connection."); }
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 401) throw new Error("Groq: Invalid API key.");
+    if (response.status === 429) throw new Error("Groq: Rate limit hit. Try again in a moment.");
+    throw new Error(`Groq ${response.status}: ${data.error?.message || "Unknown error"}`);
+  }
+  return readOpenAISSEStream(response, onChunk);
+}
+
+async function callOpenAIStreaming(contents, onChunk) {
+  const messages = geminiToOpenAI(contents);
+  let response;
+  try {
+    response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${aiApiKey}` },
+      body: JSON.stringify({ model: "gpt-4o-mini", messages, stream: true })
+    });
+  } catch { throw new Error("Could not reach OpenAI. Check your internet connection."); }
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 401) throw new Error("OpenAI: Invalid API key.");
+    if (response.status === 429) throw new Error("OpenAI: Rate limit hit. Try again in a moment.");
+    throw new Error(`OpenAI ${response.status}: ${data.error?.message || "Unknown error"}`);
+  }
+  return readOpenAISSEStream(response, onChunk);
+}
+
+// Shared SSE reader for Groq + OpenAI format
+async function readOpenAISSEStream(response, onChunk) {
+  const reader  = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "", full = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split("\n"); buf = lines.pop();
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const raw = line.slice(6).trim();
+      if (raw === "[DONE]") return full;
+      try {
+        const json  = JSON.parse(raw);
+        const delta = json.choices?.[0]?.delta?.content;
+        if (delta) { full += delta; onChunk(full); }
+      } catch { /* skip */ }
+    }
+  }
+  return full;
+}
+
+// ── Streaming: Anthropic (SSE with typed events) ──────────────────────────────
+// Relevant event: content_block_delta → delta.type === "text_delta" → delta.text
+async function callAnthropicStreaming(contents, onChunk) {
+  const messages = geminiToOpenAI(contents);
+  let response;
+  try {
+    response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": aiApiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({ model: "claude-3-5-haiku-20241022", max_tokens: 2048, messages, stream: true })
+    });
+  } catch { throw new Error("Could not reach Anthropic. Check your internet connection."); }
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 401) throw new Error("Anthropic: Invalid API key.");
+    if (response.status === 429) throw new Error("Anthropic: Rate limit hit. Try again in a moment.");
+    throw new Error(`Anthropic ${response.status}: ${data.error?.message || "Unknown error"}`);
+  }
+  const reader  = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "", full = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split("\n"); buf = lines.pop();
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const raw = line.slice(6).trim();
+      try {
+        const json = JSON.parse(raw);
+        if (json.type === "content_block_delta" && json.delta?.type === "text_delta") {
+          full += json.delta.text; onChunk(full);
+        }
+      } catch { /* skip */ }
+    }
+  }
+  return full;
+}
+
+// ── Streaming: Ollama (NDJSON, stream:true) ────────────────────────────────────
+// Wire format: newline-delimited JSON, each line: {"message":{"content":"..."},"done":false}
+// Final line has "done":true. Auto-pulls missing models via pullOllamaModel.
+async function callOllamaStreaming(contents, onChunk) {
+  const messages = geminiToOpenAI(contents);
+  const model    = ollamaModel || "llama3.2";
+
+  const ollamaFetch = () => fetch("http://localhost:11434/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, messages, stream: true })
+  });
+
+  let response;
+  try { response = await ollamaFetch(); }
+  catch { throw new Error("OLLAMA_NOT_RUNNING"); }
+
+  if (response.status === 403) throw new Error("OLLAMA_CORS");
+
+  if (response.status === 404) {
+    // Model not downloaded — stream the pull, then retry
+    await pullOllamaModel(model);
+    try { response = await ollamaFetch(); }
+    catch { throw new Error("OLLAMA_NOT_RUNNING"); }
+  }
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`Ollama ${response.status}: ${text || "Unexpected error"}`);
+  }
+
+  const reader  = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "", full = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split("\n"); buf = lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const evt = JSON.parse(line);
+        if (evt.done) return full;
+        const delta = evt.message?.content;
+        if (delta) { full += delta; onChunk(full); }
+      } catch { /* skip malformed */ }
+    }
+  }
+  return full;
 }
 
 // Convert Gemini contents format → OpenAI messages format

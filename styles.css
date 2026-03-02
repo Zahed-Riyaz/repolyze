@@ -786,6 +786,81 @@ li {
   letter-spacing: 0;
 }
 
+/* ── Streaming cursor ────────────────────────────────────────────────────── */
+/* Thin blinking green block appended to bot bubble while tokens are arriving */
+.streaming-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 0.9em;
+  background: #3fb950;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: cursor-blink 0.7s step-end infinite;
+}
+
+/* ── Repo Health Score ───────────────────────────────────────────────────── */
+.health-score-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+
+.health-score-circle {
+  width: 62px;
+  height: 62px;
+  border-radius: 50%;
+  border: 3px solid #3fb950; /* overridden inline per score */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.health-score-num {
+  font-size: 1.5em;
+  font-weight: 700;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  line-height: 1;
+}
+
+.health-score-denom {
+  font-size: 0.7em;
+  color: #8b949e;
+  line-height: 1;
+  margin-top: 1px;
+}
+
+.health-score-grade {
+  font-weight: 600;
+  font-size: 1em;
+  margin-bottom: 3px;
+}
+
+.health-score-sub {
+  font-size: 0.82em;
+  color: #8b949e;
+}
+
+/* ── Fork badge ──────────────────────────────────────────────────────────── */
+.repo-fork-badge {
+  font-size: 0.82em;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 2px 8px;
+  color: #8b949e;
+  white-space: nowrap;
+}
+
+.repo-fork-badge a { color: #58a6ff; text-decoration: none; }
+.repo-fork-badge a:hover { text-decoration: underline; }
+
 /* ── Ollama setup guide card ─────────────────────────────────────────────── */
 .ollama-guide {
   border-left-color: #e3b341 !important;
