@@ -1,10 +1,12 @@
 // ── State ────────────────────────────────────────────────────────────────────
 let currentRepo = null;
 let githubToken = "";
-let aiProvider = "groq";   // "groq" | "gemini" | "ollama"
-let aiApiKey = "";          // groq or gemini key
+let aiProvider = "groq";   // "groq" | "gemini" | "ollama" | "openai" | "anthropic"
+let aiApiKey = "";          // API key for cloud providers
 let ollamaModel = "llama3.2";
 let chatMessages = []; // [{role:"user"|"bot", text:"..."}]
+let ollamaCancelWait  = false;
+let isWaitingForOllama = false;
 
 // Session cache keyed by "owner/repo"
 // Stores: { repoData, issues, languages, contributors, health, prs, quickstart, context }
@@ -32,7 +34,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // Chat controls
-  document.getElementById("send-btn").addEventListener("click", handleChat);
+  document.getElementById("send-btn").addEventListener("click", () => {
+    if (isWaitingForOllama) { ollamaCancelWait = true; } else { handleChat(); }
+  });
   document.getElementById("chat-input").addEventListener("keypress", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleChat(); }
   });
@@ -56,7 +60,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     await chrome.storage.local.remove(["geminiApiKey"]);
   }
 
-  if (aiProvider !== "ollama" && !aiApiKey) showSettingsPrompt();
+  initSettingsTab();
+
+  if (aiProvider !== "ollama" && !aiApiKey) {
+    document.querySelector('.tab-btn[data-tab="settings"]')?.click();
+  }
 
   // Listen for tab URL changes
   chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -71,82 +79,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (activeTab && activeTab.url) handleRepoRefresh(activeTab.url);
   });
 });
-
-// ── Settings prompt ───────────────────────────────────────────────────────────
-function showSettingsPrompt() {
-  if (document.getElementById("settings-prompt")) return;
-  const container = document.getElementById("container");
-  const prompt = document.createElement("div");
-  prompt.id = "settings-prompt";
-  prompt.innerHTML = `
-    <div class="settings-inline">
-      <h3>Choose AI Provider</h3>
-      <div class="prompt-provider-pills">
-        <button class="prompt-pill active" data-provider="groq">⚡ Groq <span class="pill-tag">Free</span></button>
-        <button class="prompt-pill" data-provider="gemini">✦ Gemini <span class="pill-tag">Free tier</span></button>
-        <button class="prompt-pill" data-provider="ollama">🦙 Ollama <span class="pill-tag">Local</span></button>
-      </div>
-      <div id="prompt-key-wrap">
-        <input type="password" id="ai-key-input" placeholder="Groq API key — get free at console.groq.com">
-      </div>
-      <div id="prompt-ollama-wrap" style="display:none">
-        <p class="prompt-ollama-note">No key needed. Make sure <code>ollama serve</code> is running locally.</p>
-        <input type="text" id="ollama-model-input" placeholder="Model name (default: llama3.2)">
-      </div>
-      <div class="settings-inline-actions">
-        <button id="save-keys-btn">Save &amp; Continue</button>
-        <a href="#" id="open-options-link">Full Settings</a>
-      </div>
-    </div>
-  `;
-  container.prepend(prompt);
-
-  // Provider pill switching
-  let promptProvider = "groq";
-  const pillPlaceholders = {
-    groq:   "Groq API key — get free at console.groq.com",
-    gemini: "Gemini API key — get free at aistudio.google.com",
-    ollama: "",
-  };
-
-  prompt.querySelectorAll(".prompt-pill").forEach(pill => {
-    pill.addEventListener("click", () => {
-      prompt.querySelectorAll(".prompt-pill").forEach(p => p.classList.remove("active"));
-      pill.classList.add("active");
-      promptProvider = pill.dataset.provider;
-      const isOllama = promptProvider === "ollama";
-      document.getElementById("prompt-key-wrap").style.display  = isOllama ? "none" : "block";
-      document.getElementById("prompt-ollama-wrap").style.display = isOllama ? "block" : "none";
-      if (!isOllama) {
-        document.getElementById("ai-key-input").placeholder = pillPlaceholders[promptProvider];
-      }
-    });
-  });
-
-  document.getElementById("save-keys-btn").addEventListener("click", async () => {
-    aiProvider = promptProvider;
-    const toSave = { aiProvider };
-
-    if (aiProvider === "ollama") {
-      ollamaModel = (document.getElementById("ollama-model-input").value.trim()) || "llama3.2";
-      toSave.ollamaModel = ollamaModel;
-    } else {
-      const key = document.getElementById("ai-key-input").value.trim();
-      if (!key) { alert("Please enter an API key."); return; }
-      aiApiKey = key;
-      toSave.aiApiKey = aiApiKey;
-    }
-
-    await chrome.storage.local.set(toSave);
-    prompt.remove();
-    if (currentRepo) updateRepoInfo();
-  });
-
-  document.getElementById("open-options-link").addEventListener("click", (e) => {
-    e.preventDefault();
-    chrome.runtime.openOptionsPage();
-  });
-}
 
 // ── Repo detection ────────────────────────────────────────────────────────────
 function handleRepoRefresh(url) {
@@ -544,7 +476,8 @@ async function generateQuickstart() {
   if (aiProvider !== "ollama" && !aiApiKey) {
     content.innerHTML = `<p class="error-item">AI not configured. <a href="#" id="open-opts">Open Settings</a></p>`;
     document.getElementById("open-opts")?.addEventListener("click", (e) => {
-      e.preventDefault(); chrome.runtime.openOptionsPage();
+      e.preventDefault();
+      document.querySelector('.tab-btn[data-tab="settings"]')?.click();
     });
     return;
   }
@@ -619,9 +552,15 @@ async function handleChat() {
     appendChatMessage("bot", reply, false);
     saveChatHistory();
   } catch (err) {
-    const errText = `Error: ${err.message}`;
-    chatMessages.push({ role: "bot", text: errText });
-    appendChatMessage("bot", errText, false);
+    if (err.message === "OLLAMA_WAIT_CANCELLED") {
+      // User cancelled — quietly remove the unanswered user message
+      chatMessages.pop();
+      document.getElementById("chat-history").lastElementChild?.remove();
+    } else {
+      const errText = `Error: ${err.message}`;
+      chatMessages.push({ role: "bot", text: errText });
+      appendChatMessage("bot", errText, false);
+    }
   } finally {
     typingEl.style.display = "none";
     document.getElementById("send-btn").disabled = false;
@@ -643,6 +582,7 @@ function appendChatMessage(role, text, save = true) {
 }
 
 async function clearChat() {
+  ollamaCancelWait = true;
   chatMessages = [];
   document.getElementById("chat-history").innerHTML = "";
   const key = `chat_${currentRepo?.owner}_${currentRepo?.repo}`;
@@ -667,11 +607,146 @@ async function saveChatHistory() {
   await chrome.storage.local.set({ [key]: trimmed });
 }
 
+// ── Settings tab ──────────────────────────────────────────────────────────────
+function initSettingsTab() {
+  const PROVIDER_LABELS = {
+    groq: "Groq API Key", gemini: "Gemini API Key", ollama: null,
+    openai: "OpenAI API Key", anthropic: "Anthropic API Key",
+  };
+  const PROVIDER_PLACEHOLDERS = {
+    groq: "gsk_...", gemini: "AIzaSy...", ollama: "",
+    openai: "sk-...", anthropic: "sk-ant-...",
+  };
+  const PROVIDER_HELP = {
+    groq:      'Free key at <a href="https://console.groq.com/keys" target="_blank">console.groq.com</a>. Uses <strong>Llama 3.3 70B</strong> — 14,400 req/day.',
+    gemini:    'Free key at <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a>. <strong>Gemini 2.0 Flash</strong> — 1,500 req/day.',
+    ollama:    'Download at <a href="https://ollama.com" target="_blank">ollama.com</a>. Models pull automatically on first use.',
+    openai:    'Key at <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com</a>. Uses <strong>GPT-4o mini</strong>.',
+    anthropic: 'Key at <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com</a>. Uses <strong>Claude 3.5 Haiku</strong>.',
+  };
+
+  let settingsProvider = aiProvider;
+
+  function updateSettingsUI(provider, clearKey = false) {
+    document.querySelectorAll(".sp-pill").forEach(p =>
+      p.classList.toggle("active", p.dataset.provider === provider)
+    );
+    const isOllama = provider === "ollama";
+    document.getElementById("sp-key-section").style.display    = isOllama ? "none"  : "block";
+    document.getElementById("sp-ollama-section").style.display = isOllama ? "block" : "none";
+    if (!isOllama) {
+      document.getElementById("sp-key-label").textContent = PROVIDER_LABELS[provider] || "API Key";
+      const keyInput = document.getElementById("sp-api-key");
+      if (clearKey) {
+        keyInput.value = "";
+        keyInput.placeholder = PROVIDER_PLACEHOLDERS[provider] || "";
+      } else if (!keyInput.value) {
+        keyInput.placeholder = PROVIDER_PLACEHOLDERS[provider] || "";
+      }
+    }
+    document.getElementById("sp-help-links").innerHTML = PROVIDER_HELP[provider] || "";
+  }
+
+  function refreshBadge() {
+    const badge = document.getElementById("sp-active-badge");
+    const names = {
+      groq: "Groq — Llama 3.3 70B", gemini: "Gemini 2.0 Flash",
+      ollama: `Ollama — ${ollamaModel || "llama3.2"}`,
+      openai: "OpenAI — GPT-4o mini", anthropic: "Anthropic — Claude 3.5 Haiku",
+    };
+    const configured = aiProvider === "ollama" || !!aiApiKey;
+    badge.textContent  = configured ? `Active: ${names[aiProvider] || aiProvider}` : "Not configured — choose a provider below";
+    badge.style.color  = configured ? "#3fb950" : "#f0883e";
+  }
+
+  // Initialise UI from current globals
+  updateSettingsUI(settingsProvider);
+  if (aiApiKey) document.getElementById("sp-api-key").placeholder = maskApiKey(aiApiKey);
+  if (ollamaModel) document.getElementById("sp-ollama-model").value = ollamaModel;
+  if (githubToken) document.getElementById("sp-gh-token").placeholder = maskApiKey(githubToken);
+  refreshBadge();
+
+  // Provider pill clicks
+  document.querySelectorAll(".sp-pill").forEach(pill => {
+    pill.addEventListener("click", () => {
+      settingsProvider = pill.dataset.provider;
+      updateSettingsUI(settingsProvider, true);
+    });
+  });
+
+  // Show/hide toggles
+  [["sp-toggle-key", "sp-api-key"], ["sp-toggle-gh", "sp-gh-token"]].forEach(([btnId, inputId]) => {
+    document.getElementById(btnId).addEventListener("click", () => {
+      const input = document.getElementById(inputId);
+      const btn   = document.getElementById(btnId);
+      input.type      = input.type === "password" ? "text" : "password";
+      btn.textContent = input.type === "password" ? "Show" : "Hide";
+    });
+  });
+
+  // Save AI settings
+  document.getElementById("sp-save-btn").addEventListener("click", async () => {
+    const toSave = { aiProvider: settingsProvider };
+    if (settingsProvider === "ollama") {
+      const model = document.getElementById("sp-ollama-model").value.trim() || "llama3.2";
+      toSave.ollamaModel = model;
+      toSave.aiApiKey    = "";
+      ollamaModel = model;
+      aiApiKey    = "";
+    } else {
+      const key = document.getElementById("sp-api-key").value.trim();
+      if (!key) { showSpStatus("sp-status", "Enter an API key.", true); return; }
+      toSave.aiApiKey = key;
+      aiApiKey = key;
+      document.getElementById("sp-api-key").value       = "";
+      document.getElementById("sp-api-key").placeholder = maskApiKey(key);
+    }
+    aiProvider = settingsProvider;
+    await chrome.storage.local.set(toSave);
+    refreshBadge();
+    showSpStatus("sp-status", "Saved!");
+  });
+
+  // Save GitHub token
+  document.getElementById("sp-save-gh-btn").addEventListener("click", async () => {
+    const token = document.getElementById("sp-gh-token").value.trim();
+    if (!token) { showSpStatus("sp-gh-status", "Enter a token.", true); return; }
+    await chrome.storage.local.set({ githubToken: token });
+    githubToken = token;
+    document.getElementById("sp-gh-token").value       = "";
+    document.getElementById("sp-gh-token").placeholder = maskApiKey(token);
+    showSpStatus("sp-gh-status", "Token saved!");
+  });
+
+  // Clear GitHub token
+  document.getElementById("sp-clear-gh-btn").addEventListener("click", async () => {
+    await chrome.storage.local.remove(["githubToken"]);
+    githubToken = "";
+    document.getElementById("sp-gh-token").value       = "";
+    document.getElementById("sp-gh-token").placeholder = "ghp_...";
+    showSpStatus("sp-gh-status", "Token cleared.");
+  });
+}
+
+function maskApiKey(key) {
+  if (!key || key.length < 8) return "****";
+  return key.substring(0, 6) + "****" + key.substring(key.length - 2);
+}
+
+function showSpStatus(elementId, msg, isError = false) {
+  const el = document.getElementById(elementId);
+  el.textContent  = msg;
+  el.style.color  = isError ? "#f85149" : "#3fb950";
+  setTimeout(() => { el.textContent = ""; }, 3000);
+}
+
 // ── AI routing ────────────────────────────────────────────────────────────────
 // `contents` is always in Gemini format: [{role:"user"|"model", parts:[{text}]}]
 async function callAI(contents) {
-  if (aiProvider === "groq")   return callGroq(contents);
-  if (aiProvider === "ollama") return callOllama(contents);
+  if (aiProvider === "groq")      return callGroq(contents);
+  if (aiProvider === "ollama")    return callOllama(contents);
+  if (aiProvider === "openai")    return callOpenAI(contents);
+  if (aiProvider === "anthropic") return callAnthropic(contents);
   return callGemini(contents);
 }
 
@@ -679,7 +754,7 @@ async function callGemini(contents) {
   let response;
   try {
     response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${aiApiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${aiApiKey}`,
       { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ contents }) }
     );
   } catch {
@@ -720,28 +795,159 @@ async function callGroq(contents) {
 async function callOllama(contents) {
   const messages = geminiToOpenAI(contents);
   const model = ollamaModel || "llama3.2";
+
+  const ollamaFetch = () => fetch("http://localhost:11434/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, messages, stream: false })
+  });
+
   let response;
   try {
-    response = await fetch("http://localhost:11434/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model, messages, stream: false })
-    });
+    response = await ollamaFetch();
   } catch {
-    throw new Error(
-      `Ollama is not running. Start it with: ollama serve\n` +
-      `Then pull a model: ollama pull ${model}\n` +
-      `Or switch to Groq/Gemini in Settings.`
-    );
+    // Ollama not running — wait for it instead of erroring immediately
+    await waitForOllama();
+    response = await ollamaFetch();
   }
+
+  if (response.status === 404) {
+    await pullOllamaModel(model);
+    response = await ollamaFetch();
+  }
+
   if (!response.ok) {
+    if (response.status === 403) throw new Error(
+      `Ollama is blocking this extension (CORS). Restart with:\n\`\`\`\nOLLAMA_ORIGINS='*' ollama serve\n\`\`\``
+    );
     const text = await response.text().catch(() => "");
-    if (response.status === 404) throw new Error(`Ollama: model "${model}" not found. Run: ollama pull ${model}`);
     throw new Error(`Ollama ${response.status}: ${text || "Unexpected error"}`);
   }
   const data = await response.json();
   if (!data.message?.content) throw new Error("Ollama returned no response.");
   return data.message.content;
+}
+
+async function waitForOllama() {
+  ollamaCancelWait  = false;
+  isWaitingForOllama = true;
+
+  const sendBtn  = document.getElementById("send-btn");
+  const statusSpan = document.getElementById("typing-indicator")?.querySelector("span");
+  const setStatus  = (t) => { if (statusSpan) statusSpan.textContent = t; };
+
+  sendBtn.disabled    = false;
+  sendBtn.textContent = "Cancel";
+  setStatus("Waiting for Ollama… open a terminal and run: ollama serve");
+
+  try {
+    while (!ollamaCancelWait) {
+      await new Promise(r => setTimeout(r, 2000));
+      if (ollamaCancelWait) break;
+      try {
+        const res = await fetch("http://localhost:11434/api/tags");
+        if (res.ok) { setStatus("Generating response…"); return; }
+      } catch { /* still not up */ }
+    }
+    throw new Error("OLLAMA_WAIT_CANCELLED");
+  } finally {
+    isWaitingForOllama  = false;
+    sendBtn.disabled    = true;   // handleChat's finally re-enables it
+    sendBtn.textContent = "Send";
+  }
+}
+
+async function pullOllamaModel(model) {
+  const statusSpan = document.getElementById("typing-indicator")?.querySelector("span");
+  const setStatus = (text) => { if (statusSpan) statusSpan.textContent = text; };
+
+  setStatus(`Downloading ${model}… (first time only)`);
+
+  let pullResponse;
+  try {
+    pullResponse = await fetch("http://localhost:11434/api/pull", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: model, stream: true })
+    });
+  } catch {
+    throw new Error("Ollama is not running. Start it with: ollama serve");
+  }
+  if (!pullResponse.ok) throw new Error(`Ollama: could not pull model "${model}".`);
+
+  const reader = pullResponse.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split("\n");
+    buf = lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const evt = JSON.parse(line);
+        if (evt.status === "success") { setStatus("Generating response…"); return; }
+        if (evt.total && evt.completed) {
+          const pct = Math.round((evt.completed / evt.total) * 100);
+          setStatus(`Downloading ${model}… ${pct}%`);
+        } else if (evt.status) {
+          setStatus(`${evt.status}…`);
+        }
+      } catch { /* malformed chunk */ }
+    }
+  }
+}
+
+async function callOpenAI(contents) {
+  const messages = geminiToOpenAI(contents);
+  let response;
+  try {
+    response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${aiApiKey}` },
+      body: JSON.stringify({ model: "gpt-4o-mini", messages })
+    });
+  } catch {
+    throw new Error("Could not reach OpenAI. Check your internet connection.");
+  }
+  const data = await response.json();
+  if (!response.ok) {
+    if (response.status === 401) throw new Error("OpenAI: Invalid API key. Go to Settings to update it.");
+    if (response.status === 429) throw new Error("OpenAI: Rate limit hit. Try again in a moment.");
+    throw new Error(`OpenAI ${response.status}: ${data.error?.message || "Unknown error"}`);
+  }
+  if (!data.choices?.[0]) throw new Error("OpenAI returned no response.");
+  return data.choices[0].message.content;
+}
+
+async function callAnthropic(contents) {
+  const messages = geminiToOpenAI(contents);
+  let response;
+  try {
+    response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": aiApiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({ model: "claude-3-5-haiku-20241022", max_tokens: 1024, messages })
+    });
+  } catch {
+    throw new Error("Could not reach Anthropic. Check your internet connection.");
+  }
+  const data = await response.json();
+  if (!response.ok) {
+    if (response.status === 401) throw new Error("Anthropic: Invalid API key. Go to Settings to update it.");
+    if (response.status === 429) throw new Error("Anthropic: Rate limit hit. Try again in a moment.");
+    throw new Error(`Anthropic ${response.status}: ${data.error?.message || "Unknown error"}`);
+  }
+  if (!data.content?.[0]) throw new Error("Anthropic returned no response.");
+  return data.content[0].text;
 }
 
 // Convert Gemini contents format → OpenAI messages format

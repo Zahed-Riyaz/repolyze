@@ -33,6 +33,7 @@
         <button class="tab-btn" data-tab="maintainers">Maintainers</button>
         <button class="tab-btn" data-tab="contribute">Contribute</button>
         <button class="tab-btn" data-tab="chat">Chat</button>
+        <button class="tab-btn tab-btn-settings" data-tab="settings" title="Settings">⚙</button>
       </div>
 
       <main id="tab-content">
@@ -89,6 +90,51 @@
             <textarea id="chat-input" placeholder="Ask about this repo..."></textarea>
             <button id="send-btn">Send</button>
           </div>
+        </div>
+
+        <!-- Settings Tab -->
+        <div id="settings-tab" class="tab-pane">
+          <div id="sp-active-badge" class="sp-active-badge"></div>
+
+          <p class="sp-section-label">AI Provider</p>
+          <div class="sp-pills">
+            <button class="sp-pill" data-provider="groq">⚡ Groq <span class="pill-tag">Free</span></button>
+            <button class="sp-pill" data-provider="gemini">✦ Gemini <span class="pill-tag">Free</span></button>
+            <button class="sp-pill" data-provider="ollama">🦙 Ollama <span class="pill-tag">Local</span></button>
+            <button class="sp-pill" data-provider="openai">🤖 OpenAI</button>
+            <button class="sp-pill" data-provider="anthropic">🧠 Anthropic</button>
+          </div>
+
+          <div id="sp-key-section">
+            <p class="sp-section-label" id="sp-key-label">API Key</p>
+            <div class="sp-input-row">
+              <input type="password" id="sp-api-key" autocomplete="off" placeholder="API key">
+              <button class="sp-toggle" id="sp-toggle-key">Show</button>
+            </div>
+          </div>
+
+          <div id="sp-ollama-section" style="display:none">
+            <div class="sp-ollama-note">No key needed — run <code>ollama serve</code> locally. Models pull automatically on first use.</div>
+            <p class="sp-section-label">Model name</p>
+            <input type="text" id="sp-ollama-model" class="sp-text-input" placeholder="llama3.2" autocomplete="off">
+          </div>
+
+          <button id="sp-save-btn" class="sp-save-btn">Save</button>
+          <div id="sp-status" class="sp-status-msg"></div>
+          <div class="sp-help-links" id="sp-help-links"></div>
+
+          <hr class="sp-divider">
+
+          <p class="sp-section-label">GitHub Token <span class="sp-optional">(optional — raises rate limit to 5,000 req/hr)</span></p>
+          <div class="sp-input-row">
+            <input type="password" id="sp-gh-token" placeholder="ghp_..." autocomplete="off">
+            <button class="sp-toggle" id="sp-toggle-gh">Show</button>
+          </div>
+          <div class="sp-gh-btns">
+            <button id="sp-save-gh-btn" class="sp-save-btn">Save Token</button>
+            <button id="sp-clear-gh-btn" class="sp-clear-btn">Clear</button>
+          </div>
+          <div id="sp-gh-status" class="sp-status-msg"></div>
         </div>
       </main>
     </div>

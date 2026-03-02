@@ -34,7 +34,7 @@
     /* Provider cards */
     .provider-cards {
       display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
+      grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
       gap: 8px;
       margin-bottom: 18px;
     }
@@ -200,6 +200,16 @@
           <div class="provider-card-icon">🦙</div>
           <div class="provider-card-name">Ollama</div>
           <span class="provider-card-tag tag-local">Local</span>
+        </div>
+        <div class="provider-card" data-provider="openai">
+          <div class="provider-card-icon">🤖</div>
+          <div class="provider-card-name">OpenAI</div>
+          <span class="provider-card-tag tag-paid">Paid</span>
+        </div>
+        <div class="provider-card" data-provider="anthropic">
+          <div class="provider-card-icon">🧠</div>
+          <div class="provider-card-name">Anthropic</div>
+          <span class="provider-card-tag tag-paid">Paid</span>
         </div>
       </div>
 
