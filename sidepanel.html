@@ -9,8 +9,22 @@
 <body>
   <div id="container">
     <header>
-      <h1 id="repo-name">GitHub Repo Analyzer</h1>
-      <p id="repo-description"></p>
+      <div id="header-brand">
+        <svg id="ext-logo" xmlns="http://www.w3.org/2000/svg" width="34" height="34" viewBox="0 0 34 34" aria-hidden="true">
+          <rect width="34" height="34" rx="7" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+          <rect width="34" height="11" rx="7" fill="#21262d"/>
+          <rect y="8" width="34" height="3" fill="#21262d"/>
+          <circle cx="7"  cy="5.5" r="1.9" fill="#f85149"/>
+          <circle cx="13" cy="5.5" r="1.9" fill="#e3b341"/>
+          <circle cx="19" cy="5.5" r="1.9" fill="#3fb950"/>
+          <text x="4" y="26" font-family="'SF Mono','Fira Code',Consolas,monospace" font-size="10.5" font-weight="700" fill="#58a6ff">&lt;/&gt;</text>
+          <rect id="logo-cursor" x="25" y="21.5" width="5" height="2" rx="1" fill="#3fb950"/>
+        </svg>
+        <div id="header-text">
+          <h1 id="repo-name">GitHub Repo Analyzer</h1>
+          <p id="repo-description"></p>
+        </div>
+      </div>
       <div id="repo-meta">
         <span id="repo-stars" title="Stars">⭐ —</span>
         <span id="repo-forks" title="Forks">⑂ —</span>
@@ -84,7 +98,7 @@
           <div id="chat-history"></div>
           <div id="typing-indicator" style="display:none">
             <div class="typing-dots"><span></span><span></span><span></span></div>
-            <span>Analyzing...</span>
+            <span id="typing-status">Analyzing...</span>
           </div>
           <div id="chat-input-container">
             <textarea id="chat-input" placeholder="Ask about this repo..."></textarea>

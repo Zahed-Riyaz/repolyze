@@ -5,8 +5,6 @@ let aiProvider = "groq";   // "groq" | "gemini" | "ollama" | "openai" | "anthrop
 let aiApiKey = "";          // API key for cloud providers
 let ollamaModel = "llama3.2";
 let chatMessages = []; // [{role:"user"|"bot", text:"..."}]
-let ollamaCancelWait  = false;
-let isWaitingForOllama = false;
 
 // Session cache keyed by "owner/repo"
 // Stores: { repoData, issues, languages, contributors, health, prs, quickstart, context }
@@ -34,9 +32,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // Chat controls
-  document.getElementById("send-btn").addEventListener("click", () => {
-    if (isWaitingForOllama) { ollamaCancelWait = true; } else { handleChat(); }
-  });
+  document.getElementById("send-btn").addEventListener("click", () => { handleChat(); });
   document.getElementById("chat-input").addEventListener("keypress", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleChat(); }
   });
@@ -552,10 +548,12 @@ async function handleChat() {
     appendChatMessage("bot", reply, false);
     saveChatHistory();
   } catch (err) {
-    if (err.message === "OLLAMA_WAIT_CANCELLED") {
-      // User cancelled — quietly remove the unanswered user message
+    const ollamaErr = err.message === "OLLAMA_NOT_RUNNING" || err.message === "OLLAMA_CORS";
+    if (ollamaErr) {
+      // Remove the unanswered user bubble and restore the query to the input
       chatMessages.pop();
       document.getElementById("chat-history").lastElementChild?.remove();
+      showOllamaGuide(err.message, query);
     } else {
       const errText = `Error: ${err.message}`;
       chatMessages.push({ role: "bot", text: errText });
@@ -582,11 +580,65 @@ function appendChatMessage(role, text, save = true) {
 }
 
 async function clearChat() {
-  ollamaCancelWait = true;
   chatMessages = [];
   document.getElementById("chat-history").innerHTML = "";
   const key = `chat_${currentRepo?.owner}_${currentRepo?.repo}`;
   await chrome.storage.local.remove([key]);
+}
+
+function showOllamaGuide(reason, retryQuery) {
+  const isCors = reason === "OLLAMA_CORS";
+  const history = document.getElementById("chat-history");
+
+  const card = document.createElement("div");
+  card.className = "chat-msg chat-msg-bot ollama-guide";
+  card.innerHTML = `
+    <div class="ollama-guide-header">🦙 ${isCors ? "Ollama is blocked (CORS)" : "Ollama is not running"}</div>
+    <p class="ollama-guide-desc">${
+      isCors
+        ? "Ollama is running but blocking browser extension requests. Restart it with the <code>OLLAMA_ORIGINS</code> flag:"
+        : "Start Ollama in your terminal, then press Send again."
+    }</p>
+
+    <div class="cmd-block">
+      <span class="cmd-os">macOS / Linux</span>
+      <div class="cmd-row">
+        <code class="cmd-code">OLLAMA_ORIGINS='*' ollama serve</code>
+        <button class="copy-btn" data-cmd="OLLAMA_ORIGINS='*' ollama serve">Copy</button>
+      </div>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-os">Windows (PowerShell)</span>
+      <div class="cmd-row">
+        <code class="cmd-code">$env:OLLAMA_ORIGINS='*'; ollama serve</code>
+        <button class="copy-btn" data-cmd="$env:OLLAMA_ORIGINS='*'; ollama serve">Copy</button>
+      </div>
+    </div>
+
+    ${!isCors ? `<p class="ollama-guide-link">Not installed? → <a href="https://ollama.com" target="_blank">ollama.com</a></p>` : ""}
+    <p class="ollama-guide-ready">✓ Your message has been restored below — just press Send once Ollama is running.</p>
+  `;
+
+  history.appendChild(card);
+  history.scrollTop = history.scrollHeight;
+
+  // Wire up copy buttons
+  card.querySelectorAll(".copy-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      navigator.clipboard.writeText(btn.dataset.cmd).then(() => {
+        btn.textContent = "Copied!";
+        setTimeout(() => { btn.textContent = "Copy"; }, 2000);
+      });
+    });
+  });
+
+  // Restore the user's message to the input so they can just press Send
+  if (retryQuery) {
+    const input = document.getElementById("chat-input");
+    input.value = retryQuery;
+    input.focus();
+  }
 }
 
 async function loadChatHistory() {
@@ -806,10 +858,10 @@ async function callOllama(contents) {
   try {
     response = await ollamaFetch();
   } catch {
-    // Ollama not running — wait for it instead of erroring immediately
-    await waitForOllama();
-    response = await ollamaFetch();
+    throw new Error("OLLAMA_NOT_RUNNING");
   }
+
+  if (response.status === 403) throw new Error("OLLAMA_CORS");
 
   if (response.status === 404) {
     await pullOllamaModel(model);
@@ -817,9 +869,6 @@ async function callOllama(contents) {
   }
 
   if (!response.ok) {
-    if (response.status === 403) throw new Error(
-      `Ollama is blocking this extension (CORS). Restart with:\n\`\`\`\nOLLAMA_ORIGINS='*' ollama serve\n\`\`\``
-    );
     const text = await response.text().catch(() => "");
     throw new Error(`Ollama ${response.status}: ${text || "Unexpected error"}`);
   }
@@ -828,38 +877,11 @@ async function callOllama(contents) {
   return data.message.content;
 }
 
-async function waitForOllama() {
-  ollamaCancelWait  = false;
-  isWaitingForOllama = true;
-
-  const sendBtn  = document.getElementById("send-btn");
-  const statusSpan = document.getElementById("typing-indicator")?.querySelector("span");
-  const setStatus  = (t) => { if (statusSpan) statusSpan.textContent = t; };
-
-  sendBtn.disabled    = false;
-  sendBtn.textContent = "Cancel";
-  setStatus("Waiting for Ollama… open a terminal and run: ollama serve");
-
-  try {
-    while (!ollamaCancelWait) {
-      await new Promise(r => setTimeout(r, 2000));
-      if (ollamaCancelWait) break;
-      try {
-        const res = await fetch("http://localhost:11434/api/tags");
-        if (res.ok) { setStatus("Generating response…"); return; }
-      } catch { /* still not up */ }
-    }
-    throw new Error("OLLAMA_WAIT_CANCELLED");
-  } finally {
-    isWaitingForOllama  = false;
-    sendBtn.disabled    = true;   // handleChat's finally re-enables it
-    sendBtn.textContent = "Send";
-  }
-}
-
 async function pullOllamaModel(model) {
-  const statusSpan = document.getElementById("typing-indicator")?.querySelector("span");
-  const setStatus = (text) => { if (statusSpan) statusSpan.textContent = text; };
+  const setStatus = (text) => {
+    const el = document.getElementById("typing-status");
+    if (el) el.textContent = text;
+  };
 
   setStatus(`Downloading ${model}… (first time only)`);
 
