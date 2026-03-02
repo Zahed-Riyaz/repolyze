@@ -1,4 +1,4 @@
-![repolyze](https://github.com/user-attachments/assets/b671e6ec-6527-4d40-b7ed-1d94a7125159)# GitHub Repo Analyzer & RAG Chat
+# GitHub Repo Analyzer & RAG Chat
 
 A Chrome extension that gives you an AI-powered side panel for any GitHub repository — browse issues, inspect the tech stack, see top contributors, generate a contributor quickstart guide, and chat with the repo using retrieval-augmented generation (RAG).
 
@@ -75,7 +75,7 @@ github-repo-analyzer/
 ---
 
 ## Architecture 
-![System Architecture](architecture.svg)
+![repolyze](https://github.com/user-attachments/assets/b671e6ec-6527-4d40-b7ed-1d94a7125159)
 
 
 ### How the Pieces Connect
