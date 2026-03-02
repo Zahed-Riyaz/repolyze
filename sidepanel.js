@@ -237,7 +237,12 @@ function renderIssues(activeLabel) {
     : allIssues;
 
   if (filtered.length === 0) {
-    list.innerHTML = `<li class="empty-item">No ${activeLabel ? `"${activeLabel}" ` : ""}issues found.</li>`;
+    const msgs = {
+      "good-first-issue": `No "good first issue" labels found — but don't stop here. Many maintainers don't use this label consistently. Browse <strong>All</strong> issues and look for small scope, clear description, or "bug" labels.`,
+      "help-wanted":      `No "help wanted" issues right now. Try <strong>All</strong> issues — any unassigned issue is fair game if you comment first.`,
+      "":                 `No open unassigned issues. The repo may be in a quiet period — check the <strong>Contribute</strong> tab for other ways to help.`,
+    };
+    list.innerHTML = `<li class="empty-item">${msgs[activeLabel] ?? msgs[""]}</li>`;
     return;
   }
 
@@ -591,6 +596,7 @@ async function handleChat() {
     return;
   }
 
+  document.getElementById("chat-starters")?.remove();
   chatMessages.push({ role: "user", text: query });
   appendChatMessage("user", query, false);
   input.value = "";
@@ -671,6 +677,38 @@ async function clearChat() {
   document.getElementById("chat-history").innerHTML = "";
   const key = `chat_${currentRepo?.owner}_${currentRepo?.repo}`;
   await chrome.storage.local.remove([key]);
+  renderChatStarters();
+}
+
+// ── Chat starter suggestions ──────────────────────────────────────────────────
+// Shows clickable prompt chips when the chat history is empty.
+// Clicking one fills the input and auto-sends, removing the starters.
+function renderChatStarters() {
+  if (chatMessages.length > 0) return;
+  if (document.getElementById("chat-starters")) return; // already shown
+
+  const el = document.createElement("div");
+  el.id = "chat-starters";
+  el.className = "chat-starters";
+  el.innerHTML = `
+    <p class="chat-starters-label">Try asking:</p>
+    <div class="chat-starters-grid">
+      <button class="starter-chip" data-q="What does this repo do and who is it for?">💡 What does this repo do?</button>
+      <button class="starter-chip" data-q="How do I set up this project locally from scratch?">🛠️ How do I set up this project?</button>
+      <button class="starter-chip" data-q="What are the easiest issues I could work on as a new contributor?">🐛 Good first issues for me?</button>
+      <button class="starter-chip" data-q="Walk me through the project structure and the most important files">🗂️ Walk me through the structure</button>
+    </div>
+  `;
+
+  document.getElementById("chat-history").appendChild(el);
+
+  el.querySelectorAll(".starter-chip").forEach(btn => {
+    btn.addEventListener("click", () => {
+      el.remove();
+      document.getElementById("chat-input").value = btn.dataset.q;
+      handleChat();
+    });
+  });
 }
 
 function showOllamaGuide(reason, retryQuery) {
@@ -736,6 +774,7 @@ async function loadChatHistory() {
   const historyEl = document.getElementById("chat-history");
   historyEl.innerHTML = "";
   chatMessages.forEach(m => appendChatMessage(m.role, m.text, false));
+  renderChatStarters(); // shows only if chatMessages is empty
 }
 
 async function saveChatHistory() {
@@ -786,16 +825,30 @@ function initSettingsTab() {
     document.getElementById("sp-help-links").innerHTML = PROVIDER_HELP[provider] || "";
   }
 
+  // Expected key prefixes for each provider — used for instant format validation
+  const KEY_PREFIXES = {
+    groq:      "gsk_",
+    gemini:    "AIza",
+    openai:    "sk-",
+    anthropic: "sk-ant-",
+  };
+
   function refreshBadge() {
-    const badge = document.getElementById("sp-active-badge");
-    const names = {
+    const badge  = document.getElementById("sp-active-badge");
+    const banner = document.getElementById("sp-quickstart-banner");
+    const names  = {
       groq: "Groq — Llama 3.3 70B", gemini: "Gemini 2.0 Flash",
       ollama: `Ollama — ${ollamaModel || "llama3.2"}`,
       openai: "OpenAI — GPT-4o mini", anthropic: "Anthropic — Claude 3.5 Haiku",
     };
     const configured = aiProvider === "ollama" || !!aiApiKey;
-    badge.textContent  = configured ? `Active: ${names[aiProvider] || aiProvider}` : "Not configured — choose a provider below";
-    badge.style.color  = configured ? "#3fb950" : "#f0883e";
+    badge.textContent = configured
+      ? `Active: ${names[aiProvider] || aiProvider}`
+      : "Not configured — choose a provider below";
+    badge.style.color = configured ? "#3fb950" : "#f0883e";
+
+    // Quick Start banner: show only when nothing is configured
+    if (banner) banner.style.display = configured ? "none" : "flex";
   }
 
   // Initialise UI from current globals
@@ -835,6 +888,17 @@ function initSettingsTab() {
     } else {
       const key = document.getElementById("sp-api-key").value.trim();
       if (!key) { showSpStatus("sp-status", "Enter an API key.", true); return; }
+
+      // Validate key format before saving — catches the most common mistake
+      // (wrong provider selected, partial copy, etc.)
+      const expectedPrefix = KEY_PREFIXES[settingsProvider];
+      if (expectedPrefix && !key.startsWith(expectedPrefix)) {
+        showSpStatus("sp-status",
+          `${settingsProvider} keys start with "${expectedPrefix}" — check you copied the full key`,
+          true);
+        return;
+      }
+
       toSave.aiApiKey = key;
       aiApiKey = key;
       document.getElementById("sp-api-key").value       = "";
@@ -843,7 +907,7 @@ function initSettingsTab() {
     aiProvider = settingsProvider;
     await chrome.storage.local.set(toSave);
     refreshBadge();
-    showSpStatus("sp-status", "Saved!");
+    showSpStatus("sp-status", "✓ Saved! Head to any GitHub repo to start.");
   });
 
   // Save GitHub token

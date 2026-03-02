@@ -35,9 +35,38 @@
     </header>
 
     <div id="not-repo-msg" style="display:none">
-      <div class="empty-state">
-        <div class="empty-state-icon">⬡</div>
-        <p>Navigate to a <strong>GitHub repository</strong> page to use this extension.</p>
+      <div class="welcome-screen">
+        <svg class="welcome-logo" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 34 34" aria-hidden="true">
+          <rect width="34" height="34" rx="7" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+          <rect width="34" height="11" rx="7" fill="#21262d"/>
+          <rect y="8" width="34" height="3" fill="#21262d"/>
+          <circle cx="7"  cy="5.5" r="1.9" fill="#f85149"/>
+          <circle cx="13" cy="5.5" r="1.9" fill="#e3b341"/>
+          <circle cx="19" cy="5.5" r="1.9" fill="#3fb950"/>
+          <text x="4" y="26" font-family="'SF Mono','Fira Code',Consolas,monospace" font-size="10.5" font-weight="700" fill="#58a6ff">&lt;/&gt;</text>
+          <rect x="25" y="21.5" width="5" height="2" rx="1" fill="#3fb950"/>
+        </svg>
+        <h2 class="welcome-title">GitHub Repo Analyzer</h2>
+        <p class="welcome-sub">Your AI co-pilot for open source</p>
+        <div class="feature-grid">
+          <div class="feature-card">
+            <span class="feature-icon">🐛</span>
+            <div><strong>Issues</strong><br>Find beginner-friendly issues instantly</div>
+          </div>
+          <div class="feature-card">
+            <span class="feature-icon">💬</span>
+            <div><strong>Chat</strong><br>Ask anything about the codebase</div>
+          </div>
+          <div class="feature-card">
+            <span class="feature-icon">📊</span>
+            <div><strong>Health</strong><br>Know if a repo is worth contributing to</div>
+          </div>
+          <div class="feature-card">
+            <span class="feature-icon">🗺</span>
+            <div><strong>Stack &amp; People</strong><br>Languages, contributors, open PRs</div>
+          </div>
+        </div>
+        <p class="welcome-cta">Navigate to any <strong>GitHub repository</strong> to begin</p>
       </div>
     </div>
 
@@ -54,6 +83,7 @@
       <main id="tab-content">
         <!-- Issues Tab -->
         <div id="issues-tab" class="tab-pane active">
+          <p class="tab-subtitle">Open, unassigned issues — filter by beginner-friendly labels</p>
           <div class="filter-bar">
             <button class="filter-btn active" data-label="">All</button>
             <button class="filter-btn" data-label="good-first-issue">Good First</button>
@@ -65,12 +95,14 @@
         <!-- Tech Stack Tab -->
         <div id="tech-tab" class="tab-pane">
           <h2>Tech Stack</h2>
+          <p class="tab-subtitle">Languages used in this repo by percentage of code</p>
           <ul id="tech-list"></ul>
         </div>
 
         <!-- Maintainers Tab -->
         <div id="maintainers-tab" class="tab-pane">
           <h2>Top Contributors</h2>
+          <p class="tab-subtitle">Most active contributors — great people to tag in your first PR</p>
           <ul id="maintainers-list"></ul>
         </div>
 
@@ -93,7 +125,7 @@
         <!-- Chat Tab -->
         <div id="chat-tab" class="tab-pane">
           <div id="chat-header-bar">
-            <span id="chat-context-label">Context: README + CONTRIBUTING + configs</span>
+            <span id="chat-context-label">Grounded in README + configs</span>
             <button id="clear-chat-btn">Clear</button>
           </div>
           <div id="chat-history"></div>
@@ -111,9 +143,19 @@
         <div id="settings-tab" class="tab-pane">
           <div id="sp-active-badge" class="sp-active-badge"></div>
 
+          <!-- Quick Start banner — visible when no provider is configured -->
+          <div id="sp-quickstart-banner" class="sp-quickstart-banner" style="display:none">
+            <div class="sp-qb-icon">⚡</div>
+            <div class="sp-qb-text">
+              <div class="sp-qb-title">New here? Start with Groq — it's free</div>
+              <div class="sp-qb-sub">14,400 requests/day · No credit card needed · ~2 min setup</div>
+            </div>
+            <a href="https://console.groq.com/keys" target="_blank" class="sp-qb-link">Get key →</a>
+          </div>
+
           <p class="sp-section-label">AI Provider</p>
           <div class="sp-pills">
-            <button class="sp-pill" data-provider="groq">⚡ Groq <span class="pill-tag">Free</span></button>
+            <button class="sp-pill sp-pill-recommended" data-provider="groq">⚡ Groq <span class="pill-tag">Free</span></button>
             <button class="sp-pill" data-provider="gemini">✦ Gemini <span class="pill-tag">Free</span></button>
             <button class="sp-pill" data-provider="ollama">🦙 Ollama <span class="pill-tag">Local</span></button>
             <button class="sp-pill" data-provider="openai">🤖 OpenAI</button>
