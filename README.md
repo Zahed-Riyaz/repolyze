@@ -74,7 +74,7 @@ github-repo-analyzer/
 
 ---
 
-## Architecture ![Up<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="919pt" height="344pt" viewBox="0.00 0.00 919.00 344.00">
+## Architecture ![<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="919pt" height="344pt" viewBox="0.00 0.00 919.00 344.00">
 <g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 339.65)">
 <title>CleanArch</title>
 <polygon fill="white" stroke="none" points="-4,4 -4,-339.65 914.54,-339.65 914.54,4 -4,4"/>
