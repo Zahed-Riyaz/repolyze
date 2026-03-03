@@ -12,6 +12,8 @@ const repoCache = {};
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", async () => {
+  showWelcomeSplash();
+
   // Tab switching
   document.querySelectorAll(".tab-btn").forEach(tab => {
     tab.addEventListener("click", () => {
@@ -75,6 +77,20 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (activeTab && activeTab.url) handleRepoRefresh(activeTab.url);
   });
 });
+
+// ── Welcome splash ────────────────────────────────────────────────────────────
+function showWelcomeSplash() {
+  const splash = document.getElementById("welcome-splash");
+  if (!splash) return;
+
+  const dismiss = () => {
+    splash.classList.add("splash-hidden");
+    splash.addEventListener("transitionend", () => splash.remove(), { once: true });
+  };
+
+  splash.addEventListener("click", dismiss);
+  setTimeout(dismiss, 2000);
+}
 
 // ── Repo detection ────────────────────────────────────────────────────────────
 function handleRepoRefresh(url) {
@@ -272,22 +288,29 @@ async function fetchTechStack() {
   list.innerHTML = "<li class='loading-item'>Loading stack…</li>";
 
   const cacheKey = `${currentRepo.owner}/${currentRepo.repo}`;
-  if (repoCache[cacheKey]?.languages) {
-    renderTechStack(repoCache[cacheKey].languages);
+  if (repoCache[cacheKey]?.languages && repoCache[cacheKey]?.tools !== undefined) {
+    renderTechStack(repoCache[cacheKey].languages, repoCache[cacheKey].tools);
     return;
   }
 
   try {
-    const languages = await fetchGitHub("/languages");
-    if (!repoCache[cacheKey]) repoCache[cacheKey] = {};
-    repoCache[cacheKey].languages = languages;
-    renderTechStack(languages);
+    const [languages, tools] = await Promise.all([
+      repoCache[cacheKey]?.languages
+        ? Promise.resolve(repoCache[cacheKey].languages)
+        : fetchGitHub("/languages").then(l => {
+            if (!repoCache[cacheKey]) repoCache[cacheKey] = {};
+            repoCache[cacheKey].languages = l;
+            return l;
+          }),
+      detectTools(),
+    ]);
+    renderTechStack(languages, tools);
   } catch (err) {
     list.innerHTML = `<li class="error-item">Error: ${err.message}</li>`;
   }
 }
 
-function renderTechStack(languages) {
+function renderTechStack(languages, tools = []) {
   const list = document.getElementById("tech-list");
   list.innerHTML = "";
   const total = Object.values(languages).reduce((a, b) => a + b, 0);
@@ -303,6 +326,233 @@ function renderTechStack(languages) {
     `;
     list.appendChild(li);
   });
+  renderTools(tools);
+}
+
+// ── Tools & Services detection ────────────────────────────────────────────────
+async function detectTools() {
+  const cacheKey = `${currentRepo.owner}/${currentRepo.repo}`;
+  if (repoCache[cacheKey]?.tools !== undefined) return repoCache[cacheKey].tools;
+
+  const tools = new Map(); // name → { emoji, category }
+
+  const TOOL_DEFS = {
+    "Docker":          { emoji: "🐳", category: "Containers" },
+    "Docker Compose":  { emoji: "🐳", category: "Containers" },
+    "Kubernetes":      { emoji: "☸️",  category: "Containers" },
+    "GitHub Actions":  { emoji: "⚙️",  category: "CI/CD" },
+    "CircleCI":        { emoji: "◎",  category: "CI/CD" },
+    "Travis CI":       { emoji: "🔧", category: "CI/CD" },
+    "Jenkins":         { emoji: "🔧", category: "CI/CD" },
+    "AppVeyor":        { emoji: "🔧", category: "CI/CD" },
+    "Azure Pipelines": { emoji: "☁️",  category: "CI/CD" },
+    "Terraform":       { emoji: "🏗️",  category: "Infrastructure" },
+    "Ansible":         { emoji: "🔩", category: "Infrastructure" },
+    "Nginx":           { emoji: "🌐", category: "Infrastructure" },
+    "AWS":             { emoji: "☁️",  category: "Cloud" },
+    "Azure":           { emoji: "☁️",  category: "Cloud" },
+    "GCP":             { emoji: "☁️",  category: "Cloud" },
+    "Firebase":        { emoji: "🔥", category: "Cloud" },
+    "Netlify":         { emoji: "🚀", category: "Deployment" },
+    "Vercel":          { emoji: "▲",  category: "Deployment" },
+    "Heroku":          { emoji: "💜", category: "Deployment" },
+    "Serverless":      { emoji: "⚡", category: "Deployment" },
+    "PostgreSQL":      { emoji: "🐘", category: "Database" },
+    "MySQL":           { emoji: "🗄️",  category: "Database" },
+    "MongoDB":         { emoji: "🍃", category: "Database" },
+    "Redis":           { emoji: "🔴", category: "Database" },
+    "SQLite":          { emoji: "🗄️",  category: "Database" },
+    "Prisma":          { emoji: "◆",  category: "Database" },
+    "Sequelize":       { emoji: "◆",  category: "Database" },
+    "TypeORM":         { emoji: "◆",  category: "Database" },
+    "Kafka":           { emoji: "📨", category: "Messaging" },
+    "RabbitMQ":        { emoji: "🐰", category: "Messaging" },
+    "GraphQL":         { emoji: "◈",  category: "API" },
+    "gRPC":            { emoji: "⚡", category: "API" },
+    "Stripe":          { emoji: "💳", category: "Services" },
+    "Twilio":          { emoji: "📱", category: "Services" },
+    "SendGrid":        { emoji: "📧", category: "Services" },
+    "Sentry":          { emoji: "🔍", category: "Monitoring" },
+    "Datadog":         { emoji: "🐕", category: "Monitoring" },
+    "Prometheus":      { emoji: "🔥", category: "Monitoring" },
+    "Grafana":         { emoji: "📊", category: "Monitoring" },
+    "Webpack":         { emoji: "📦", category: "Build" },
+    "Vite":            { emoji: "⚡", category: "Build" },
+    "Jest":            { emoji: "🃏", category: "Testing" },
+    "Mocha":           { emoji: "☕", category: "Testing" },
+    "Cypress":         { emoji: "🌲", category: "Testing" },
+    "Playwright":      { emoji: "🎭", category: "Testing" },
+    "Pytest":          { emoji: "🧪", category: "Testing" },
+    "Celery":          { emoji: "🌿", category: "Background Jobs" },
+    "TensorFlow":      { emoji: "🤖", category: "ML/AI" },
+    "PyTorch":         { emoji: "🔥", category: "ML/AI" },
+    "scikit-learn":    { emoji: "🔬", category: "ML/AI" },
+    "Pandas":          { emoji: "🐼", category: "Data" },
+    "NumPy":           { emoji: "🔢", category: "Data" },
+  };
+
+  function add(name) {
+    if (TOOL_DEFS[name] && !tools.has(name)) tools.set(name, TOOL_DEFS[name]);
+  }
+
+  // Fetch root dir + package.json + requirements.txt in parallel
+  const [rootResult, pkgResult, reqResult] = await Promise.allSettled([
+    fetchGitHub("/contents/"),
+    fetchGitHub("/contents/package.json"),
+    fetchGitHub("/contents/requirements.txt"),
+  ]);
+
+  // ── Root directory file-based detection ─────────────────────────────────────
+  if (rootResult.status === "fulfilled" && Array.isArray(rootResult.value)) {
+    const items  = rootResult.value;
+    const names  = items.map(f => f.name.toLowerCase());
+    const byName = Object.fromEntries(items.map(f => [f.name.toLowerCase(), f]));
+
+    if (names.some(n => n === "dockerfile" || n.startsWith("dockerfile.")))       add("Docker");
+    if (names.some(n => n.startsWith("docker-compose")))                           add("Docker Compose");
+    if (names.includes(".travis.yml"))                                             add("Travis CI");
+    if (names.includes("jenkinsfile"))                                             add("Jenkins");
+    if (names.includes("appveyor.yml"))                                            add("AppVeyor");
+    if (names.includes("azure-pipelines.yml"))                                     add("Azure Pipelines");
+    if (names.some(n => n === "serverless.yml" || n === "serverless.yaml"))        add("Serverless");
+    if (names.includes("netlify.toml"))                                            add("Netlify");
+    if (names.includes("vercel.json") || names.includes(".vercelignore"))          add("Vercel");
+    if (names.includes("firebase.json") || names.includes(".firebaserc"))          add("Firebase");
+    if (names.includes("procfile"))                                                add("Heroku");
+    if (names.some(n => n.endsWith(".tf")))                                        add("Terraform");
+    if (names.some(n => n === "nginx.conf" || n === "nginx"))                      add("Nginx");
+    if (names.some(n => n === "prometheus.yml" || n === "prometheus.yaml"))        add("Prometheus");
+    if (names.some(n => n === "grafana.ini" || n === "grafana"))                   add("Grafana");
+    if (byName[".circleci"]?.type === "dir")                                       add("CircleCI");
+    if (names.some(n => ["k8s","kubernetes","helm","charts"].includes(n) && byName[n]?.type === "dir")) {
+      add("Kubernetes");
+    }
+    if (names.some(n => ["ansible","playbooks"].includes(n) && byName[n]?.type === "dir")) {
+      add("Ansible");
+    }
+
+    // .github/workflows → GitHub Actions (one extra call)
+    if (byName[".github"]?.type === "dir") {
+      try {
+        const ghContents = await fetchGitHub("/contents/.github");
+        if (Array.isArray(ghContents) && ghContents.some(f => f.name === "workflows")) {
+          add("GitHub Actions");
+        }
+      } catch {}
+    }
+  }
+
+  // ── package.json dependency scanning ────────────────────────────────────────
+  if (pkgResult.status === "fulfilled") {
+    try {
+      const pkg  = JSON.parse(atob(pkgResult.value.content.replace(/\n/g, "")));
+      const deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
+
+      const PKG_MAP = [
+        [["aws-sdk", "@aws-sdk/"],                    "AWS"],
+        [["@azure/", "azure-"],                       "Azure"],
+        [["@google-cloud/"],                          "GCP"],
+        [["firebase", "firebase-admin", "@firebase/"],"Firebase"],
+        [["redis", "ioredis"],                        "Redis"],
+        [["mongoose", "mongodb"],                     "MongoDB"],
+        [["pg", "postgres"],                          "PostgreSQL"],
+        [["mysql", "mysql2"],                         "MySQL"],
+        [["sqlite3", "better-sqlite3"],               "SQLite"],
+        [["prisma", "@prisma/"],                      "Prisma"],
+        [["sequelize"],                               "Sequelize"],
+        [["typeorm"],                                 "TypeORM"],
+        [["kafkajs", "kafka-node"],                   "Kafka"],
+        [["amqplib"],                                 "RabbitMQ"],
+        [["graphql"],                                 "GraphQL"],
+        [["@grpc/"],                                  "gRPC"],
+        [["stripe"],                                  "Stripe"],
+        [["twilio"],                                  "Twilio"],
+        [["@sendgrid/", "sendgrid"],                  "SendGrid"],
+        [["@sentry/"],                                "Sentry"],
+        [["@datadog/"],                               "Datadog"],
+        [["jest", "@jest/"],                          "Jest"],
+        [["mocha"],                                   "Mocha"],
+        [["cypress"],                                 "Cypress"],
+        [["@playwright/"],                            "Playwright"],
+        [["webpack"],                                 "Webpack"],
+        [["vite"],                                    "Vite"],
+        [["@tensorflow/"],                            "TensorFlow"],
+      ];
+
+      for (const [prefixes, name] of PKG_MAP) {
+        if (deps.some(d => prefixes.some(p => d === p || d.startsWith(p)))) add(name);
+      }
+    } catch {}
+  }
+
+  // ── requirements.txt keyword scanning ───────────────────────────────────────
+  if (reqResult.status === "fulfilled") {
+    try {
+      const req = atob(reqResult.value.content.replace(/\n/g, "")).toLowerCase();
+
+      const REQ_MAP = [
+        [["boto3", "botocore", "awscli"],              "AWS"],
+        [["google-cloud", "google.cloud"],             "GCP"],
+        [["azure-"],                                   "Azure"],
+        [["firebase-admin", "firebase"],               "Firebase"],
+        [["redis", "aioredis"],                        "Redis"],
+        [["pymongo"],                                  "MongoDB"],
+        [["psycopg2", "asyncpg", "psycopg"],           "PostgreSQL"],
+        [["mysql-connector", "pymysql", "aiomysql"],   "MySQL"],
+        [["kafka-python", "confluent-kafka"],          "Kafka"],
+        [["celery"],                                   "Celery"],
+        [["pytest"],                                   "Pytest"],
+        [["tensorflow", "tf-nightly"],                 "TensorFlow"],
+        [["torch"],                                    "PyTorch"],
+        [["scikit-learn", "sklearn"],                  "scikit-learn"],
+        [["pandas"],                                   "Pandas"],
+        [["numpy"],                                    "NumPy"],
+        [["sentry-sdk"],                               "Sentry"],
+        [["stripe"],                                   "Stripe"],
+        [["graphene", "strawberry-graphql"],           "GraphQL"],
+      ];
+
+      for (const [keywords, name] of REQ_MAP) {
+        if (keywords.some(k => req.includes(k))) add(name);
+      }
+    } catch {}
+  }
+
+  const result = Array.from(tools.entries()).map(([name, meta]) => ({ name, ...meta }));
+  if (!repoCache[cacheKey]) repoCache[cacheKey] = {};
+  repoCache[cacheKey].tools = result;
+  return result;
+}
+
+function renderTools(tools) {
+  const section = document.getElementById("tools-section");
+  const grid    = document.getElementById("tools-grid");
+
+  if (!tools || tools.length === 0) {
+    section.style.display = "none";
+    return;
+  }
+
+  // Group by category, preserving insertion order
+  const grouped = {};
+  tools.forEach(t => {
+    if (!grouped[t.category]) grouped[t.category] = [];
+    grouped[t.category].push(t);
+  });
+
+  grid.innerHTML = "";
+  for (const [category, items] of Object.entries(grouped)) {
+    const div = document.createElement("div");
+    div.className = "tools-category";
+    div.innerHTML = `
+      <span class="tools-cat-label">${escapeHtml(category)}</span>
+      <div class="tools-cat-pills">
+        ${items.map(t => `<span class="tool-pill">${t.emoji} ${escapeHtml(t.name)}</span>`).join("")}
+      </div>
+    `;
+    grid.appendChild(div);
+  }
+  section.style.display = "block";
 }
 
 // ── Maintainers ───────────────────────────────────────────────────────────────
