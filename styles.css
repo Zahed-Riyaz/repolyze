@@ -363,7 +363,7 @@ li {
 }
 
 /* ── Chat Tab ────────────────────────────────────────────────────────────── */
-#chat-tab {
+#chat-tab.active {
   display: flex;
   flex-direction: column;
   height: calc(100vh - 210px);
@@ -373,40 +373,112 @@ li {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 10px;
-  font-size: 0.85em;
-  color: #8b949e;
+  margin-bottom: 8px;
+  font-size: 0.82em;
+  color: #6e7681;
+}
+
+#chat-context-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#chat-context-label::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #3fb950;
+  box-shadow: 0 0 5px rgba(63, 185, 80, 0.6);
+  flex-shrink: 0;
 }
 
 #clear-chat-btn {
   background: none;
-  border: 1px solid #30363d;
-  color: #8b949e;
-  border-radius: 4px;
-  padding: 3px 10px;
+  border: none;
+  color: #484f58;
+  border-radius: 6px;
+  padding: 3px 8px;
   cursor: pointer;
-  font-size: 0.85em;
+  font-size: 0.82em;
+  transition: color 0.15s, background 0.15s;
 }
 
-#clear-chat-btn:hover { border-color: #f85149; color: #f85149; }
+#clear-chat-btn:hover { background: rgba(248,81,73,0.1); color: #f85149; }
 
 #chat-history {
   flex: 1;
   overflow-y: auto;
   border: 1px solid #30363d;
-  border-radius: 6px;
-  padding: 12px;
+  border-radius: 10px;
+  padding: 14px 12px;
   margin-bottom: 10px;
   background-color: #010409;
   display: flex;
   flex-direction: column;
+  gap: 4px;
+  transition: border-color 0.4s, box-shadow 0.4s;
+}
+
+/* ── Message wrapper rows ───────────────────────────────────────────────── */
+.msg-wrap {
+  display: flex;
+  flex-direction: column;
+  max-width: 84%;
+  gap: 3px;
+  margin-bottom: 8px;
+}
+
+.msg-wrap-user {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.msg-wrap-bot {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+
+/* Sender label — bot only */
+.msg-sender {
+  font-size: 0.7em;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  color: #388bfd;
+  opacity: 0.75;
+  padding: 0 4px;
+  letter-spacing: 0.02em;
+}
+
+/* Timestamp beneath each bubble */
+.msg-time {
+  font-size: 0.68em;
+  color: #484f58;
+  padding: 0 4px;
+}
+
+/* History separator (shown when restoring old messages) */
+.history-sep {
+  display: flex;
+  align-items: center;
   gap: 10px;
+  color: #484f58;
+  font-size: 0.72em;
+  margin: 4px 0 10px;
+  letter-spacing: 0.03em;
+}
+
+.history-sep::before,
+.history-sep::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: #21262d;
 }
 
 .chat-msg {
   padding: 10px 13px;
-  border-radius: 8px;
-  max-width: 92%;
   font-size: 0.95em;
   line-height: 1.55;
   word-break: break-word;
@@ -415,15 +487,13 @@ li {
 .chat-msg-user {
   background: #238636;
   color: white;
-  align-self: flex-end;
-  border-bottom-right-radius: 2px;
+  border-radius: 18px 4px 18px 18px;
 }
 
 .chat-msg-bot {
   background: #21262d;
   color: #c9d1d9;
-  align-self: flex-start;
-  border-bottom-left-radius: 2px;
+  border-radius: 4px 18px 18px 18px;
   border: 1px solid #30363d;
 }
 
@@ -471,6 +541,7 @@ li {
 #chat-input-container {
   display: flex;
   gap: 8px;
+  align-items: flex-end;
 }
 
 #chat-input {
@@ -478,30 +549,52 @@ li {
   background-color: #0d1117;
   color: #c9d1d9;
   border: 1px solid #30363d;
-  border-radius: 6px;
-  padding: 10px;
+  border-radius: 10px;
+  padding: 11px 14px;
   resize: none;
-  height: 54px;
+  height: 60px;
   font-family: inherit;
   font-size: 0.95em;
   outline: none;
+  transition: border-color 0.2s, box-shadow 0.25s;
 }
 
-#chat-input:focus { border-color: #58a6ff; }
+#chat-input:focus {
+  border-color: #388bfd;
+  box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.13);
+}
 
 #send-btn {
   background-color: #238636;
   color: white;
   border: none;
-  border-radius: 6px;
-  padding: 0 16px;
+  border-radius: 10px;
+  padding: 0 18px;
+  height: 60px;
   cursor: pointer;
   font-size: 0.95em;
-  transition: background 0.15s;
+  font-weight: 600;
+  transition: background 0.15s, transform 0.1s, box-shadow 0.2s;
 }
 
 #send-btn:hover:not(:disabled) { background: #2ea043; }
 #send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Regenerate button ───────────────────────────────────────────────────── */
+.regen-btn {
+  background: none;
+  border: 1px solid #30363d;
+  color: #6e7681;
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 0.78em;
+  cursor: pointer;
+  margin-top: 4px;
+  align-self: flex-start;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.regen-btn:hover { color: #c9d1d9; border-color: #58a6ff; background: rgba(88,166,255,0.07); }
+.regen-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ── Inline settings prompt ──────────────────────────────────────────────── */
 .settings-inline {
@@ -1200,11 +1293,15 @@ li:hover {
 /* Chat bubble — user message gradient */
 .chat-msg-user {
   background: linear-gradient(135deg, #238636 0%, #1a7f37 100%);
+  /* speech-bubble tail: flat corner on top-right */
+  border-radius: 18px 4px 18px 18px;
 }
 
 /* Chat bubble — bot message left accent */
 .chat-msg-bot {
   border-left: 3px solid #1f6feb;
+  /* speech-bubble tail: flat corner on top-left */
+  border-radius: 4px 18px 18px 18px;
 }
 
 /* Typing dots — green to match coding theme */
@@ -1448,3 +1545,85 @@ li:hover {
   background: #1c2128;
   color: #e6edf3;
 }
+
+/* Bubbles inside a wrapper fill the wrapper width */
+.msg-wrap .chat-msg {
+  max-width: 100%;
+}
+
+/* ── Chat — alive animations ─────────────────────────────────────────────────── */
+
+/* Shared entrance keyframe (messages + starters) */
+@keyframes msgSlideIn {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0)    scale(1);    }
+}
+
+/* New message bubbles slide in — NOT applied on history restore */
+.msg-entering {
+  animation: msgSlideIn 0.22s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+/* Bot bubble green glow while tokens are streaming in */
+.chat-msg-bot.streaming {
+  border-left-color: #3fb950;
+  box-shadow: -3px 0 12px rgba(63, 185, 80, 0.22);
+  transition: border-left-color 0.5s ease, box-shadow 0.5s ease;
+}
+
+/* Chat history container pulses blue while AI is responding */
+#chat-history.responding {
+  border-color: rgba(31, 111, 235, 0.35);
+  box-shadow: 0 0 0 1px rgba(31, 111, 235, 0.08) inset;
+  transition: border-color 0.4s, box-shadow 0.4s;
+}
+
+/* Typing indicator slides up each time it appears */
+@keyframes typingIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0);   }
+}
+
+.typing-anim {
+  animation: typingIn 0.2s ease both;
+}
+
+/* Input area — the whole container lifts when focused */
+#chat-input-container:focus-within {
+  filter: drop-shadow(0 0 8px rgba(31, 111, 235, 0.18));
+}
+
+/* Input focus — deeper glow replacing the plain border change */
+#chat-input:focus {
+  border-color: #388bfd;
+  box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.13);
+  transition: border-color 0.2s, box-shadow 0.25s;
+}
+
+/* Send button — micro-click scale + hover glow */
+#send-btn {
+  transition: background 0.15s, transform 0.1s, box-shadow 0.2s;
+}
+
+#send-btn:active:not(:disabled) {
+  transform: scale(0.91);
+}
+
+#send-btn:not(:disabled):hover {
+  box-shadow: 0 0 12px rgba(46, 160, 67, 0.4);
+}
+
+/* Chat starter chips stagger in */
+.chat-starters {
+  animation: msgSlideIn 0.2s ease both;
+}
+
+.starter-chip {
+  animation: msgSlideIn 0.2s ease both;
+  opacity: 0; /* held at 0 until animation runs */
+}
+
+.starter-chip:nth-child(1) { animation-delay: 0.06s; }
+.starter-chip:nth-child(2) { animation-delay: 0.13s; }
+.starter-chip:nth-child(3) { animation-delay: 0.20s; }
+.starter-chip:nth-child(4) { animation-delay: 0.27s; }

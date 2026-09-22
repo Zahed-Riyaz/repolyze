@@ -15,10 +15,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   showWelcomeSplash();
 
   // Tab switching
-  document.querySelectorAll(".tab-btn").forEach(tab => {
+  document.querySelectorAll(".tab-btn").forEach(tab => { //tab just represents the current "DOM element" in .tab-btn
     tab.addEventListener("click", () => {
-      document.querySelectorAll(".tab-btn").forEach(t => t.classList.remove("active"));
-      document.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
+      document.querySelectorAll(".tab-btn").forEach(t => t.classList.remove("active")); 
+      document.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active")); //literally make every tab inactive
       tab.classList.add("active");
       document.getElementById(`${tab.dataset.tab}-tab`).classList.add("active");
     });
@@ -152,12 +152,16 @@ async function updateRepoInfo() {
 
 // ── GitHub API helper ─────────────────────────────────────────────────────────
 async function fetchGitHub(endpoint, rawResponse = false) {
-  const headers = { "Accept": "application/vnd.github+json" };
-  if (githubToken) headers["Authorization"] = `Bearer ${githubToken}`;
-
   const url = endpoint.startsWith("http")
     ? endpoint
     : `https://api.github.com/repos/${currentRepo.owner}/${currentRepo.repo}${endpoint}`;
+
+  const headers = { "Accept": "application/vnd.github+json" };
+  // Send the token only to GitHub's own API host — endpoint may be a full URL
+  // that came from response data, and the token must not follow it elsewhere.
+  let apiHost = "";
+  try { apiHost = new URL(url).host; } catch { throw new Error(`Invalid GitHub API URL: ${url}`); }
+  if (githubToken && apiHost === "api.github.com") headers["Authorization"] = `Bearer ${githubToken}`;
 
   const response = await fetch(url, { headers });
 
@@ -847,18 +851,32 @@ async function handleChat() {
   }
 
   document.getElementById("chat-starters")?.remove();
-  chatMessages.push({ role: "user", text: query });
-  appendChatMessage("user", query, false);
+  const userTime = Date.now();
+  chatMessages.push({ role: "user", text: query, time: userTime });
+  appendChatMessage("user", query, false, true, userTime);
   input.value = "";
 
-  const typingEl  = document.getElementById("typing-indicator");
+  const typingEl   = document.getElementById("typing-indicator");
   const chatHistEl = document.getElementById("chat-history");
+
+  // Show typing indicator with entrance animation
+  typingEl.classList.remove("typing-anim");
+  void typingEl.offsetWidth; // force reflow so animation replays
   typingEl.style.display = "flex";
+  typingEl.classList.add("typing-anim");
+  chatHistEl.classList.add("responding");
   document.getElementById("send-btn").disabled = true;
 
-  // Pre-create bot bubble; it will be appended on the first streaming token
+  // Pre-create wrapper + bubble; wrapper is appended on the first streaming token
+  const botWrap = document.createElement("div");
+  botWrap.className = "msg-wrap msg-wrap-bot";
+  const botLabel = document.createElement("span");
+  botLabel.className = "msg-sender";
+  botLabel.textContent = "</> AI";
+  botWrap.appendChild(botLabel);
   const botBubble = document.createElement("div");
   botBubble.className = "chat-msg chat-msg-bot";
+  botWrap.appendChild(botBubble);
   let streamStarted = false;
   let fullReply = "";
 
@@ -877,16 +895,29 @@ async function handleChat() {
       if (!streamStarted) {
         streamStarted = true;
         typingEl.style.display = "none";
-        chatHistEl.appendChild(botBubble);
+        // Animate in + show streaming glow on left border
+        botBubble.classList.add("msg-entering", "streaming");
+        chatHistEl.appendChild(botWrap);
       }
       botBubble.innerHTML = renderMarkdown(partial) + '<span class="streaming-cursor"></span>';
-      chatHistEl.scrollTop = chatHistEl.scrollHeight;
+      if (isNearBottom(chatHistEl)) chatHistEl.scrollTop = chatHistEl.scrollHeight;
     });
 
-    // Final render without the blinking cursor
+    // Streaming done — remove glow, stamp time, render final content
+    botBubble.classList.remove("streaming");
     botBubble.innerHTML = renderMarkdown(fullReply);
-    chatHistEl.scrollTop = chatHistEl.scrollHeight;
-    chatMessages.push({ role: "bot", text: fullReply });
+    const botTime = Date.now();
+    const botTimeEl = document.createElement("span");
+    botTimeEl.className = "msg-time";
+    botTimeEl.textContent = formatTime(botTime);
+    botWrap.appendChild(botTimeEl);
+    const regenBtn = document.createElement("button");
+    regenBtn.className = "regen-btn";
+    regenBtn.textContent = "↺ Regenerate";
+    regenBtn.addEventListener("click", () => regenerateResponse(botWrap, query));
+    botWrap.appendChild(regenBtn);
+    if (isNearBottom(chatHistEl)) chatHistEl.scrollTop = chatHistEl.scrollHeight;
+    chatMessages.push({ role: "bot", text: fullReply, time: botTime });
     saveChatHistory();
   } catch (err) {
     const ollamaErr = err.message === "OLLAMA_NOT_RUNNING" || err.message === "OLLAMA_CORS";
@@ -904,20 +935,73 @@ async function handleChat() {
     // Mid-stream error: partial content already visible, leave it as-is
   } finally {
     typingEl.style.display = "none";
+    chatHistEl.classList.remove("responding");
     document.getElementById("send-btn").disabled = false;
   }
 }
 
-function appendChatMessage(role, text, save = true) {
+async function regenerateResponse(botWrap, query) {
+  const chatHistEl = document.getElementById("chat-history");
+  const allMsgWraps = Array.from(chatHistEl.querySelectorAll(".msg-wrap"));
+  const wrapIdx = allMsgWraps.indexOf(botWrap);
+  if (wrapIdx === -1) return;
+
+  // Remove this bot wrap and all subsequent wraps from DOM
+  allMsgWraps.slice(wrapIdx).forEach(w => w.remove());
+
+  // Trim chatMessages to match — drop everything from wrapIdx onward
+  chatMessages.splice(wrapIdx);
+  await saveChatHistory();
+
+  // Re-send the original query
+  const input = document.getElementById("chat-input");
+  input.value = query;
+  handleChat();
+}
+
+function isNearBottom(el, threshold = 80) {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+}
+
+function appendChatMessage(role, text, save = true, animate = true, time = null, query = null) {
   const history = document.getElementById("chat-history");
+
+  const wrap = document.createElement("div");
+  wrap.className = `msg-wrap msg-wrap-${role}`;
+
+  // Sender label — bot only
+  if (role === "bot") {
+    const label = document.createElement("span");
+    label.className = "msg-sender";
+    label.textContent = "</> AI";
+    wrap.appendChild(label);
+  }
+
   const msg = document.createElement("div");
-  msg.className = `chat-msg chat-msg-${role}`;
+  msg.className = `chat-msg chat-msg-${role}${animate ? " msg-entering" : ""}`;
   if (role === "bot") {
     msg.innerHTML = renderMarkdown(text);
   } else {
     msg.textContent = text;
   }
-  history.appendChild(msg);
+  wrap.appendChild(msg);
+
+  if (time) {
+    const t = document.createElement("span");
+    t.className = "msg-time";
+    t.textContent = formatTime(time);
+    wrap.appendChild(t);
+  }
+
+  if (role === "bot" && query) {
+    const regenBtn = document.createElement("button");
+    regenBtn.className = "regen-btn";
+    regenBtn.textContent = "↺ Regenerate";
+    regenBtn.addEventListener("click", () => regenerateResponse(wrap, query));
+    wrap.appendChild(regenBtn);
+  }
+
+  history.appendChild(wrap);
   history.scrollTop = history.scrollHeight;
   if (save) saveChatHistory();
 }
@@ -1023,8 +1107,30 @@ async function loadChatHistory() {
   chatMessages = result[key] || [];
   const historyEl = document.getElementById("chat-history");
   historyEl.innerHTML = "";
-  chatMessages.forEach(m => appendChatMessage(m.role, m.text, false));
+
+  if (chatMessages.length > 0) {
+    // Date separator — use first message's timestamp if available
+    const sep = document.createElement("div");
+    sep.className = "history-sep";
+    const firstTime = chatMessages[0].time;
+    const label = firstTime
+      ? new Date(firstTime).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })
+      : "Previous conversation";
+    sep.innerHTML = `<span>${label}</span>`;
+    historyEl.appendChild(sep);
+  }
+
+  chatMessages.forEach((m, i) => {
+    let query = null;
+    if (m.role === "bot") {
+      for (let j = i - 1; j >= 0; j--) {
+        if (chatMessages[j].role === "user") { query = chatMessages[j].text; break; }
+      }
+    }
+    appendChatMessage(m.role, m.text, false, false, m.time || null, query);
+  });
   renderChatStarters(); // shows only if chatMessages is empty
+  historyEl.scrollTop = historyEl.scrollHeight;
 }
 
 async function saveChatHistory() {
@@ -1207,8 +1313,12 @@ async function callGemini(contents) {
   let response;
   try {
     response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${aiApiKey}`,
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ contents }) }
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": aiApiKey },
+        body: JSON.stringify({ contents })
+      }
     );
   } catch {
     throw new Error("Could not reach Gemini. Check your internet connection.");
@@ -1393,8 +1503,12 @@ async function callGeminiStreaming(contents, onChunk) {
   let response;
   try {
     response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?key=${aiApiKey}&alt=sse`,
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ contents }) }
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": aiApiKey },
+        body: JSON.stringify({ contents })
+      }
     );
   } catch {
     throw new Error("Could not reach Gemini. Check your internet connection.");
@@ -1683,6 +1797,10 @@ function escapeHtml(str) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function formatTime(ts) {
+  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 function daysAgo(dateStr) {

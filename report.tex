@@ -1,0 +1,525 @@
+%% GitHub Repo Analyzer — Technical Report
+%% Compatible with Overleaf (pdfLaTeX)
+
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{parskip}
+\usepackage{microtype}
+\usepackage{fancyhdr}
+\usepackage{graphicx}
+
+% Colour palette
+\definecolor{ghblue}{HTML}{0969DA}
+\definecolor{codebg}{HTML}{F6F8FA}
+\definecolor{tabhead}{HTML}{E8EFF8}
+\definecolor{green}{HTML}{1A7F37}
+\definecolor{grey}{HTML}{57606A}
+
+% Hyperref setup
+\hypersetup{
+    colorlinks=true,
+    linkcolor=ghblue,
+    urlcolor=ghblue,
+    pdftitle={GitHub Repo Analyzer — Technical Report},
+    pdfauthor={Zahed Riyaz}
+}
+
+% Code listing style
+\lstset{
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    framerule=0.4pt,
+    rulecolor=\color{grey!40},
+    xleftmargin=8pt,
+    xrightmargin=8pt,
+    aboveskip=6pt,
+    belowskip=6pt,
+    showstringspaces=false,
+    keywordstyle=\color{ghblue},
+    commentstyle=\color{grey},
+    stringstyle=\color{green}
+}
+
+% Section styling
+\titleformat{\section}{\large\bfseries\color{ghblue}}{}{0em}{}[\titlerule]
+\titleformat{\subsection}{\normalsize\bfseries}{}{0em}{}
+
+% Header / footer
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\small GitHub Repo Analyzer — Technical Report}
+\rhead{\small Zahed Riyaz}
+\cfoot{\thepage}
+
+% Column type for wrapped, left-aligned text
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+% ─────────────────────────────────────────────────────────
+\begin{document}
+
+\begin{center}
+    {\LARGE\bfseries GitHub Repo Analyzer}\\[4pt]
+    {\large Chrome Extension — Technical Report}\\[8pt]
+    {\color{grey}\small Manifest V3 $\cdot$ GitHub REST API $\cdot$ Gemini / GPT-4o / Claude / Groq / Ollama $\cdot$ RAG Chat}\\[4pt]
+    {\small Zahed Riyaz \quad \textcolor{grey}{|} \quad \today}
+\end{center}
+
+\vspace{1em}
+\hrule
+\vspace{1.5em}
+
+% ─────────────────────────────────────────────────────────
+\section{Project Overview}
+
+GitHub Repo Analyzer is a Chrome side-panel extension that surfaces actionable information about any GitHub repository — issues, tech stack, maintainers, contributor health, and an AI chat interface — without a build step. It is built with plain JavaScript, HTML, and CSS under Manifest V3.
+
+\medskip
+\textbf{Key capabilities:}
+\begin{itemize}[nosep]
+    \item Parallel GitHub REST API fetches for repo metadata, issues, languages, contributors, and open PRs.
+    \item Tech-stack detection across 50+ tools by scanning dependency files and root directory listings.
+    \item Contributor health score (0--100) computed from weighted activity signals.
+    \item Retrieval-Augmented Generation (RAG) chat grounded in actual repository source files.
+    \item Streaming responses from five AI providers: Gemini, Groq, OpenAI, Anthropic, Ollama.
+    \item Per-repo chat history persisted to \texttt{chrome.storage.local}.
+\end{itemize}
+
+% ─────────────────────────────────────────────────────────
+\section{File Overview}
+
+\begin{longtable}{L{3.4cm} L{1.5cm} L{8.6cm}}
+    \toprule
+    \rowcolor{tabhead}
+    \textbf{File} & \textbf{Type} & \textbf{Purpose} \\
+    \midrule
+    \endhead
+
+    \bottomrule
+    \endfoot
+
+    \texttt{manifest.json} & Config &
+        Declares extension metadata, all permissions (\texttt{sidePanel}, \texttt{tabs}, \texttt{storage}), content-script injection, and host permissions for GitHub + five AI provider APIs. \\
+    \addlinespace
+
+    \texttt{background.js} & Service Worker &
+        Enables the side panel to open on toolbar-icon click via \texttt{sidePanel.setPanelBehavior}; logs extension installation. \\
+    \addlinespace
+
+    \texttt{content.js} & Content Script &
+        Runs inside every GitHub tab; parses \texttt{owner/repo} from the URL path and broadcasts it via \texttt{chrome.runtime.sendMessage}. \\
+    \addlinespace
+
+    \texttt{sidepanel.html} & UI Markup &
+        Defines the six-tab side-panel layout (Issues, Stack, Maintainers, Contribute, Chat, Settings) and all static DOM scaffolding. \\
+    \addlinespace
+
+    \texttt{sidepanel.js} & Main Logic &
+        Core 1,800-line script: GitHub API fetching, tab rendering, health scoring, tool detection, RAG context assembly, multi-provider AI streaming, chat history, and settings management. \\
+    \addlinespace
+
+    \texttt{options.html} & Settings UI &
+        Full-page settings interface with provider selection cards and API-key input fields (mirrors the in-panel settings tab). \\
+    \addlinespace
+
+    \texttt{options.js} & Settings Page &
+        Handles provider-card selection, API-key persistence to \texttt{chrome.storage.local}, and masked key display on the options page. \\
+    \addlinespace
+
+    \texttt{styles.css} & Styling &
+        All CSS for the side panel: dark GitHub-like theme, tab layout, chat bubbles, streaming cursor animation, health card, and tool-category grid. \\
+    \addlinespace
+
+    \texttt{popup.html} & Unused &
+        Empty placeholder; the extension uses a side panel instead of a browser-action popup. \\
+    \addlinespace
+
+    \texttt{popup.js} & Unused &
+        Empty placeholder; no popup logic is needed. \\
+
+\end{longtable}
+
+% ─────────────────────────────────────────────────────────
+\section{Key Functions}
+
+\subsection{Initialisation \& Navigation}
+
+\begin{longtable}{L{5.2cm} L{8.3cm}}
+    \toprule
+    \rowcolor{tabhead}
+    \textbf{Function} & \textbf{Description} \\
+    \midrule
+    \endhead
+    \bottomrule
+    \endfoot
+
+    \texttt{DOMContentLoaded} listener &
+        Extension entry point; loads persisted settings, attaches all UI event listeners, and triggers the first repo load. \\
+    \addlinespace
+
+    \texttt{handleRepoRefresh(url)} &
+        Detects URL changes; extracts \texttt{owner/repo}; short-circuits on non-repo GitHub pages (e.g.\ trending, gist). \\
+    \addlinespace
+
+    \texttt{updateRepoInfo()} &
+        Fires five parallel GitHub fetches (repo data, issues, languages, contributors, health + PRs) and stores results in the session cache. \\
+\end{longtable}
+
+\subsection{GitHub API Helpers}
+
+\begin{longtable}{L{5.2cm} L{8.3cm}}
+    \toprule
+    \rowcolor{tabhead}
+    \textbf{Function} & \textbf{Description} \\
+    \midrule
+    \endhead
+    \bottomrule
+    \endfoot
+
+    \texttt{fetchGitHub(endpoint)} &
+        Central API wrapper; adds Bearer token; tracks \texttt{X-RateLimit-Remaining}; updates the rate-limit badge. \\
+    \addlinespace
+
+    \texttt{fetchRepoData()} &
+        Fetches repo metadata: stars, forks, description, license, fork status. \\
+    \addlinespace
+
+    \texttt{fetchIssues()} &
+        Fetches open, unassigned issues and filters out pull requests server-side. \\
+    \addlinespace
+
+    \texttt{fetchTechStack()} &
+        Fetches language byte counts and calls \texttt{detectTools()} to scan dependency files. \\
+    \addlinespace
+
+    \texttt{fetchMaintainers()} &
+        Fetches top-10 contributors by commit count. \\
+    \addlinespace
+
+    \texttt{fetchRepoHealth()} &
+        Uses \texttt{Promise.allSettled} to check CONTRIBUTING.md, issue templates, open PRs, and average PR merge time. \\
+\end{longtable}
+
+\subsection{Rendering}
+
+\begin{longtable}{L{5.2cm} L{8.3cm}}
+    \toprule
+    \rowcolor{tabhead}
+    \textbf{Function} & \textbf{Description} \\
+    \midrule
+    \endhead
+    \bottomrule
+    \endfoot
+
+    \texttt{renderIssues(activeLabel)} &
+        Client-side label filter; renders issue cards with coloured label chips. \\
+    \addlinespace
+
+    \texttt{renderTechStack(langs, tools)} &
+        Displays language percentage bars and groups detected tools by category. \\
+    \addlinespace
+
+    \texttt{renderHealthCard(h)} &
+        Renders the 0--100 contributor-friendliness score with colour-coded badge and breakdown list. \\
+    \addlinespace
+
+    \texttt{renderOpenPRs(prs)} &
+        Lists recent open pull requests with author avatar and age. \\
+    \addlinespace
+
+    \texttt{renderMarkdown(text)} &
+        Lightweight markdown-to-HTML converter: headings, bold, italic, fenced code blocks, ordered/unordered lists, and links. \\
+\end{longtable}
+
+\subsection{RAG Chat}
+
+\begin{longtable}{L{5.2cm} L{8.3cm}}
+    \toprule
+    \rowcolor{tabhead}
+    \textbf{Function} & \textbf{Description} \\
+    \midrule
+    \endhead
+    \bottomrule
+    \endfoot
+
+    \texttt{handleChat()} &
+        Orchestrates a chat turn: calls \texttt{getDeepRepoContext()}, prepends context to the system prompt, builds the last-7-turn history, and streams the AI response. \\
+    \addlinespace
+
+    \texttt{getDeepRepoContext()} &
+        Fetches up to seven repo files in parallel (README 3,000 chars; others 1,500 chars each), labels each section, joins them, and caches the result for the session. \\
+    \addlinespace
+
+    \texttt{appendChatMessage(...)} &
+        Renders a chat bubble, adds a timestamp, and wires the Regenerate button. \\
+    \addlinespace
+
+    \texttt{saveChatHistory()} &
+        Persists the last 50 messages to \texttt{chrome.storage.local} under the key \texttt{chat\_\{owner\}\_\{repo\}}. \\
+    \addlinespace
+
+    \texttt{regenerateResponse(...)} &
+        Trims history to the point before the last bot turn and re-sends the original query. \\
+    \addlinespace
+
+    \texttt{renderChatStarters()} &
+        Displays four suggested prompts when the chat history is empty. \\
+\end{longtable}
+
+\subsection{AI Provider Routing \& Streaming}
+
+\begin{longtable}{L{5.2cm} L{8.3cm}}
+    \toprule
+    \rowcolor{tabhead}
+    \textbf{Function} & \textbf{Description} \\
+    \midrule
+    \endhead
+    \bottomrule
+    \endfoot
+
+    \texttt{callAIStreaming(contents, onChunk)} &
+        Top-level router; dispatches to the correct provider streaming function and calls \texttt{onChunk(cumulativeText)} per token. \\
+    \addlinespace
+
+    \texttt{callGeminiStreaming(...)} &
+        Sends SSE request to Gemini; parses \texttt{candidates[0].content.parts[0].text} events. \\
+    \addlinespace
+
+    \texttt{callGroqStreaming(...)} &
+        OpenAI-compatible SSE stream from Groq; uses \texttt{geminiToOpenAI()} for format conversion. \\
+    \addlinespace
+
+    \texttt{callOpenAIStreaming(...)} &
+        Streams from \texttt{gpt-4o-mini}; parses \texttt{choices[0].delta.content} SSE events. \\
+    \addlinespace
+
+    \texttt{callAnthropicStreaming(...)} &
+        Streams from Claude; parses \texttt{content\_block\_delta / text\_delta} SSE event type. \\
+    \addlinespace
+
+    \texttt{callOllamaStreaming(...)} &
+        Streams from a local Ollama instance; parses newline-delimited JSON (\texttt{message.content}). \\
+    \addlinespace
+
+    \texttt{readOpenAISSEStream(...)} &
+        Shared SSE parser for OpenAI/Groq: reads the byte stream, splits on \texttt{data:}, stops at \texttt{[DONE]}. \\
+    \addlinespace
+
+    \texttt{geminiToOpenAI(contents)} &
+        Converts Gemini message format \texttt{\{role, parts[\{text\}]\}} to OpenAI format \texttt{\{role, content\}}; renames \texttt{"model"} to \texttt{"assistant"}. \\
+    \addlinespace
+
+    \texttt{pullOllamaModel(model)} &
+        Auto-pulls a missing Ollama model; streams download progress to the typing indicator. \\
+\end{longtable}
+
+\subsection{Settings, Scoring \& Utilities}
+
+\begin{longtable}{L{5.2cm} L{8.3cm}}
+    \toprule
+    \rowcolor{tabhead}
+    \textbf{Function} & \textbf{Description} \\
+    \midrule
+    \endhead
+    \bottomrule
+    \endfoot
+
+    \texttt{calculateHealthScore(h, repoData)} &
+        Returns a 0--100 score from weighted signals: activity (30), CONTRIBUTING.md (20), issue templates (15), PR speed (25), description (5), open issues (5). \\
+    \addlinespace
+
+    \texttt{detectTools()} &
+        Scans \texttt{package.json}, \texttt{requirements.txt}, and the root directory listing for 50+ tool keywords; groups results by category. \\
+    \addlinespace
+
+    \texttt{generateQuickstart()} &
+        Sends an AI prompt to write a contributor quickstart guide; streams and caches the result per repo. \\
+    \addlinespace
+
+    \texttt{initSettingsTab()} &
+        Wires provider-pill clicks, API-key input, Ollama model field, and GitHub token field; persists values to storage. \\
+    \addlinespace
+
+    \texttt{maskApiKey(key)} &
+        Returns first 6 + \texttt{****} + last 2 characters for safe display. \\
+    \addlinespace
+
+    \texttt{escapeHtml(str)} &
+        Escapes \texttt{\&}, \texttt{<}, \texttt{>}, \texttt{"} to prevent DOM injection. \\
+    \addlinespace
+
+    \texttt{formatNumber(n)} &
+        Formats large integers as human-readable strings (e.g.\ \texttt{12\,400} $\rightarrow$ \texttt{12.4k}). \\
+    \addlinespace
+
+    \texttt{daysAgo(dateStr)} &
+        Converts an ISO date string to a relative label: \texttt{"today"}, \texttt{"3 days ago"}, \texttt{"2mo ago"}, etc. \\
+\end{longtable}
+
+% ─────────────────────────────────────────────────────────
+\section{RAG Implementation}
+
+\subsection{What is RAG?}
+
+Retrieval-Augmented Generation (RAG) is a technique where relevant external documents are \emph{retrieved} at inference time and \emph{injected} into the LLM prompt as additional context, so the model's answer is grounded in real data rather than relying solely on parametric knowledge from pre-training.
+
+\subsection{Retrieval Layer}
+
+When a user sends a chat message, \texttt{getDeepRepoContext()} fetches the following files from the GitHub Contents API in parallel using \texttt{Promise.allSettled} (missing files are silently skipped):
+
+\medskip
+\begin{longtable}{L{4cm} L{2cm} L{7.5cm}}
+    \toprule
+    \rowcolor{tabhead}
+    \textbf{Document} & \textbf{Char Limit} & \textbf{Why It Matters} \\
+    \midrule
+    \endhead
+    \bottomrule
+    \endfoot
+
+    \texttt{README} (any ext.) & 3,000 & Project overview, setup, usage — the primary knowledge base. \\
+    \addlinespace
+    \texttt{CONTRIBUTING.md} & 1,500 & Contribution workflow, coding standards, PR process. \\
+    \addlinespace
+    \texttt{package.json} & 1,500 & Exact npm dependency names and project scripts. \\
+    \addlinespace
+    \texttt{requirements.txt} & 1,500 & Python package dependencies. \\
+    \addlinespace
+    \texttt{pyproject.toml} & 1,500 & Modern Python project config (PEP 517/518). \\
+    \addlinespace
+    \texttt{Cargo.toml} & 1,500 & Rust crate dependencies. \\
+    \addlinespace
+    \texttt{Makefile} & 1,500 & Build targets and developer scripts. \\
+    \addlinespace
+    Root directory listing & N/A & File names only; reveals project structure. \\
+\end{longtable}
+
+Content is returned as base64-encoded strings from the GitHub API and decoded with \texttt{atob()}. The entire result is \textbf{cached in the session-scoped \texttt{repoCache}} object so subsequent messages in the same session reuse the context without additional API calls.
+
+\subsection{Augmentation Layer}
+
+The retrieved documents are assembled into a structured context string inside \texttt{getDeepRepoContext()} and then injected into the system prompt inside \texttt{handleChat()}:
+
+\begin{lstlisting}[language=JavaScript]
+// Context assembly
+parts.push(`=== README ===\n${readmeText.slice(0, 3000)}`);
+parts.push(`=== CONTRIBUTING.md ===\n${contribText.slice(0, 1500)}`);
+// ... other files ...
+parts.push(`=== Root Files ===\n${rootFiles.join(", ")}`);
+const context = parts.join("\n\n");
+
+// Injection into system prompt
+const systemText =
+  `You are an expert on the GitHub repository "${owner}/${repo}". ` +
+  `Answer questions based on this context:\n\n${context}\n\nUser question: `;
+
+history.push({ role: "user", parts: [{ text: systemText + query }] });
+\end{lstlisting}
+
+The last six prior chat turns are prepended before the new message so the model has conversational context as well as document context.
+
+\subsection{Generation Layer}
+
+The augmented prompt is sent to the chosen AI provider via \texttt{callAIStreaming()}, which routes to the correct streaming implementation:
+
+\medskip
+\begin{longtable}{L{2.8cm} L{4.4cm} L{2.8cm} L{3.5cm}}
+    \toprule
+    \rowcolor{tabhead}
+    \textbf{Provider} & \textbf{Default Model} & \textbf{Protocol} & \textbf{Context Window} \\
+    \midrule
+    \endhead
+    \bottomrule
+    \endfoot
+
+    Gemini  & \texttt{gemini-2.0-flash}           & SSE (\texttt{?alt=sse}) & 1M tokens \\
+    Groq    & \texttt{llama-3.3-70b-versatile}    & OpenAI SSE              & 128k tokens \\
+    OpenAI  & \texttt{gpt-4o-mini}                & OpenAI SSE              & 128k tokens \\
+    Anthropic & \texttt{claude-3-5-haiku-20241022} & Anthropic SSE          & 200k tokens \\
+    Ollama  & Configurable (\texttt{llama3.2})    & NDJSON stream           & Model-dependent \\
+\end{longtable}
+
+\medskip
+Tokens arrive as a byte stream; each provider uses a distinct wire format. All parsers decode the stream incrementally and call \texttt{onChunk(cumulativeText)}, which updates the chat bubble DOM in real time via \texttt{renderMarkdown()}.
+
+\subsection{Why This Works Without a Vector Database}
+
+Traditional RAG pipelines embed documents, store them in a vector database, and retrieve the most semantically similar chunks at query time. This extension takes a simpler approach — \emph{full-document context stuffing} — which is viable here because:
+
+\begin{enumerate}[nosep]
+    \item The total size of README + config files typically fits within 5,000--15,000 tokens.
+    \item Modern frontier models have 128k--1M token context windows, so the full context always fits.
+    \item GitHub repositories have a natural, curated set of authoritative documents (README, CONTRIBUTING, manifest files) that cover the most common contributor questions.
+    \item No server infrastructure is required — all retrieval happens client-side via browser \texttt{fetch()}.
+\end{enumerate}
+
+The trade-off is that very large READMEs are truncated at 3,000 characters and deep source files are never read. For the contributor-assistance use case this is acceptable.
+
+\subsection{Data Flow Summary}
+
+\begin{lstlisting}
+GitHub repo URL (github.com/owner/repo)
+        |
+        v
+  content.js detects URL change
+        |
+        v
+  sidepanel.js: handleRepoRefresh()
+        |
+        v
+  Parallel GitHub API fetches (metadata, issues, languages,
+  contributors, health)  -->  repoCache[owner/repo]
+        |
+  User sends chat message
+        |
+        v
+  getDeepRepoContext()  -->  7 files fetched in parallel
+        |                    (base64-decoded, truncated, labelled)
+        v
+  Context prepended to system prompt + last 6 turns of history
+        |
+        v
+  callAIStreaming()  -->  routes to Gemini / Groq / OpenAI /
+                          Anthropic / Ollama
+        |
+        v
+  SSE / NDJSON stream parsed token-by-token
+        |
+        v
+  onChunk()  -->  renderMarkdown()  -->  DOM update
+        |
+        v
+  saveChatHistory()  -->  chrome.storage.local
+\end{lstlisting}
+
+% ─────────────────────────────────────────────────────────
+\section{Storage Architecture}
+
+\begin{longtable}{L{3.5cm} L{2.5cm} L{2.5cm} L{5cm}}
+    \toprule
+    \rowcolor{tabhead}
+    \textbf{Store} & \textbf{Scope} & \textbf{Lifetime} & \textbf{Contents} \\
+    \midrule
+    \endhead
+    \bottomrule
+    \endfoot
+
+    \texttt{chrome.storage.local} & Persistent & Until cleared & AI provider, API keys, GitHub token, chat history (last 50 messages per repo, keyed \texttt{chat\_owner\_repo}) \\
+    \addlinespace
+    \texttt{repoCache} (JS object) & Session & Panel reload & Repo metadata, issues, languages, contributors, health, open PRs, quickstart text, RAG context string \\
+    \addlinespace
+    DOM & Immediate & Render cycle & Chat bubbles, tab content, streaming cursor, rate-limit badge \\
+\end{longtable}
+
+% ─────────────────────────────────────────────────────────
+\end{document}
