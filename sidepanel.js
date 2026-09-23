@@ -44,12 +44,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Issue filter buttons
   document.querySelectorAll(".filter-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      renderIssues(btn.dataset.label);
-    });
+    btn.addEventListener("click", () => setIssueFilter(btn.dataset.label));
   });
+  document.getElementById("issue-sort").addEventListener("change", (e) => { issueView.sort = e.target.value; fetchIssues(); });
+  document.getElementById("issue-unclaimed").addEventListener("change", (e) => setUnclaimed(e.target.checked));
+  document.getElementById("issues-more").addEventListener("click", () => fetchIssues({ append: true }));
 
   // Chat controls
   document.getElementById("send-btn").addEventListener("click", () => { handleChat(); });
@@ -253,9 +252,9 @@ async function updateRepoInfo() {
   document.getElementById("repo-license-wrap").hidden = true;
   document.getElementById("repo-fork-badge").style.display = "none";
 
-  // Reset issue filter to "All"
-  document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
-  document.querySelector('.filter-btn[data-label=""]').classList.add("active");
+  // New repo starts on "All" (sort and unclaimed preferences carry over)
+  issueView.filter = "";
+  document.querySelectorAll(".filter-btn").forEach(b => b.classList.toggle("active", b.dataset.label === ""));
 
   // Header + the visible tab now; other tabs load the first time they're opened,
   // which keeps a repo visit to 2 requests instead of ~13.
@@ -312,25 +311,33 @@ const GH_FRESH_MS = 10 * 60 * 1000;
 const GH_MAX_CACHED_CHARS = 400_000; // skip persisting huge bodies (e.g. file trees)
 const ghMemCache = new Map();        // cache key → { status, body, etag, link, time }
 const ghInflight = new Map();        // cache key → Promise of the same
-const ghState = { remaining: null, limit: null, resetAt: 0, badToken: false };
+// Core quota drives the badge/banner; search has its own (10/min anonymously)
+const ghState = { remaining: null, limit: null, resetAt: 0, badToken: false, search: { remaining: null, resetAt: 0 } };
 
 class GitHubError extends Error {
-  constructor(message, status, { rateLimited = false, resetAt = 0 } = {}) {
+  constructor(message, status, { rateLimited = false, resetAt = 0, resource = "core" } = {}) {
     super(message);
     this.status = status;
     this.rateLimited = rateLimited;
     this.resetAt = resetAt;
+    this.resource = resource;
   }
 }
 
-function isRateLimited() {
-  return ghState.remaining === 0 && Date.now() < ghState.resetAt;
+const resourceFor = (url) => (/^\/search\//.test(new URL(url).pathname) ? "search" : "core");
+const limitsFor = (resource) => (resource === "search" ? ghState.search : ghState);
+
+function isRateLimited(resource = "core") {
+  const l = limitsFor(resource);
+  return l.remaining === 0 && Date.now() < l.resetAt;
 }
 
-function rateLimitError() {
-  return new GitHubError(
-    `GitHub's hourly request limit is used up — it resets at ${formatTime(ghState.resetAt)}.`,
-    403, { rateLimited: true, resetAt: ghState.resetAt });
+function rateLimitError(resource = "core") {
+  const { resetAt } = limitsFor(resource);
+  const message = resource === "search"
+    ? `GitHub's search limit is used up for a moment — it resets at ${formatTime(resetAt)}.`
+    : `GitHub's hourly request limit is used up — it resets at ${formatTime(resetAt)}.`;
+  return new GitHubError(message, 403, { rateLimited: true, resetAt, resource });
 }
 
 function repoApiUrl(endpoint, repo) {
@@ -368,25 +375,27 @@ function ghCacheSet(key, entry) {
   chrome.storage.session?.set({ [key]: entry }).catch(() => {}); // quota full → memory only
 }
 
-function noteRateLimitHeaders(res) {
+function noteRateLimitHeaders(res, resource) {
   const remaining = res.headers.get("X-RateLimit-Remaining");
   if (remaining === null) return;
-  ghState.remaining = Number(remaining);
-  ghState.limit = Number(res.headers.get("X-RateLimit-Limit"));
-  ghState.resetAt = Number(res.headers.get("X-RateLimit-Reset")) * 1000;
-  renderRateLimit();
+  const l = limitsFor(res.headers.get("X-RateLimit-Resource") || resource);
+  l.remaining = Number(remaining);
+  l.limit = Number(res.headers.get("X-RateLimit-Limit"));
+  l.resetAt = Number(res.headers.get("X-RateLimit-Reset")) * 1000;
+  if (l === ghState) renderRateLimit();
 }
 
-function isRateLimitResponse(res, body) {
+function isRateLimitResponse(res, body, resource = "core") {
   if (res.status !== 403 && res.status !== 429) return false;
   const quotaGone = res.headers.get("X-RateLimit-Remaining") === "0";
   const retryAfter = Number(res.headers.get("Retry-After")) || 0;
   if (!quotaGone && !retryAfter && res.status !== 429 && !/rate limit/i.test(body?.message || "")) return false;
   // Secondary limits don't zero the quota — pause for Retry-After (or a minute)
   if (!quotaGone) {
-    ghState.remaining = 0;
-    ghState.resetAt = Math.max(ghState.resetAt, Date.now() + (retryAfter || 60) * 1000);
-    renderRateLimit();
+    const l = limitsFor(resource);
+    l.remaining = 0;
+    l.resetAt = Math.max(l.resetAt, Date.now() + (retryAfter || 60) * 1000);
+    if (l === ghState) renderRateLimit();
   }
   return true;
 }
@@ -399,10 +408,11 @@ async function githubRequest(url) {
   if (cached && Date.now() - cached.time < GH_FRESH_MS) return cached;
   if (ghInflight.has(key)) return ghInflight.get(key);
 
+  const resource = resourceFor(url);
   const request = (async () => {
-    if (isRateLimited()) {
+    if (isRateLimited(resource)) {
       if (cached) return cached;
-      throw rateLimitError();
+      throw rateLimitError(resource);
     }
     const headers = githubHeaders(url);
     if (cached?.etag) headers["If-None-Match"] = cached.etag;
@@ -415,7 +425,7 @@ async function githubRequest(url) {
       if (cached) return cached;
       throw new GitHubError("Couldn't reach GitHub — check your connection.", 0);
     }
-    noteRateLimitHeaders(res);
+    noteRateLimitHeaders(res, resource);
 
     if (res.status === 304 && cached) {
       const refreshed = { ...cached, time: Date.now() };
@@ -424,9 +434,9 @@ async function githubRequest(url) {
     }
 
     const body = await res.json().catch(() => null);
-    if (isRateLimitResponse(res, body)) {
+    if (isRateLimitResponse(res, body, resource)) {
       if (cached) return cached;
-      throw rateLimitError();
+      throw rateLimitError(resource);
     }
     if (res.status === 401 && githubToken) {
       ghState.badToken = true;
@@ -610,31 +620,137 @@ function formatNumber(n) {
   return String(n);
 }
 
-// ── Issues (fetch once, filter client-side) ───────────────────────────────────
-async function fetchIssues() {
+// ── Issues ────────────────────────────────────────────────────────────────────
+// "All" pages through the issues API. Label filters use the search API across
+// every open issue (not just one page), matched against the repo's real label
+// names; "Unclaimed only" there also drops issues with a linked PR.
+const issueView = { filter: "", sort: "comments", unclaimed: true };
+const ISSUE_PAGE = 30;
+const SORT_WORDS = { comments: "most discussed first", created: "newest first", updated: "recently updated first" };
+
+const issueViewKey = (v) => `${v.filter}|${v.sort}|${v.unclaimed}`;
+
+async function fetchIssues({ append = false } = {}) {
+  const repo = currentRepo;
+  const cacheKey = repoKey(repo);
+  const view = { ...issueView };
+  const key = issueViewKey(view);
+  const views = (cacheFor(cacheKey).issueViews ??= {});
   const list = document.getElementById("issues-list");
-  list.innerHTML = skeletonList(5);
+  const more = document.getElementById("issues-more");
+  const current = () => isCurrentRepo(cacheKey) && issueViewKey(issueView) === key;
 
-  const cacheKey = repoKey();
-
-  if (repoCache[cacheKey]?.issues) {
-    renderIssues("");
-    return true;
-  }
+  if (!append && views[key]) { renderIssueList(views[key], view); return true; }
+  if (append) { more.disabled = true; more.textContent = "Loading…"; }
+  else { list.innerHTML = skeletonList(5); more.hidden = true; document.getElementById("issues-summary").textContent = ""; }
 
   try {
-    const issues = await fetchGitHub("/issues?state=open&assignee=none&sort=comments&direction=desc&per_page=100");
-    cacheFor(cacheKey).issues = issues.filter(i => !i.pull_request);
-    if (isCurrentRepo(cacheKey)) renderIssues(activeIssueFilter());
+    const page = append ? views[key].page + 1 : 1;
+    const result = view.filter ? await searchLabelIssues(repo, view, page) : await listOpenIssues(repo, view, page);
+    views[key] = append ? { ...result, items: [...views[key].items, ...result.items] } : result;
+    if (current()) renderIssueList(views[key], view);
     return true;
   } catch (err) {
-    if (isCurrentRepo(cacheKey)) list.innerHTML = errorState(err);
+    if (current()) {
+      if (append) { more.disabled = false; more.textContent = "Couldn't load more — try again"; }
+      else list.innerHTML = errorState(err);
+    }
+    // Search limits reset within a minute — retry by ourselves if still here
+    if (err.rateLimited && err.resource === "search") {
+      setTimeout(() => { if (current()) fetchIssues({ append }); }, Math.max(1000, err.resetAt - Date.now() + 500));
+    }
     return false;
   }
 }
 
-function activeIssueFilter() {
-  return document.querySelector(".filter-btn.active")?.dataset.label || "";
+async function listOpenIssues(repo, view, page) {
+  const { data, link } = await fetchGitHubPage(
+    `/issues?state=open${view.unclaimed ? "&assignee=none" : ""}&sort=${view.sort}&direction=desc&per_page=${ISSUE_PAGE}&page=${page}`, repo);
+  return { items: data.filter(i => !i.pull_request), page, total: null, hasMore: /rel="next"/.test(link || "") };
+}
+
+async function searchLabelIssues(repo, view, page) {
+  const labels = await labelsForFilter(view.filter, repo);
+  if (!labels.length) return { items: [], page, total: 0, hasMore: false, labels, noLabel: true };
+  const search = (unclaimed, perPage, p) => fetchGitHub(
+    `https://api.github.com/search/issues?q=${encodeURIComponent(beginnerSearchQuery(repo, labels, { unclaimed }))}` +
+    `&sort=${view.sort}&order=desc&per_page=${perPage}&page=${p}`, repo);
+  const res = await search(view.unclaimed, ISSUE_PAGE, page);
+  const total = res.total_count ?? 0;
+  const result = { items: res.items || [], page, total, labels, hasMore: page * ISSUE_PAGE < Math.min(total, 1000) };
+  // Nothing unclaimed? Say how many are taken rather than showing a bare empty list
+  if (view.unclaimed && total === 0 && page === 1) {
+    result.claimedTotal = (await search(false, 1, 1).catch(() => null))?.total_count ?? null;
+  }
+  return result;
+}
+
+function renderIssueList(state, view) {
+  const list = document.getElementById("issues-list");
+  const more = document.getElementById("issues-more");
+  const summary = document.getElementById("issues-summary");
+  const filterName = { "good-first-issue": "good first", "help-wanted": "help wanted" }[view.filter];
+
+  if (view.filter) {
+    summary.innerHTML = state.noLabel ? "" :
+      `<strong>${state.total.toLocaleString()}</strong> ${filterName} issue${state.total === 1 ? "" : "s"}` +
+      `${view.unclaimed ? " · unassigned, no linked PR" : ""} · ${SORT_WORDS[view.sort]}` +
+      `<span class="issues-labels" title="Matched labels">Labels: ${state.labels.map(l => escapeHtml(l)).join(", ")}</span>`;
+  } else {
+    summary.textContent = `${view.unclaimed ? "Unassigned open issues" : "All open issues"}, ${SORT_WORDS[view.sort]}`;
+  }
+
+  if (!state.items.length) {
+    more.hidden = true;
+    if (state.noLabel) {
+      list.innerHTML = stateItem(`This repo doesn't use a <strong>${filterName}</strong> label. Browse <strong>All</strong> and look for small, clearly described issues.`);
+    } else if (state.claimedTotal) {
+      list.innerHTML = stateItem(`All <strong>${state.claimedTotal}</strong> ${filterName} issues are already assigned or have a linked PR.` +
+        ` <button class="btn btn-xs show-claimed">Show them anyway</button>`);
+      list.querySelector(".show-claimed").addEventListener("click", () => setUnclaimed(false));
+    } else {
+      list.innerHTML = stateItem(view.filter
+        ? `No open <strong>${filterName}</strong> issues right now.`
+        : `No open${view.unclaimed ? ", unassigned" : ""} issues. The <strong>Contribute</strong> tab has other ways to help.`);
+    }
+    return;
+  }
+
+  list.innerHTML = state.items.map(issueCard).join("");
+  more.hidden = !state.hasMore;
+  more.disabled = false;
+  more.textContent = "Load more";
+}
+
+function issueCard(issue) {
+  const labelsHtml = issue.labels
+    .map(l => `<span class="label-chip" style="--lc:#${/^[0-9a-f]{6}$/i.test(l.color) ? l.color : "8b949e"}">${escapeHtml(l.name)}</span>`)
+    .join("");
+  const reactions = issue.reactions?.total_count || 0;
+  const assignee = issue.assignees?.[0] || issue.assignee;
+  return `
+    <li class="list-card">
+      <a href="${issue.html_url}" target="_blank" class="issue-link"><span class="issue-number">#${issue.number}</span> ${escapeHtml(issue.title)}</a>
+      <div class="issue-meta">
+        <span title="Comments">${icon("comment", "icon-sm")}${issue.comments}</span>
+        ${reactions ? `<span title="Reactions">${icon("heart", "icon-sm")}${reactions}</span>` : ""}
+        ${assignee ? `<span title="Assigned to ${escapeHtml(assignee.login)}"><img src="${avatarUrl(assignee.avatar_url, 32)}" class="avatar-sm" alt="">assigned</span>` : ""}
+        <span class="issue-age">${daysAgo(issue.created_at)}</span>
+      </div>
+      ${labelsHtml ? `<div class="issue-labels">${labelsHtml}</div>` : ""}
+    </li>`;
+}
+
+function setIssueFilter(filter) {
+  issueView.filter = filter;
+  document.querySelectorAll(".filter-btn").forEach(b => b.classList.toggle("active", b.dataset.label === filter));
+  fetchIssues();
+}
+
+function setUnclaimed(on) {
+  issueView.unclaimed = on;
+  document.getElementById("issue-unclaimed").checked = on;
+  fetchIssues();
 }
 
 // Repos spell these labels many ways ("good first issue", "good-first-issue",
@@ -648,48 +764,10 @@ function normalizeLabel(name) {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
-function issueMatchesFilter(issue, filter) {
+function labelMatchesFilter(name, filter) {
   const aliases = LABEL_ALIASES[filter] || [normalizeLabel(filter)];
-  return issue.labels.some(l => {
-    const n = normalizeLabel(l.name);
-    return aliases.some(a => n === a || n.endsWith(" " + a) || n.startsWith(a + " "));
-  });
-}
-
-function renderIssues(activeLabel) {
-  const list = document.getElementById("issues-list");
-  const allIssues = repoCache[repoKey()]?.issues || [];
-
-  const filtered = activeLabel
-    ? allIssues.filter(i => issueMatchesFilter(i, activeLabel))
-    : allIssues;
-
-  if (filtered.length === 0) {
-    const msgs = {
-      "good-first-issue": `No <strong>good first issue</strong> labels here — many maintainers don't use it consistently. Browse <strong>All</strong> and look for small, clearly described issues.`,
-      "help-wanted":      `No <strong>help wanted</strong> issues right now. Any unassigned issue in <strong>All</strong> is fair game if you comment first.`,
-      "":                 `No open, unassigned issues. The repo may be in a quiet period — the <strong>Contribute</strong> tab has other ways to help.`,
-    };
-    list.innerHTML = stateItem(msgs[activeLabel] ?? msgs[""]);
-    return;
-  }
-
-  list.innerHTML = filtered.map(issue => {
-    const labelsHtml = issue.labels
-      .map(l => `<span class="label-chip" style="--lc:#${/^[0-9a-f]{6}$/i.test(l.color) ? l.color : "8b949e"}">${escapeHtml(l.name)}</span>`)
-      .join("");
-    const reactions = issue.reactions?.total_count || 0;
-    return `
-      <li class="list-card">
-        <a href="${issue.html_url}" target="_blank" class="issue-link"><span class="issue-number">#${issue.number}</span> ${escapeHtml(issue.title)}</a>
-        <div class="issue-meta">
-          <span title="Comments">${icon("comment", "icon-sm")}${issue.comments}</span>
-          ${reactions ? `<span title="Reactions">${icon("heart", "icon-sm")}${reactions}</span>` : ""}
-          <span class="issue-age">${daysAgo(issue.created_at)}</span>
-        </div>
-        ${labelsHtml ? `<div class="issue-labels">${labelsHtml}</div>` : ""}
-      </li>`;
-  }).join("");
+  const n = normalizeLabel(name);
+  return aliases.some(a => n === a || n.endsWith(" " + a) || n.startsWith(a + " "));
 }
 
 // ── Tech Stack ────────────────────────────────────────────────────────────────
@@ -822,16 +900,19 @@ async function detectTools() {
     if (TOOL_DEFS[name] && !tools.has(name)) tools.set(name, TOOL_DEFS[name]);
   }
 
-  // Fetch root dir + package.json + requirements.txt in parallel
-  const [rootResult, pkgResult, reqResult] = await Promise.allSettled([
-    fetchGitHub("/contents/"),
-    fetchGitHub("/contents/package.json"),
-    fetchGitHub("/contents/requirements.txt"),
+  // The file tree (one API call, shared with chat) replaces per-directory
+  // listings; package.json / requirements.txt come from raw files, which are free.
+  const tree = await getRepoTree(repo); // rate limits propagate, so nothing wrong gets cached
+  const [pkgResult, reqResult] = await Promise.allSettled([
+    readRepoFile("package.json", repo),
+    readRepoFile("requirements.txt", repo),
   ]);
 
   // ── Root directory file-based detection ─────────────────────────────────────
-  if (rootResult.status === "fulfilled" && Array.isArray(rootResult.value)) {
-    const items  = rootResult.value;
+  {
+    const items  = tree.entries
+      .filter(e => !e.path.includes("/"))
+      .map(e => ({ name: e.path, type: e.type === "tree" ? "dir" : "file" }));
     const names  = items.map(f => f.name.toLowerCase());
     const byName = Object.fromEntries(items.map(f => [f.name.toLowerCase(), f]));
 
@@ -858,21 +939,13 @@ async function detectTools() {
       add("Ansible");
     }
 
-    // .github/workflows → GitHub Actions (one extra call)
-    if (byName[".github"]?.type === "dir") {
-      try {
-        const ghContents = await fetchGitHub("/contents/.github", repo);
-        if (Array.isArray(ghContents) && ghContents.some(f => f.name === "workflows")) {
-          add("GitHub Actions");
-        }
-      } catch {}
-    }
+    if (tree.entries.some(e => e.path.startsWith(".github/workflows/"))) add("GitHub Actions");
   }
 
   // ── package.json dependency scanning ────────────────────────────────────────
-  if (pkgResult.status === "fulfilled") {
+  if (pkgResult.status === "fulfilled" && pkgResult.value) {
     try {
-      const pkg  = JSON.parse(decodeGitHubContent(pkgResult.value));
+      const pkg  = JSON.parse(pkgResult.value);
       const deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
 
       const PKG_MAP = [
@@ -913,9 +986,9 @@ async function detectTools() {
   }
 
   // ── requirements.txt keyword scanning ───────────────────────────────────────
-  if (reqResult.status === "fulfilled") {
+  if (reqResult.status === "fulfilled" && reqResult.value) {
     try {
-      const req = decodeGitHubContent(reqResult.value).toLowerCase();
+      const req = reqResult.value.toLowerCase();
 
       const REQ_MAP = [
         [["boto3", "botocore", "awscli"],              "AWS"],
@@ -982,35 +1055,85 @@ function renderTools(tools) {
 }
 
 // ── Maintainers ───────────────────────────────────────────────────────────────
+// Active maintainers come from who actually replies (see insights.js); the
+// all-time commit ranking is kept below as context.
+const ROLE_NAMES = { OWNER: "Owner", MEMBER: "Org member", COLLABORATOR: "Collaborator" };
+
 async function fetchMaintainers() {
-  const list = document.getElementById("maintainers-list");
-  list.innerHTML = skeletonList(6, "person");
+  const repo = currentRepo;
+  const cacheKey = repoKey(repo);
+  const mList = document.getElementById("maintainers-list");
+  const cList = document.getElementById("contributors-list");
+  if (repoCache[cacheKey]?.people) { renderPeople(repoCache[cacheKey].people); return true; }
 
-  const cacheKey = repoKey();
-  if (repoCache[cacheKey]?.contributors) {
-    renderMaintainers(repoCache[cacheKey].contributors);
-    return true;
-  }
+  mList.innerHTML = skeletonList(3, "person");
+  cList.innerHTML = skeletonList(4, "person");
+  document.getElementById("maintainer-teams").hidden = true;
 
-  try {
-    const contributors = await fetchGitHub("/contributors?per_page=10");
-    cacheFor(cacheKey).contributors = contributors;
-    if (isCurrentRepo(cacheKey)) renderMaintainers(contributors);
-    return true;
-  } catch (err) {
-    if (isCurrentRepo(cacheKey)) list.innerHTML = errorState(err);
+  const [activity, owners, contributors] = await Promise.allSettled([
+    loadRepoActivity(repo),
+    loadCodeOwners(repo),
+    fetchGitHub("/contributors?per_page=10", repo),
+  ]);
+  const limited = [activity, contributors].find(r => r.status === "rejected" && r.reason?.rateLimited);
+  if (limited) {
+    if (isCurrentRepo(cacheKey)) mList.innerHTML = cList.innerHTML = errorState(limited.reason);
     return false;
   }
+
+  const people = {
+    maintainers: activity.status === "fulfilled"
+      ? activeMaintainers(activity.value.comments, owners.status === "fulfilled" ? owners.value.rules : [])
+      : { error: activity.reason },
+    partialSample: activity.status === "fulfilled" && !activity.value.commentsComplete,
+    contributors: contributors.status === "fulfilled" ? contributors.value : { error: contributors.reason },
+  };
+  const ok = activity.status === "fulfilled" && contributors.status === "fulfilled";
+  if (ok) cacheFor(cacheKey).people = people;
+  if (isCurrentRepo(cacheKey)) renderPeople(people);
+  return ok;
 }
 
-function renderMaintainers(contributors) {
-  const list = document.getElementById("maintainers-list");
-  if (!contributors.length) {
-    list.innerHTML = stateItem("No contributor data available for this repo.");
-    return;
+function renderPeople({ maintainers, partialSample, contributors }) {
+  const mList = document.getElementById("maintainers-list");
+  const teamsEl = document.getElementById("maintainer-teams");
+
+  if (maintainers.error) {
+    mList.innerHTML = errorState(maintainers.error);
+  } else if (!maintainers.people.length) {
+    mList.innerHTML = stateItem(`Nobody with maintainer access replied to issues or PRs in the last 90 days${partialSample ? " (in the latest comments)" : ""}. Expect slow responses.`);
+  } else {
+    mList.innerHTML = maintainers.people.slice(0, 8).map((p, i) => {
+      const chips = [
+        p.role ? `<span class="role-chip">${ROLE_NAMES[p.role] || p.role}</span>` : "",
+        p.codeOwner ? `<span class="role-chip role-owner" title="CODEOWNERS: ${escapeHtml(p.owns.join(", "))}">Code owner</span>` : "",
+      ].join("");
+      const sub = p.threads
+        ? `Replied in ${p.threads} thread${p.threads === 1 ? "" : "s"} · active ${daysAgo(p.lastActive)}`
+        : `Owns ${p.owns.map(o => `<code>${escapeHtml(o)}</code>`).join(", ")}`;
+      return `
+        <li class="person" style="animation-delay:${i * 25}ms">
+          <img src="${avatarUrl(p.avatar_url, 64)}" class="contributor-avatar" alt="" loading="lazy">
+          <div class="contributor-info">
+            <div class="contributor-top">
+              <a href="${p.html_url}" target="_blank" class="contributor-name">${escapeHtml(p.login)}</a>
+              <span class="role-chips">${chips}</span>
+            </div>
+            <div class="person-sub">${sub}</div>
+          </div>
+        </li>`;
+    }).join("");
   }
+  teamsEl.hidden = !maintainers.teams?.length;
+  if (maintainers.teams?.length) {
+    teamsEl.innerHTML = `${icon("users", "icon-sm")}Code-owner teams: ${maintainers.teams.map(t => `<code>${escapeHtml(t)}</code>`).join(" ")}`;
+  }
+
+  const cList = document.getElementById("contributors-list");
+  if (contributors.error) { cList.innerHTML = errorState(contributors.error); return; }
+  if (!contributors.length) { cList.innerHTML = stateItem("No contributor data available for this repo."); return; }
   const top = contributors[0].contributions || 1;
-  list.innerHTML = contributors.map((user, i) => `
+  cList.innerHTML = contributors.slice(0, 8).map((user, i) => `
     <li class="person" style="animation-delay:${i * 25}ms">
       <span class="person-rank">${i + 1}</span>
       <img src="${avatarUrl(user.avatar_url, 64)}" class="contributor-avatar" alt="" loading="lazy">
@@ -1057,160 +1180,77 @@ async function fetchContributeTab() {
 }
 
 async function fetchRepoHealth() {
-  document.getElementById("health-card").innerHTML =
+  const card = document.getElementById("health-card");
+  card.className = "card";
+  card.innerHTML =
     `<div class="health-score-row"><span class="sk sk-circle" style="width:64px;height:64px"></span><span class="sk-lines" style="flex:1;display:flex;flex-direction:column;gap:8px"><span class="sk sk-line short"></span><span class="sk sk-line"></span></span></div><div class="sk sk-block"></div>`;
 
   const repo = currentRepo;
   const cacheKey = repoKey(repo);
-  const anyExists = async (paths) => (await Promise.all(paths.map(p => githubExists(p, repo)))).some(Boolean);
-
   try {
-    const [profileResult, openPRsResult, closedPRsResult, repoDataResult] = await Promise.allSettled([
-      // The community profile finds CONTRIBUTING / issue templates wherever GitHub
-      // recognises them (root, .github/, docs/) in a single request.
-      fetchGitHub("/community/profile", repo),
-      // With per_page=1 the "last" page number in the Link header is the PR count
-      fetchGitHubPage("/pulls?state=open&per_page=1", repo).then(({ data, link }) => {
-        const match = (link || "").match(/page=(\d+)>; rel="last"/);
-        return match ? parseInt(match[1]) : data.length;
-      }),
-      fetchGitHub("/pulls?state=closed&sort=updated&direction=desc&per_page=10", repo).then(prs => {
-        const merged = prs.filter(p => p.merged_at);
-        if (merged.length === 0) return null;
-        const avgMs = merged.reduce((sum, p) => {
-          return sum + (new Date(p.merged_at) - new Date(p.created_at));
-        }, 0) / merged.length;
-        return Math.round(avgMs / (1000 * 60 * 60 * 24));
-      }),
-      // Wait for the metadata instead of reading whatever happens to be cached,
-      // otherwise the activity score silently drops to 0 when this wins the race.
-      loadRepoData(repo),
-    ]);
-
-    // A score built from rate-limited gaps would be wrong and then cached — bail instead
-    const limited = [profileResult, openPRsResult, closedPRsResult, repoDataResult]
-      .find(r => r.status === "rejected" && r.reason?.rateLimited);
-    if (limited) throw limited.reason;
-
-    const files = profileResult.status === "fulfilled" ? profileResult.value.files || {} : null;
-    const [hasContributing, hasIssueTemplates] = await Promise.all([
-      files?.contributing
-        ? true
-        : files ? false : anyExists(["/contents/CONTRIBUTING.md", "/contents/.github/CONTRIBUTING.md", "/contents/docs/CONTRIBUTING.md"]),
-      // The profile misses directory-style templates (.github/ISSUE_TEMPLATE/), so check that too
-      files?.issue_template ? true : anyExists(["/contents/.github/ISSUE_TEMPLATE", "/contents/.github/ISSUE_TEMPLATE.md"]),
-    ]);
-
-    const repoData = repoDataResult.status === "fulfilled" ? repoDataResult.value : null;
-    const health = {
-      hasContributing,
-      hasIssueTemplates,
-      openPRs: openPRsResult.status === "fulfilled" ? openPRsResult.value : "?",
-      avgMergeDays: closedPRsResult.status === "fulfilled" ? closedPRsResult.value : null,
-      lastPush: repoData?.pushed_at || null,
-      openIssues: repoData?.open_issues_count || 0,
-    };
-
+    const signals = await loadHealthSignals(repo);
+    const health = { ...scoreHealth(signals), signals };
     cacheFor(cacheKey).health = health;
     if (isCurrentRepo(cacheKey)) renderHealthCard(health);
     return true;
   } catch (err) {
-    if (isCurrentRepo(cacheKey)) {
-      document.getElementById("health-card").innerHTML = errorState(err, "div");
-    }
+    if (isCurrentRepo(cacheKey)) card.innerHTML = errorState(err, "div");
     return false;
   }
 }
 
-// ── Repo Health Score ──────────────────────────────────────────────────────────
-// Calculates a 0-100 contributor-friendliness score from the health object.
-// Weights: activity (30) + CONTRIBUTING (20) + issue templates (15) +
-//          PR responsiveness (25) + description (5) + has issues (5)
-function calculateHealthScore(h, repoData) {
-  let score = 0;
-
-  // Activity: how recently was the repo pushed to (30 pts)
-  if (h.lastPush) {
-    const days = Math.floor((Date.now() - new Date(h.lastPush)) / 86_400_000);
-    if (days < 7)        score += 30;
-    else if (days < 30)  score += 25;
-    else if (days < 90)  score += 15;
-    else if (days < 180) score +=  5;
-  }
-
-  // Has a CONTRIBUTING.md (20 pts)
-  if (h.hasContributing) score += 20;
-
-  // Has issue templates (15 pts)
-  if (h.hasIssueTemplates) score += 15;
-
-  // PR merge responsiveness (25 pts)
-  if (h.avgMergeDays !== null) {
-    if (h.avgMergeDays < 3)       score += 25;
-    else if (h.avgMergeDays < 7)  score += 20;
-    else if (h.avgMergeDays < 14) score += 12;
-    else if (h.avgMergeDays < 30) score +=  5;
-  }
-
-  // Has a description (5 pts)
-  if (repoData?.description) score += 5;
-
-  // Has open issues to work on (5 pts)
-  if (h.openIssues > 0) score += 5;
-
-  score = Math.min(100, score);
-
-  // `tone` maps to a .grade-* class so colours follow the light/dark theme
-  let grade, tone;
-  if (score >= 80)      { grade = "Excellent";       tone = "excellent"; }
-  else if (score >= 60) { grade = "Good";            tone = "good"; }
-  else if (score >= 40) { grade = "Fair";            tone = "fair"; }
-  else                  { grade = "Needs attention"; tone = "poor"; }
-
-  return { score, grade, tone };
+function gradeFor(score) {
+  if (score === null) return { grade: "Not enough data", tone: "none" };
+  if (score >= 80) return { grade: "Excellent", tone: "excellent" };
+  if (score >= 60) return { grade: "Good", tone: "good" };
+  if (score >= 40) return { grade: "Fair", tone: "fair" };
+  return { grade: "Needs attention", tone: "poor" };
 }
 
-function renderHealthCard(h) {
-  const repoData = repoCache[repoKey()]?.repoData;
-  const { score, grade, tone } = calculateHealthScore(h, repoData);
+// Score ring + one row per signal, each showing what it measured
+function renderHealthCard({ score, factors, measured, signals }) {
+  const { grade, tone } = gradeFor(score);
   const circumference = 2 * Math.PI * 26;
-
-  const lastPushText = h.lastPush ? daysAgo(h.lastPush) : "unknown";
-  const avgMergeText = h.avgMergeDays !== null ? `${h.avgMergeDays}d avg` : "n/a";
-  const check = (ok, label) => `
-    <div class="health-item ${ok ? "good" : "bad"}">${icon(ok ? "check" : "x")}<span><b>${label}</b>${ok ? "Present" : "Missing"}</span></div>`;
-  const stat = (iconName, label, value) => `
-    <div class="health-item">${icon(iconName)}<span><b>${value}</b>${label}</span></div>`;
-
   const card = document.getElementById("health-card");
   card.className = `card grade-${tone}`;
+
+  const facts = [
+    signals.openPRs !== null ? `${formatNumber(signals.openPRs)} open PRs` : "",
+    signals.repoData ? `${formatNumber(signals.repoData.open_issues_count - (signals.openPRs || 0))} open issues` : "",
+    signals.beginnerIssues ? `${signals.beginnerIssues} unclaimed beginner issue${signals.beginnerIssues === 1 ? "" : "s"}` : "",
+  ].filter(Boolean).join(" · ");
+
   card.innerHTML = `
     <div class="health-score-row">
-      <div class="health-ring" role="img" aria-label="Score ${score} out of 100">
+      <div class="health-ring" role="img" aria-label="${score === null ? "No score" : `Score ${score} out of 100`}">
         <svg viewBox="0 0 60 60">
           <circle class="ring-track" cx="30" cy="30" r="26" fill="none" stroke-width="6"/>
           <circle class="ring-value" cx="30" cy="30" r="26" fill="none" stroke-width="6"
             stroke-dasharray="${circumference}" stroke-dashoffset="${circumference}"/>
         </svg>
-        <span class="health-score-num">${score}</span>
+        <span class="health-score-num">${score ?? "–"}</span>
       </div>
       <div>
         <div class="health-score-grade">${grade}</div>
-        <div class="health-score-sub">Contributor friendliness</div>
+        <div class="health-score-sub">Contributor friendliness · ${measured} of ${factors.length} signals measured</div>
       </div>
     </div>
-    <div class="health-grid">
-      ${check(h.hasContributing, "CONTRIBUTING")}
-      ${check(h.hasIssueTemplates, "Issue templates")}
-      ${stat("clock", "Last push", lastPushText)}
-      ${stat("merge", "Merge time", avgMergeText)}
-      ${stat("pr", "Open PRs", h.openPRs)}
-      ${stat("issue", "Open issues", formatNumber(h.openIssues))}
-    </div>
+    <ul class="factor-list">
+      ${factors.map(f => `
+        <li class="factor${f.points === null ? " is-na" : ""}">
+          <div class="factor-top">
+            <span class="factor-label">${f.label}</span>
+            <span class="factor-pts">${f.points === null ? "n/a" : `${f.points}<span>/${f.max}</span>`}</span>
+          </div>
+          <div class="factor-bar"><span style="width:${f.points === null ? 0 : (f.points / f.max) * 100}%"></span></div>
+          <div class="factor-detail">${escapeHtml(f.detail)}</div>
+        </li>`).join("")}
+    </ul>
+    ${facts ? `<div class="health-facts">${facts}</div>` : ""}
   `;
   // Animate the ring from empty on the next frame
   requestAnimationFrame(() => {
-    card.querySelector(".ring-value")?.setAttribute("stroke-dashoffset", String(circumference * (1 - score / 100)));
+    card.querySelector(".ring-value")?.setAttribute("stroke-dashoffset", String(circumference * (1 - (score || 0) / 100)));
   });
 }
 
@@ -1344,6 +1384,7 @@ async function handleChat() {
   // Show typing indicator with entrance animation
   typingEl.classList.remove("typing-anim");
   void typingEl.offsetWidth; // force reflow so animation replays
+  document.getElementById("typing-status").textContent = "Reading the repo…";
   typingEl.style.display = "flex";
   typingEl.classList.add("typing-anim");
   chatHistEl.classList.add("responding");
@@ -1363,8 +1404,14 @@ async function handleChat() {
   let fullReply = "";
 
   try {
-    const context = await getDeepRepoContext();
-    const systemText = `You are an expert on the GitHub repository "${repo.owner}/${repo.repo}". Answer questions based on this context:\n\n${context}\n\nUser question: `;
+    const previousQuestion = messages.slice(0, -1).reverse().find(m => m.role === "user")?.text;
+    const setStatus = (t) => { if (!isStale()) document.getElementById("typing-status").textContent = t; };
+    const { context, sources, ref } = await buildChatContext(repo, query, previousQuestion, setStatus);
+    const systemText = `You are an expert on the GitHub repository "${repo.owner}/${repo.repo}". Answer using the context below. ` +
+      `It includes excerpts of the repo's source code; each line starts with its line number ("42| …").\n` +
+      `When you rely on code, cite it inline as \`path:line\` (for example \`src/app.ts:42\`). ` +
+      `If the answer isn't in the context, say so plainly and name the files most likely to contain it — never invent code or APIs.` +
+      `\n\n${context}\n\nUser question: `;
 
     // Error bubbles are UI only — never feed them back to the model as its own words
     const history = messages.slice(0, -1).filter(m => !m.error).slice(-6).map(m => ({
@@ -1391,15 +1438,15 @@ async function handleChat() {
     });
 
     const botTime = Date.now();
-    messages.push({ role: "bot", text: fullReply, time: botTime });
+    messages.push({ role: "bot", text: fullReply, time: botTime, sources, ref });
     saveChatHistory(repo, messages);
     if (isStale()) return;
 
     // Streaming done — remove glow, stamp time, render final content
     botBubble.classList.remove("streaming");
-    botBubble.innerHTML = renderMarkdown(fullReply);
+    botBubble.innerHTML = linkifyCitations(renderMarkdown(fullReply), repo, ref, sources);
     if (!streamStarted) chatHistEl.appendChild(botWrap); // empty reply: no chunk ever arrived
-    appendBotFooter(botWrap, botTime, query);
+    appendBotFooter(botWrap, botTime, query, { sources, ref });
     if (isNearBottom(chatHistEl)) chatHistEl.scrollTop = chatHistEl.scrollHeight;
   } catch (err) {
     const ollamaErr = err.message === "OLLAMA_NOT_RUNNING" || err.message === "OLLAMA_CORS";
@@ -1457,7 +1504,7 @@ function isNearBottom(el, threshold = 80) {
   return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
 }
 
-function appendChatMessage(role, text, save = true, animate = true, time = null, query = null) {
+function appendChatMessage(role, text, save = true, animate = true, time = null, query = null, meta = {}) {
   const history = document.getElementById("chat-history");
 
   const wrap = document.createElement("div");
@@ -1474,14 +1521,16 @@ function appendChatMessage(role, text, save = true, animate = true, time = null,
   const msg = document.createElement("div");
   msg.className = `chat-msg chat-msg-${role}${animate ? " msg-entering" : ""}`;
   if (role === "bot") {
-    msg.innerHTML = renderMarkdown(text);
+    msg.innerHTML = currentRepo && meta.sources?.length
+      ? linkifyCitations(renderMarkdown(text), currentRepo, meta.ref, meta.sources)
+      : renderMarkdown(text);
   } else {
     msg.textContent = text;
   }
   wrap.appendChild(msg);
 
   if (role === "bot") {
-    appendBotFooter(wrap, time, query);
+    appendBotFooter(wrap, time, query, meta);
   } else if (time) {
     const t = document.createElement("span");
     t.className = "msg-time";
@@ -1496,8 +1545,38 @@ function appendChatMessage(role, text, save = true, animate = true, time = null,
 
 const BOT_LABEL_HTML = `${icon("sparkles", "icon-sm")}Assistant`;
 
+// Files the answer was grounded in, linked to the exact lines on GitHub
+function sourcesHtml(sources, ref) {
+  if (!sources?.length || !currentRepo) return "";
+  const byFile = new Map();
+  for (const s of sources) {
+    if (!byFile.has(s.path)) byFile.set(s.path, []);
+    byFile.get(s.path).push(s);
+  }
+  const chips = [...byFile].map(([path, ranges]) => {
+    const r = ranges[0];
+    const lines = ranges.map(x => (x.start === 1 && ranges.length === 1 ? "" : `L${x.start}–${x.end}`)).filter(Boolean).join(", ");
+    return `<a class="source-chip" href="${sourceUrl(currentRepo, ref, path, r.start, r.end)}" target="_blank" title="${escapeHtml(path)}${lines ? ` (${lines})` : ""}">` +
+      `${icon("file", "icon-sm")}<span>${escapeHtml(path.split("/").pop())}</span>${lines ? `<em>${lines}</em>` : ""}</a>`;
+  }).join("");
+  return `<div class="msg-sources"><span class="msg-sources-label">Read ${byFile.size} file${byFile.size === 1 ? "" : "s"}</span>${chips}</div>`;
+}
+
+// Turn `path:line` citations that point at files we actually read into links
+function linkifyCitations(html, repo, ref, sources) {
+  const known = new Set((sources || []).map(s => s.path));
+  if (!known.size) return html;
+  const byName = new Map([...known].map(p => [p.split("/").pop(), p]));
+  return html.replace(/<code>([^<\s]+?)(?::(\d+)(?:[-–](\d+))?)?<\/code>/g, (m, rawPath, start, end) => {
+    const path = known.has(rawPath) ? rawPath : byName.get(rawPath);
+    if (!path) return m;
+    return `<a class="cite" href="${sourceUrl(repo, ref, path, start && +start, end && +end)}" target="_blank">${m}</a>`;
+  });
+}
+
 // Timestamp + (hover-revealed) regenerate action under a bot reply
-function appendBotFooter(wrap, time, query) {
+function appendBotFooter(wrap, time, query, meta = {}) {
+  if (meta.sources?.length) wrap.insertAdjacentHTML("beforeend", sourcesHtml(meta.sources, meta.ref));
   if (!time && !query) return;
   const actions = document.createElement("div");
   actions.className = "msg-actions";
@@ -1540,11 +1619,12 @@ function renderChatStarters() {
     ["How do I set up this project locally from scratch?", "How do I set it up locally?"],
     ["What are the easiest issues I could work on as a new contributor?", "Which issues suit a newcomer?"],
     ["Walk me through the project structure and the most important files", "Walk me through the structure"],
+    ["Where is the main entry point, and what happens at startup?", "What happens at startup?"],
   ];
   el.innerHTML = `
     <svg class="icon chat-starters-icon" aria-hidden="true"><use href="#i-sparkles"/></svg>
     <p class="chat-starters-title">Ask about ${escapeHtml(currentRepo?.repo || "this repo")}</p>
-    <p class="chat-starters-label">Answers are grounded in its README, configs and file tree.</p>
+    <p class="chat-starters-label">Answers come from its actual source files, with links to the lines they cite.</p>
     <div class="chat-starters-grid">
       ${starters.map(([q, label]) => `<button class="starter-chip" data-q="${escapeHtml(q)}">${label}${icon("arrow-right", "icon-sm")}</button>`).join("")}
     </div>
@@ -1644,7 +1724,7 @@ async function loadChatHistory() {
         if (chatMessages[j].role === "user") { query = chatMessages[j].text; break; }
       }
     }
-    appendChatMessage(m.role, m.text, false, false, m.time || null, query);
+    appendChatMessage(m.role, m.text, false, false, m.time || null, query, { sources: m.sources, ref: m.ref });
   });
   renderChatStarters(); // shows only if chatMessages is empty
   historyEl.scrollTop = historyEl.scrollHeight;
@@ -2139,63 +2219,7 @@ function geminiToOpenAI(contents) {
   }));
 }
 
-// ── Repo context for chat ────────────────────────────────────────────────────
-// Not retrieval in the embeddings sense: a fixed bundle of key files plus the
-// repo's file tree, fetched once per repo and sent with every question.
-function getDeepRepoContext(repo = currentRepo) {
-  const cache = cacheFor(repoKey(repo));
-  if (cache.context) return Promise.resolve(cache.context);
-  // Share one in-flight build between chat and the quickstart generator
-  cache.contextPromise ??= buildRepoContext(repo)
-    .then(context => (cache.context = context))
-    .finally(() => { delete cache.contextPromise; });
-  return cache.contextPromise;
-}
-
-async function buildRepoContext(repo) {
-  const fileTargets = [
-    { endpoint: "/readme",                    label: "README",           limit: 3000 },
-    { endpoint: "/contents/CONTRIBUTING.md",  label: "CONTRIBUTING.md",  limit: 1500 },
-    { endpoint: "/contents/package.json",     label: "package.json",     limit: 1500 },
-    { endpoint: "/contents/requirements.txt", label: "requirements.txt", limit: 1500 },
-    { endpoint: "/contents/pyproject.toml",   label: "pyproject.toml",   limit: 1500 },
-    { endpoint: "/contents/Cargo.toml",       label: "Cargo.toml",       limit: 1500 },
-    { endpoint: "/contents/Makefile",         label: "Makefile",         limit: 1500 },
-  ];
-
-  const [tree, ...results] = await Promise.allSettled([
-    fetchGitHub("/git/trees/HEAD?recursive=1", repo).then(formatFileTree),
-    ...fileTargets.map(f =>
-      fetchGitHub(f.endpoint, repo).then(d => `=== ${f.label} ===\n${decodeGitHubContent(d).substring(0, f.limit)}`)
-    ),
-  ]);
-
-  // Don't let the model answer from a context that's silently missing files
-  const limited = [tree, ...results].find(r => r.status === "rejected" && r.reason?.rateLimited);
-  if (limited) throw limited.reason;
-
-  const parts = results.filter(r => r.status === "fulfilled").map(r => r.value);
-  if (tree.status === "fulfilled" && tree.value) parts.push(`=== File Tree ===\n${tree.value}`);
-  return parts.join("\n\n");
-}
-
-// Turns a recursive git tree into a compact path listing the model can use to
-// answer "where is X / walk me through the structure" questions.
-function formatFileTree(treeData, maxDepth = 4, maxChars = 5000) {
-  const NOISE = /(^|\/)(node_modules|vendor|dist|build|out|target|coverage|__pycache__|\.git|\.next|\.venv|venv)(\/|$)/;
-  const lines = [];
-  let chars = 0;
-  for (const item of treeData.tree || []) {
-    if (NOISE.test(item.path) || item.path.split("/").length > maxDepth) continue;
-    const line = item.type === "tree" ? `${item.path}/` : item.path;
-    if (chars + line.length > maxChars) { lines.push("… (truncated)"); break; }
-    lines.push(line);
-    chars += line.length + 1;
-  }
-  if (treeData.truncated && lines[lines.length - 1] !== "… (truncated)") lines.push("… (truncated)");
-  return lines.join("\n");
-}
-
+// ── File decoding ─────────────────────────────────────────────────────────────
 // The contents API returns base64 of the raw bytes; atob() alone yields Latin-1,
 // which garbles any UTF-8 (emoji, CJK, accents), so decode the bytes properly.
 function decodeGitHubContent(data) {

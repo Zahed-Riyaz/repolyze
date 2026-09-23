@@ -129,14 +129,25 @@
         <!-- Issues Tab -->
         <section id="issues-tab" class="tab-pane active">
           <div class="pane-head">
-            <p class="tab-subtitle">Open, unassigned issues</p>
             <div class="segmented filter-bar" role="group" aria-label="Filter issues">
               <button class="filter-btn active" data-label="">All</button>
               <button class="filter-btn" data-label="good-first-issue">Good first</button>
               <button class="filter-btn" data-label="help-wanted">Help wanted</button>
             </div>
+            <div class="issue-controls">
+              <select id="issue-sort" class="select" aria-label="Sort issues">
+                <option value="comments">Most discussed</option>
+                <option value="created">Newest</option>
+                <option value="updated">Recently updated</option>
+              </select>
+              <label class="switch" title="Hide issues that are assigned (and, for label filters, ones with a linked PR)">
+                <input type="checkbox" id="issue-unclaimed" checked><span class="switch-track"></span>Unclaimed
+              </label>
+            </div>
           </div>
+          <p id="issues-summary" class="issues-summary"></p>
           <ul id="issues-list" class="card-list"></ul>
+          <button id="issues-more" class="btn btn-block issues-more" hidden>Load more</button>
         </section>
 
         <!-- Tech Stack Tab -->
@@ -151,9 +162,12 @@
 
         <!-- Maintainers Tab -->
         <section id="maintainers-tab" class="tab-pane">
-          <h2 class="section-title">Top contributors</h2>
-          <p class="tab-subtitle">Good people to tag in your first PR</p>
+          <h2 class="section-title">Active maintainers</h2>
+          <p class="tab-subtitle">People with maintainer access who replied on issues or PRs in the last 90 days — the best people to ask or tag.</p>
           <ul id="maintainers-list" class="people-list"></ul>
+          <p id="maintainer-teams" class="teams-line" hidden></p>
+          <h2 class="section-title">Top contributors · all time</h2>
+          <ul id="contributors-list" class="people-list"></ul>
         </section>
 
         <!-- Contribute Tab -->
@@ -178,7 +192,7 @@
         <!-- Chat Tab -->
         <section id="chat-tab" class="tab-pane">
           <div id="chat-header-bar">
-            <span id="chat-context-label">Grounded in README, configs &amp; file tree</span>
+            <span id="chat-context-label">Reads the repo's source to answer</span>
             <button id="clear-chat-btn" class="btn btn-ghost btn-xs" title="Clear conversation"><svg class="icon icon-sm"><use href="#i-trash"/></svg>Clear</button>
           </div>
           <div id="chat-history" aria-live="polite"></div>
@@ -256,6 +270,8 @@
       </main>
     </div>
   </div>
+  <script src="retrieval.js"></script>
+  <script src="insights.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

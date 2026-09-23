@@ -17,7 +17,7 @@ A Chrome extension that gives you an AI-powered side panel for any GitHub reposi
    - [Provider Routing](#provider-routing)
    - [Message Format Conversion](#message-format-conversion)
    - [Ollama Auto-Pull](#ollama-auto-pull)
-6. [Repo Context ("RAG")](#repo-context-rag)
+6. [Chat Retrieval](#chat-retrieval) · [Health Score](#health-score)
 7. [Storage Architecture](#storage-architecture)
 8. [Session Cache](#session-cache)
 9. [Installation](#installation)
@@ -30,11 +30,11 @@ A Chrome extension that gives you an AI-powered side panel for any GitHub reposi
 
 | Tab | What it does |
 |---|---|
-| **Issues** | Lists open, unassigned issues. Filter by `good first issue` or `help wanted` — label spelling variants (`good-first-issue`, `first-timers-only`, `beginner`, …) are matched too. |
+| **Issues** | Open issues with sort (most discussed / newest / recently updated) and paging. **Good first** and **Help wanted** search *every* open issue using the repo's real label names (`good-first-issue`, `E-easy`, `first-timers-only`, …) and show the total. **Unclaimed** hides assigned issues and, for label filters, ones with a linked PR — and says so when that hides everything. |
 | **Stack** | Shows languages used (from GitHub's language breakdown) with percentage bars. |
-| **Maintainers** | Top contributors by commit count, with each one's share of commits. |
-| **Contribute** | Repo health card (has README? CONTRIBUTING? license? recent activity?), open PRs, and an AI-generated "Getting Started as a Contributor" guide. |
-| **Chat** | Multi-turn chat grounded in the repo's key files (README, CONTRIBUTING, package.json, etc.) and its file tree. |
+| **Maintainers** | **Active maintainers**: people GitHub marks as owner / org member / collaborator who actually replied on issues or PRs in the last 90 days, ranked by threads answered, merged with `CODEOWNERS` (including code-owner teams). All-time top committers are listed below for context. |
+| **Contribute** | A contributor-friendliness score built from measured signals — each shown with what it measured (see [Health Score](#health-score)) — plus open PRs and an AI-generated "Getting Started as a Contributor" guide. |
+| **Chat** | Multi-turn chat that reads the repo's **actual source code** for each question and cites it as `path:line`, with links to the exact lines on GitHub (see [Chat Retrieval](#chat-retrieval)). |
 | **Settings** (gear icon in the header) | Switch AI provider, enter/rotate API keys, configure Ollama model, and set a GitHub token — all without leaving the panel. |
 
 The UI follows your system's light/dark setting, shows skeleton placeholders while data loads, and keeps the chat input pinned while the conversation scrolls.
@@ -66,7 +66,9 @@ github-repo-analyzer/
 ├── manifest.json       # Extension manifest: declares permissions, pages, scripts
 ├── background.js       # Service worker: opens side panel when toolbar icon is clicked
 ├── sidepanel.html      # Side panel UI markup (tabs, chat, settings)
-├── sidepanel.js        # All side panel logic (~1800 lines) — the core of the extension
+├── sidepanel.js        # Side panel UI, GitHub API layer, AI providers, chat, settings
+├── retrieval.js        # Reading the repo: file tree, raw file reads, chat code retrieval
+├── insights.js         # Maintainers, health signals & scoring, beginner-issue search
 ├── theme.css           # Design tokens (light + dark), base styles and shared controls — used by both pages
 ├── styles.css          # Side panel layout and components
 ├── options.html        # Standalone settings page (mirrors the in-panel ⚙ tab)
@@ -241,40 +243,32 @@ Ollama is the only provider that runs locally and requires manual setup. The ext
 
 ---
 
-## Repo Context ("RAG")
+## Chat Retrieval
 
-The chat is grounded in the repository, but it is **not** retrieval in the embeddings/vector-search sense: the same bundle of context is sent with every question. That makes it good at "what is this, how do I set it up, where does X live" questions, but it has not read the source code itself.
+Each question is answered from the repo's real code, not just its README. Everything runs in the browser (`retrieval.js`):
 
-`getDeepRepoContext()` fetches up to seven files via the GitHub Contents API (decoded as UTF-8), plus the repo's file tree:
+1. **Shortlist** — every source file in the tree is ranked against the question by path. Identifiers are understood (`handleRepoRefresh` → `handle`, `repo`, `refresh`); tests, vendored code, lockfiles and huge files are demoted or skipped.
+2. **Pick** — the AI is shown the top 250 paths and chooses up to 5 to read (or none, for "what is this project?"-type questions). If that fails, the best path matches are used.
+3. **Read** — files come from `raw.githubusercontent.com`, which **doesn't count against the GitHub API limit**. Small files are read whole; for big ones the file head plus the line windows that best match the question are kept.
+4. **Pack** — code excerpts (with line numbers), README, file tree, CONTRIBUTING, build configs and a CI workflow are packed in priority order into a per-provider budget (smaller for Groq's free tier and local Ollama models).
 
-| File | Max chars included | Why |
+Answers cite code as `path:line`; citations to files that were actually read become links to those lines on GitHub, and a **Read N files** row under each answer links every excerpt. The model is told to say so — not guess — when the answer isn't in what it read.
+
+The repo-wide context (README, CONTRIBUTING wherever it lives, `package.json` / `pyproject.toml` / `go.mod` / …, a CI workflow, the file tree) is found through the tree, so nothing is probed with 404s. A whole chat costs **one** API request (the tree), shared with the Stack and Maintainers tabs.
+
+## Health Score
+
+The Contribute tab scores contributor-friendliness from 0–100 using signals measured from GitHub (`insights.js`):
+
+| Signal | Weight | What's measured |
 |---|---|---|
-| `README` | 3,000 | Project overview, purpose, usage |
-| `CONTRIBUTING.md` | 1,500 | Contribution workflow |
-| `package.json` | 1,500 | JS/Node dependencies and scripts |
-| `requirements.txt` | 1,500 | Python dependencies |
-| `pyproject.toml` | 1,500 | Modern Python project config |
-| `Cargo.toml` | 1,500 | Rust dependencies |
-| `Makefile` | 1,500 | Build commands |
-| File tree (`git/trees/HEAD?recursive=1`) | 5,000 | Paths up to 4 levels deep, skipping `node_modules`, `dist`, `vendor`, etc. — lets the model answer structure questions |
+| Maintainer response | 30 | For issues/PRs opened by non-maintainers (older than 2 days, bots excluded): share that got a maintainer reply or were closed, and the median time to that first response |
+| Merges outside PRs | 25 | Of recently closed PRs from people without maintainer access: how many were merged, and what share of all merges they make up |
+| Merge speed | 15 | Median time from open to merge for recent PRs |
+| Recent activity | 15 | Days since the last push (archived repos are capped at 20 overall) |
+| Onboarding | 15 | CONTRIBUTING, unclaimed beginner issues, issue templates, PR template, code of conduct |
 
-All fetches run in parallel with `Promise.allSettled` so missing files (404) are silently skipped. The combined text is prepended to every chat message as a system prompt:
-
-```
-You are an expert on the GitHub repository "{owner}/{repo}".
-Answer questions based on this context:
-
-=== README ===
-...
-=== package.json ===
-...
-
-User question: {query}
-```
-
-The context is cached in `repoCache` for the session so it is only fetched once per repo (chat and the quickstart generator share one in-flight request).
-
----
+Response and merges carry the most weight because a timely reply and a realistic chance of getting merged are what most decide whether a first-time contributor sticks around. A signal without enough data (e.g. fewer than 5 recent issues) is shown as **n/a** and left *out* of the score rather than counted as zero, and the card says how many of the five signals were measured. Every row shows the numbers behind its points.
 
 ## Storage Architecture
 
@@ -320,7 +314,8 @@ repoCache["owner/repo"] = {
 
 Without a token GitHub allows **60 API requests an hour per IP address**, shared by everything on your network. The extension is built to fit inside that:
 
-- **Tabs load lazily** — opening a repo costs 2 requests (metadata + issues); other tabs fetch the first time you open them.
+- **Tabs load lazily** — opening a repo costs 2 requests (metadata + issues); other tabs fetch the first time you open them. Visiting every tab costs about 12, and chat adds none: file contents come from `raw.githubusercontent.com`, which isn't rate-limited like the API.
+- **Search has its own quota** (10/minute anonymously) and is tracked separately, so running out of searches never blocks other requests; label filters retry by themselves when it resets.
 - **Responses are cached for the browser session** in `chrome.storage.session` (404s included), so closing and reopening the panel costs nothing. After 10 minutes entries are revalidated with `If-None-Match`; GitHub doesn't count `304 Not Modified` replies.
 - **The real quota is read from `/rate_limit`**, which is free, and shown in the header badge.
 - **When the quota runs out**, requests stop until the reset time. A banner shows when it resumes, and its **Get token** button opens [github.com/settings/tokens](https://github.com/settings/tokens) in a new tab while the panel jumps to the token field, ready to paste, tabs show "Paused until …" rather than an error, and everything reloads automatically once the window resets.
