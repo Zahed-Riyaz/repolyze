@@ -153,7 +153,8 @@ test("PR queries always ask for newest first", async () => {
   const gh = githubMock({ "/pulls": [], "": { pushed_at: new Date(now).toISOString() }, "/community/profile": { files: {} }, "/labels?per_page=100": [] });
   const panel = loadPanel({ fetch: gh.fetch });
   panel.setRepo();
-  await panel.fn.fetchOpenPRs();
+  await panel.fn.fetchPrList();
+  panel.fn.setPrState("closed"); await new Promise(r => setTimeout(r, 5));
   await panel.fn.fetchRepoHealth();
   const sorted = gh.apiCalls.filter(u => u.startsWith("/pulls?") && u.includes("sort="));
   assert.ok(sorted.length >= 2, sorted.join("\n"));

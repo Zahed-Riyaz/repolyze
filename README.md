@@ -34,7 +34,7 @@ A Chrome extension that gives you an AI-powered side panel for any GitHub reposi
 | **Start this issue** | Every issue card opens a brief: **is it free?** (assignees, open/merged/closed PRs that reference it, "I'll take this" comments, whether a maintainer has replied), **what's being asked, where to start and a plan** (AI, citing the code as `path:line`), **who to ask** (CODEOWNERS for the files involved + maintainers in the thread) and **what to run before opening a PR** (the checks CI will run, from the workflow and `package.json`). Works without an AI key too — availability, likely files, owners and commands are all deterministic. Costs 2 API requests. |
 | **Stack** | Shows languages used (from GitHub's language breakdown) with percentage bars. |
 | **Maintainers** | **Active maintainers**: people GitHub marks as owner / org member / collaborator who actually replied on issues or PRs in the last 90 days, ranked by threads answered, merged with `CODEOWNERS` (including code-owner teams). All-time top committers are listed below for context. |
-| **Contribute** | A contributor-friendliness score built from measured signals — each shown with what it measured (see [Health Score](#health-score)) — plus the repo's open PRs. |
+| **Contribute** | A contributor-friendliness score built from measured signals — each shown with what it measured (see [Health Score](#health-score)) — plus **every pull request**: switch between open and closed (paged), or use **Find** with a PR number, a PR link or keywords (searches all PRs). **Opening a PR on GitHub opens its brief automatically** (including its Files/Commits tabs); leaving the PR closes it again. Each PR has **Understand this PR**: where it stands (reviews, commits since review, CI checks, conflicts, staleness — or merged / closed without merging), an AI summary of what it does and **the whole conversation in order** — every decision, request and inline review thread kept, with what's still open — plus the activity, files changed (with code owners) and people involved. Costs 5 API requests. |
 | **Chat** | Multi-turn chat that reads the repo's **actual source code** for each question and cites it as `path:line`, with links to the exact lines on GitHub (see [Chat Retrieval](#chat-retrieval)). |
 | **Settings** (gear icon in the header) | Switch AI provider, enter/rotate API keys, configure Ollama model, and set a GitHub token — all without leaving the panel. |
 
@@ -71,6 +71,7 @@ github-repo-analyzer/
 ├── retrieval.js        # Reading the repo: file tree, raw file reads, chat code retrieval
 ├── insights.js         # Maintainers, health signals & scoring, beginner-issue search
 ├── brief.js            # "Start this issue" brief: availability, owners, verify commands, AI plan
+├── pr-brief.js         # "Understand this PR": review state, CI, activity log, diff, AI summary
 ├── test/               # Node tests (see Running Tests) — not needed by Chrome
 ├── package.json        # `npm test` / `npm run check` — no dependencies
 ├── theme.css           # Design tokens (light + dark), base styles and shared controls — used by both pages
@@ -340,11 +341,11 @@ A token (no scopes needed for public repos) raises the limit to 5,000/hour. It's
 ## Running Tests
 
 ```bash
-npm test          # 91 unit + flow tests, ~3s, no dependencies (Node 22+)
+npm test          # 133 unit + flow tests, ~3s, no dependencies (Node 22+)
 npm run check     # syntax-check every script
 ```
 
-The tests use Node's built-in runner. `test/helpers/panel.js` loads the real `retrieval.js`, `insights.js`, `brief.js` and `sidepanel.js` — in the same order as `sidepanel.html` — with in-memory stand-ins for the DOM, `chrome.*` and `fetch`; `test/helpers/github-mock.js` is a fake GitHub (API routes, raw files, AI replies) that records every request. So the suites exercise the actual extension code:
+The tests use Node's built-in runner. `test/helpers/panel.js` loads the real `retrieval.js`, `insights.js`, `brief.js`, `pr-brief.js` and `sidepanel.js` — in the same order as `sidepanel.html` — with in-memory stand-ins for the DOM, `chrome.*` and `fetch`; `test/helpers/github-mock.js` is a fake GitHub (API routes, raw files, AI replies) that records every request. So the suites exercise the actual extension code:
 
 | File | Covers |
 |---|---|
@@ -353,6 +354,9 @@ The tests use Node's built-in runner. `test/helpers/panel.js` loads the real `re
 | `retrieval.test.js` | File ranking, file picking, snippets, context budgets, chat context end-to-end, private repos |
 | `insights.test.js` | Maintainer detection, CODEOWNERS, response times, PR stats, health scoring |
 | `brief.test.js` | Code-owner matching, claim detection, availability verdicts, CI/package.json commands, the brief end-to-end (with and without AI), caching, stale-repo guards |
+| `pr-brief.test.js` | Review states, PR status verdicts, check summaries, diff line numbering, the full activity log (nothing dropped under tight budgets), PR brief end-to-end incl. forks and pagination |
+| `pr-browse.test.js` | Open/closed PR lists and paging, keyword search, the Find box (numbers, links, other repos, non-PR numbers), merged/closed verdicts, following the PR page you're on |
+| `ai-requests.test.js` | System prompts per provider, prompt order, history budget, Ollama context window, named files, follow-up context, shortlist sizes |
 | `panel-flows.test.js` | API request budgets, lazy tabs and retries, token recovery, stale-response guards, issue search, rendering, chat saving, token validation |
 
 GitHub Actions runs both commands on every push and pull request (`.github/workflows/test.yml`). When packaging for the Chrome Web Store, leave out `test/`, `package.json` and `.github/`.

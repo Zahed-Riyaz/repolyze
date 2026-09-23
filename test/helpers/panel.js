@@ -13,7 +13,7 @@ const fs = require("fs");
 const path = require("path");
 
 const ROOT = path.join(__dirname, "..", "..");
-const SCRIPTS = ["retrieval.js", "insights.js", "brief.js", "sidepanel.js"];
+const SCRIPTS = ["retrieval.js", "insights.js", "brief.js", "pr-brief.js", "sidepanel.js"];
 const SOURCE = SCRIPTS.map(f => fs.readFileSync(path.join(ROOT, f), "utf8")).join("\n;\n");
 
 // ── Minimal DOM ──────────────────────────────────────────────────────────────

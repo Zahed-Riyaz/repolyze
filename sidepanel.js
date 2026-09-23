@@ -60,6 +60,25 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("brief-ask").addEventListener("click", askAboutIssue);
   document.getElementById("brief-body").addEventListener("click", handleBriefClick);
 
+  // "Understand this PR" brief
+  document.getElementById("prs-list").addEventListener("click", (e) => {
+    const btn = e.target.closest?.(".pr-brief-btn");
+    if (btn) openPrBriefFromList(btn.dataset.pr);
+  });
+  document.getElementById("pr-brief-back").addEventListener("click", closePrBrief);
+  document.getElementById("pr-brief-copy").addEventListener("click", copyPrBrief);
+  document.getElementById("pr-brief-ask").addEventListener("click", askAboutPr);
+  document.getElementById("pr-brief-body").addEventListener("click", handlePrBriefClick);
+  document.querySelectorAll(".pr-state-btn").forEach(btn => btn.addEventListener("click", () => setPrState(btn.dataset.state)));
+  document.getElementById("pr-find").addEventListener("submit", (e) => {
+    e.preventDefault();
+    findPr(document.getElementById("pr-find-input").value);
+  });
+  document.getElementById("prs-more").addEventListener("click", () => fetchPrList({ append: true }));
+  document.getElementById("prs-summary").addEventListener("click", (e) => {
+    if (e.target.closest?.(".pr-clear-search")) setPrState(prView.state);
+  });
+
   // Chat controls
   document.getElementById("send-btn").addEventListener("click", () => { handleChat(); });
   const chatInput = document.getElementById("chat-input");
@@ -208,6 +227,7 @@ function handleRepoRefresh(url) {
 
   if (urlObj.hostname !== "github.com" && urlObj.hostname !== "www.github.com") {
     showNotRepoMessage();
+    syncPrBriefWithPage(null);
     return;
   }
 
@@ -223,6 +243,7 @@ function handleRepoRefresh(url) {
   ];
   if (pathParts.length < 2 || nonRepoPaths.includes(pathParts[0].toLowerCase())) {
     showNotRepoMessage();
+    syncPrBriefWithPage(null);
     return;
   }
 
@@ -233,6 +254,8 @@ function handleRepoRefresh(url) {
     currentRepo = newRepo;
     updateRepoInfo();
   }
+  // On a PR page (…/pull/123, including its Files/Commits tabs)? Open its brief.
+  syncPrBriefWithPage(prNumberFromPath(pathParts));
 }
 
 function showNotRepoMessage() {
@@ -262,6 +285,8 @@ async function updateRepoInfo() {
   // A brief belongs to the repo it was opened on
   closeIssueBrief();
   issueIndex.clear();
+  closePrBrief();
+  prIndex.clear();
 
   // New repo starts on "All" (sort and unclaimed preferences carry over)
   issueView.filter = "";
@@ -1171,12 +1196,7 @@ async function fetchContributeTab() {
   } else {
     health = fetchRepoHealth();
   }
-  let prs = Promise.resolve(true);
-  if (repoCache[cacheKey]?.prs) {
-    renderOpenPRs(repoCache[cacheKey].prs);
-  } else {
-    prs = fetchOpenPRs();
-  }
+  const prs = fetchPrList(); // serves the current view from cache when it can
   return (await Promise.all([health, prs])).every(Boolean);
 }
 
@@ -1253,41 +1273,6 @@ function renderHealthCard({ score, factors, measured, signals }) {
   requestAnimationFrame(() => {
     card.querySelector(".ring-value")?.setAttribute("stroke-dashoffset", String(circumference * (1 - (score || 0) / 100)));
   });
-}
-
-async function fetchOpenPRs() {
-  const list = document.getElementById("prs-list");
-  list.innerHTML = skeletonList(3);
-
-  const cacheKey = repoKey();
-
-  try {
-    // GitHub sorts ascending unless told otherwise, so always pass direction=desc
-    const prs = await fetchGitHub("/pulls?state=open&sort=created&direction=desc&per_page=8");
-    cacheFor(cacheKey).prs = prs;
-    if (isCurrentRepo(cacheKey)) renderOpenPRs(prs);
-    return true;
-  } catch (err) {
-    if (isCurrentRepo(cacheKey)) list.innerHTML = errorState(err);
-    return false;
-  }
-}
-
-function renderOpenPRs(prs) {
-  const list = document.getElementById("prs-list");
-  if (prs.length === 0) {
-    list.innerHTML = stateItem("No open pull requests.");
-    return;
-  }
-  list.innerHTML = prs.map(pr => `
-    <li class="list-card">
-      <a href="${pr.html_url}" target="_blank" class="issue-link"><span class="issue-number">#${pr.number}</span> ${escapeHtml(pr.title)}</a>
-      <div class="issue-meta">
-        <span><img src="${avatarUrl(pr.user.avatar_url, 32)}" class="avatar-sm" alt="" loading="lazy">${escapeHtml(pr.user.login)}</span>
-        ${pr.draft ? `<span class="chip">Draft</span>` : ""}
-        <span class="issue-age">${daysAgo(pr.created_at)}</span>
-      </div>
-    </li>`).join("");
 }
 
 // ── Chat ──────────────────────────────────────────────────────────────────────

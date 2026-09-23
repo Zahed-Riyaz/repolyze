@@ -186,11 +186,38 @@
 
         <!-- Contribute Tab -->
         <section id="contribute-tab" class="tab-pane">
-          <div id="health-card" class="card"></div>
+          <div id="contribute-browse">
+            <div id="health-card" class="card"></div>
 
-          <div id="open-prs-section">
-            <h2 class="section-title">Recent open PRs</h2>
-            <ul id="prs-list" class="card-list"></ul>
+            <div id="open-prs-section">
+              <div class="pane-head">
+                <h2 class="section-title">Pull requests</h2>
+                <div class="segmented" role="group" aria-label="Pull request state">
+                  <button class="pr-state-btn active" data-state="open">Open</button>
+                  <button class="pr-state-btn" data-state="closed">Closed</button>
+                </div>
+              </div>
+              <form id="pr-find" class="pr-find" autocomplete="off">
+                <input id="pr-find-input" class="input" placeholder="PR number, link or keywords" aria-label="Find a pull request">
+                <button class="btn" type="submit">Find</button>
+              </form>
+              <p id="prs-summary" class="issues-summary"></p>
+              <ul id="prs-list" class="card-list"></ul>
+              <button id="prs-more" class="btn btn-block issues-more" hidden>Load more</button>
+              <p class="brief-note pr-follow-note">Tip: open any pull request on GitHub and its brief opens here automatically.</p>
+            </div>
+          </div>
+
+          <!-- "Understand this PR" brief — filled in by pr-brief.js -->
+          <div id="pr-brief" class="issue-brief" hidden>
+            <div class="brief-topbar">
+              <button id="pr-brief-back" class="btn btn-ghost btn-xs"><svg class="icon icon-sm" style="transform:rotate(180deg)"><use href="#i-arrow-right"/></svg>Contribute</button>
+              <div class="brief-actions">
+                <button id="pr-brief-copy" class="btn btn-xs" title="Copy the brief as Markdown"><svg class="icon icon-sm"><use href="#i-copy"/></svg>Copy</button>
+                <button id="pr-brief-ask" class="btn btn-xs" title="Ask a follow-up in Chat"><svg class="icon icon-sm"><use href="#i-chat"/></svg>Ask in chat</button>
+              </div>
+            </div>
+            <div id="pr-brief-body"></div>
           </div>
         </section>
 
@@ -278,6 +305,7 @@
   <script src="retrieval.js"></script>
   <script src="insights.js"></script>
   <script src="brief.js"></script>
+  <script src="pr-brief.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>
