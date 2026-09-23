@@ -80,7 +80,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   initSettingsTab();
 
-  document.getElementById("rate-banner-btn").addEventListener("click", openTokenSettings);
+  document.getElementById("rate-banner-btn").addEventListener("click", getGitHubToken);
+  document.getElementById("sp-get-token-link").addEventListener("click", (e) => {
+    e.preventDefault(); // open via getGitHubToken so the paste hint shows too
+    getGitHubToken();
+  });
   const rateBadge = document.getElementById("rate-limit-badge");
   rateBadge.addEventListener("click", openTokenSettings);
   rateBadge.addEventListener("keydown", (e) => {
@@ -495,18 +499,18 @@ function renderRateLimit() {
   let title = "", sub = "", action = "";
   if (badToken) {
     title = "GitHub rejected your token";
-    sub = "It may have expired or been revoked. Update or clear it in Settings.";
-    action = "Fix token";
+    sub = "It may have expired or been revoked — generate a new one on GitHub.";
+    action = "Get new token";
   } else if (limited) {
     const mins = Math.max(1, Math.ceil((ghState.resetAt - Date.now()) / 60000));
     title = "GitHub's hourly limit is used up";
     sub = `Resumes at ${formatTime(ghState.resetAt)} (in ${mins} min).` +
       (githubToken ? " Anything already loaded still works." : " A free token raises the limit to 5,000/hour.");
-    action = githubToken ? "" : "Add token";
+    action = githubToken ? "" : "Get token";
   } else if (low && !githubToken) {
     title = `${remaining} GitHub request${remaining === 1 ? "" : "s"} left this hour`;
     sub = "A free token raises the limit to 5,000/hour.";
-    action = "Add token";
+    action = "Get token";
   }
   banner.hidden = !title;
   banner.classList.toggle("is-warn", !!title && !badToken && !limited);
@@ -527,11 +531,27 @@ function renderRateLimit() {
   wasRateLimited = limited;
 }
 
+const GITHUB_TOKEN_URL = "https://github.com/settings/tokens";
+
 function openTokenSettings() {
   switchTab("settings");
   const input = document.getElementById("sp-gh-token");
   input.scrollIntoView({ block: "center", behavior: "smooth" });
   input.focus();
+  // Draw the eye to where the new token goes
+  const card = document.getElementById("sp-gh-card");
+  card.classList.remove("attention");
+  void card.offsetWidth;
+  card.classList.add("attention");
+}
+
+// Straight to GitHub's token page in a new tab, with the panel already waiting
+// on the token field — the side panel stays open, so the user just pastes on return.
+function getGitHubToken() {
+  chrome.tabs.create({ url: GITHUB_TOKEN_URL });
+  openTokenSettings();
+  // Stays put while the user is off on GitHub generating the token
+  showSpStatus("sp-gh-status", "Paste your new token here and press Save token.", false, 0);
 }
 
 // ── Repo metadata ─────────────────────────────────────────────────────────────
@@ -1749,7 +1769,7 @@ function initSettingsTab() {
     try {
       // /rate_limit is free, so check the token before trusting it
       const { valid, core } = await checkRateLimit(token);
-      if (!valid) { showSpStatus("sp-gh-status", "GitHub rejected this token — check you copied all of it.", true); return; }
+      if (!valid) { showSpStatus("sp-gh-status", "GitHub rejected this token — check you copied all of it, or generate a new one above.", true); return; }
       await chrome.storage.local.set({ githubToken: token });
       githubToken = token;
       document.getElementById("sp-gh-token").value       = "";
@@ -1809,12 +1829,13 @@ function maskApiKey(key) {
   return key.substring(0, 6) + "****" + key.substring(key.length - 2);
 }
 
-function showSpStatus(elementId, msg, isError = false) {
+// `ms` = 0 keeps the message until the next status replaces it
+function showSpStatus(elementId, msg, isError = false, ms = 3000) {
   const el = document.getElementById(elementId);
   el.textContent = msg;
   el.classList.toggle("is-error", isError);
   clearTimeout(el._timer);
-  el._timer = setTimeout(() => { el.textContent = ""; }, 3000);
+  if (ms) el._timer = setTimeout(() => { el.textContent = ""; }, ms);
 }
 
 // ── Ollama model pull ─────────────────────────────────────────────────────────

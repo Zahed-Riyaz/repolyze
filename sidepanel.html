@@ -238,8 +238,9 @@
             <div class="sp-help-links" id="sp-help-links"></div>
           </div>
 
-          <div class="card">
+          <div class="card" id="sp-gh-card">
             <label class="sp-section-label" for="sp-gh-token">GitHub token <span class="sp-optional">optional · raises the limit to 5,000 requests/hour</span></label>
+            <a id="sp-get-token-link" class="btn btn-block sp-get-token" href="https://github.com/settings/tokens" target="_blank"><svg class="icon"><use href="#i-bolt"/></svg>Generate a token on GitHub<svg class="icon icon-sm"><use href="#i-arrow-right"/></svg></a>
             <div class="sp-input-row">
               <input type="password" id="sp-gh-token" class="input" placeholder="ghp_..." autocomplete="off">
               <button class="btn sp-toggle" id="sp-toggle-gh">Show</button>
@@ -249,7 +250,7 @@
               <button id="sp-clear-gh-btn" class="btn btn-danger">Clear</button>
             </div>
             <div id="sp-gh-status" class="status-msg"></div>
-            <p class="sp-help-links">Without a token GitHub allows 60 requests an hour, shared by everything on your network. No scopes are needed for public repos — <a href="https://github.com/settings/tokens/new?description=GitHub%20Repo%20Analyzer" target="_blank">create a token</a>.</p>
+            <p class="sp-help-links">Without a token GitHub allows 60 requests an hour, shared by everything on your network. No scopes are needed for public repos: generate a classic token, leave every box unticked, then paste it above.</p>
           </div>
         </section>
       </main>

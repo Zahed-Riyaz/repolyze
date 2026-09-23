@@ -912,6 +912,14 @@ kbd {
   color: var(--fg-muted);
 }
 
+.sp-get-token { margin-bottom: 12px; justify-content: space-between; color: var(--accent); text-decoration: none !important; }
+.sp-get-token .icon:first-child { color: var(--accent); }
+#sp-gh-card.attention { animation: attention 1.4s var(--ease); }
+@keyframes attention {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; border-color: var(--border); }
+  25%, 60% { box-shadow: 0 0 0 4px var(--accent-subtle); border-color: var(--accent); }
+}
+
 .sp-gh-btns { display: flex; gap: 6px; }
 .sp-gh-btns .btn-primary { flex: 1; }
 

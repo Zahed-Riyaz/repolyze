@@ -323,7 +323,7 @@ Without a token GitHub allows **60 API requests an hour per IP address**, shared
 - **Tabs load lazily** — opening a repo costs 2 requests (metadata + issues); other tabs fetch the first time you open them.
 - **Responses are cached for the browser session** in `chrome.storage.session` (404s included), so closing and reopening the panel costs nothing. After 10 minutes entries are revalidated with `If-None-Match`; GitHub doesn't count `304 Not Modified` replies.
 - **The real quota is read from `/rate_limit`**, which is free, and shown in the header badge.
-- **When the quota runs out**, requests stop until the reset time. A banner shows when it resumes and offers to add a token, tabs show "Paused until …" rather than an error, and everything reloads automatically once the window resets.
+- **When the quota runs out**, requests stop until the reset time. A banner shows when it resumes, and its **Get token** button opens [github.com/settings/tokens](https://github.com/settings/tokens) in a new tab while the panel jumps to the token field, ready to paste, tabs show "Paused until …" rather than an error, and everything reloads automatically once the window resets.
 
 A token (no scopes needed for public repos) raises the limit to 5,000/hour. It's checked against GitHub before it's saved.
 
