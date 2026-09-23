@@ -504,10 +504,8 @@ ul { list-style: none; margin: 0; padding: 0; }
 .health-score-grade { font-size: 15px; font-weight: 600; color: var(--grade); }
 .health-score-sub { font-size: 12px; color: var(--fg-muted); }
 
-#quickstart-content:empty { display: none; }
-#quickstart-content { margin-top: 12px; }
 
-/* ── Markdown (quickstart + chat) ────────────────────────────────────────── */
+/* ── Markdown (chat + issue brief) ────────────────────────────────────────── */
 .markdown, .chat-msg-bot { font-size: 13.5px; line-height: 1.6; overflow-wrap: anywhere; }
 .markdown h2, .markdown h3, .markdown h4, .markdown h5,
 .chat-msg-bot h2, .chat-msg-bot h3, .chat-msg-bot h4, .chat-msg-bot h5 {
@@ -1105,8 +1103,3 @@ a.cite:hover code { background: var(--accent-subtle); }
 .brief-files code { font-size: 12px; }
 .brief-section .cmd-row + .cmd-row { margin-top: 6px; }
 .team-avatar { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--bg-subtle); color: var(--fg-muted); flex-shrink: 0; }
-
-/* Copy button on rendered code blocks (setup guide) */
-.code-wrap { position: relative; }
-.code-wrap .code-copy { position: absolute; top: 6px; right: 6px; height: 24px; opacity: 0; transition: opacity var(--dur); }
-.code-wrap:hover .code-copy, .code-wrap .code-copy:focus-visible { opacity: 1; }

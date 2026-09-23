@@ -117,10 +117,11 @@ test("repo context is found through the tree: no 404 probing, CONTRIBUTING in .g
 });
 
 test("chat context: model picks files, relevant lines are read and cited as sources", async () => {
-  let pickerPrompt = "";
+  let pickerPrompt = "", pickerBody = null;
   const { gh, panel } = repoPanel({
     ai: async (url, init) => {
-      pickerPrompt = JSON.parse(init.body).messages[0].content;
+      pickerBody = JSON.parse(init.body);
+      pickerPrompt = pickerBody.messages.find(m => m.role === "user").content;
       return sseReply('["src/launch/sequence.ts", "src/launch/timer.ts", "made/up.ts"]');
     },
   });
@@ -130,6 +131,9 @@ test("chat context: model picks files, relevant lines are read and cited as sour
 
   assert.equal(ref, "main");
   assert.ok(pickerPrompt.includes("src/launch/sequence.ts"), "shortlist is offered to the model");
+  assert.equal(pickerBody.messages[0].role, "system", "picker instructions go in the system slot");
+  assert.match(pickerBody.messages[0].content, /ONLY a JSON array/);
+  assert.equal(pickerBody.temperature, 0, "file picking is deterministic");
   assert.ok(!pickerPrompt.includes("node_modules"));
   const files = [...new Set(plain(sources).map(s => s.path))];
   assert.deepEqual(files, ["src/launch/sequence.ts", "src/launch/timer.ts"], "made-up paths are ignored");

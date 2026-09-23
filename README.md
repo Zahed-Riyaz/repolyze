@@ -1,6 +1,6 @@
 # GitHub Repo Analyzer & RAG Chat
 
-A Chrome extension that gives you an AI-powered side panel for any GitHub repository — browse issues, inspect the tech stack, see top contributors, get step-by-step local setup instructions, start any issue with a brief, and chat with an AI that reads the repo's source code.
+A Chrome extension that gives you an AI-powered side panel for any GitHub repository — browse issues, inspect the tech stack, see top contributors, start any issue with a brief, and chat with an AI that reads the repo's source code.
 
 ---
 
@@ -34,7 +34,7 @@ A Chrome extension that gives you an AI-powered side panel for any GitHub reposi
 | **Start this issue** | Every issue card opens a brief: **is it free?** (assignees, open/merged/closed PRs that reference it, "I'll take this" comments, whether a maintainer has replied), **what's being asked, where to start and a plan** (AI, citing the code as `path:line`), **who to ask** (CODEOWNERS for the files involved + maintainers in the thread) and **what to run before opening a PR** (the checks CI will run, from the workflow and `package.json`). Works without an AI key too — availability, likely files, owners and commands are all deterministic. Costs 2 API requests. |
 | **Stack** | Shows languages used (from GitHub's language breakdown) with percentage bars. |
 | **Maintainers** | **Active maintainers**: people GitHub marks as owner / org member / collaborator who actually replied on issues or PRs in the last 90 days, ranked by threads answered, merged with `CODEOWNERS` (including code-owner teams). All-time top committers are listed below for context. |
-| **Contribute** | A contributor-friendliness score built from measured signals — each shown with what it measured (see [Health Score](#health-score)) — plus open PRs and **Set up locally**: an AI-written runbook (prerequisites, install, configure, run, test) where every command comes from a named repo file — README, manifests, version pins, `.env.example`, Docker Compose, CI. It doesn't describe the project; that's what Chat is for. |
+| **Contribute** | A contributor-friendliness score built from measured signals — each shown with what it measured (see [Health Score](#health-score)) — plus the repo's open PRs. |
 | **Chat** | Multi-turn chat that reads the repo's **actual source code** for each question and cites it as `path:line`, with links to the exact lines on GitHub (see [Chat Retrieval](#chat-retrieval)). |
 | **Settings** (gear icon in the header) | Switch AI provider, enter/rotate API keys, configure Ollama model, and set a GitHub token — all without leaving the panel. |
 
@@ -256,6 +256,16 @@ Each question is answered from the repo's real code, not just its README. Everyt
 3. **Read** — files come from `raw.githubusercontent.com`, which **doesn't count against the GitHub API limit**. Small files are read whole; for big ones the file head plus the line windows that best match the question are kept.
 4. **Pack** — code excerpts (with line numbers), README, file tree, CONTRIBUTING, build configs and a CI workflow are packed in priority order into a per-provider budget (smaller for Groq's free tier and local Ollama models).
 
+**How the prompt is built** (applies to every provider):
+
+- **Instructions and data are kept apart.** Rules go in each provider's system slot (Anthropic `system`, OpenAI/Groq system message, Gemini `systemInstruction`, Ollama system message); repo excerpts go in the user message inside `<repository_context>` and are marked as data, not instructions.
+- **The question comes last**, straight after the context it needs.
+- **Chat history has its own budget** (a quarter of the context budget), filled newest-first, so a long conversation can't crowd out the code.
+- **Files you name are read directly** — "what does `brief.js` do?" skips the file-picking call.
+- **Follow-ups keep their files.** Files read for the previous answer are flagged for the picker and used as a fallback, so "and where is it called?" still has context.
+- **The picker's shortlist is sized to the model** (60 paths for Ollama, 120 for Groq, 250 otherwise), and picking runs at temperature 0; answers use 0.2.
+- **Ollama gets a context window that fits the request** (`num_ctx` 8k–32k) instead of its 2–4k default, which silently cut long prompts.
+
 Answers cite code as `path:line`; citations to files that were actually read become links to those lines on GitHub, and a **Read N files** row under each answer links every excerpt. The model is told to say so — not guess — when the answer isn't in what it read.
 
 The repo-wide context (README, CONTRIBUTING wherever it lives, `package.json` / `pyproject.toml` / `go.mod` / …, a CI workflow, the file tree) is found through the tree, so nothing is probed with 404s. A whole chat costs **one** API request (the tree), shared with the Stack and Maintainers tabs.
@@ -307,7 +317,6 @@ repoCache["owner/repo"] = {
   contributors: [ ... ],  // top contributors
   health:       { ... },  // README/CONTRIBUTING/license checks
   prs:          [ ... ],  // recent open PRs
-  quickstart:   "...",    // AI-generated local setup steps
   context:      "...",    // concatenated files + file tree sent with chat
 }
 ```

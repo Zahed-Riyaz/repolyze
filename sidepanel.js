@@ -16,7 +16,7 @@ const MODELS = {
 };
 
 // Session cache keyed by "owner/repo"
-// Stores: { repoData, issues, languages, contributors, health, prs, quickstart, context }
+// Stores: { repoData, issues, languages, contributors, health, prs, … }
 const repoCache = {};
 
 function repoKey(repo = currentRepo) { return `${repo.owner}/${repo.repo}`; }
@@ -68,10 +68,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   chatInput.addEventListener("input", autosizeChatInput);
   document.getElementById("clear-chat-btn").addEventListener("click", clearChat);
-
-  // Local setup guide
-  document.getElementById("gen-quickstart-btn").addEventListener("click", generateQuickstart);
-  document.getElementById("quickstart-content").addEventListener("click", copyCodeBlock);
 
   // Load saved settings — also migrate legacy geminiApiKey → aiApiKey
   const stored = await chrome.storage.local.get(["githubToken", "aiProvider", "aiApiKey", "ollamaModel", "geminiApiKey"]);
@@ -192,21 +188,6 @@ function errorState(err, tag = "li") {
     return stateItem(`Paused until <strong>${formatTime(err.resetAt)}</strong> — GitHub's hourly limit is used up.`, { iconName: "clock", tag });
   }
   return stateItem(escapeHtml(err?.message || "Something went wrong."), { error: true, tag });
-}
-
-// Adds a Copy button to each rendered code block (see copyCodeBlock)
-function withCodeCopy(html) {
-  return html.replace(/<pre><code>([\s\S]*?)<\/code><\/pre>/g,
-    `<div class="code-wrap"><pre><code>$1</code></pre><button class="copy-btn code-copy" title="Copy">${icon("copy", "icon-sm")}Copy</button></div>`);
-}
-
-function copyCodeBlock(e) {
-  const btn = e.target.closest?.(".code-copy");
-  if (!btn) return;
-  navigator.clipboard.writeText(btn.previousElementSibling.textContent).then(() => {
-    btn.innerHTML = `${icon("check", "icon-sm")}Copied`;
-    setTimeout(() => { btn.innerHTML = `${icon("copy", "icon-sm")}Copy`; }, 1500);
-  });
 }
 
 // Ask GitHub for an appropriately sized avatar instead of the full-size image
@@ -1184,19 +1165,6 @@ function renderPeople({ maintainers, partialSample, contributors }) {
 async function fetchContributeTab() {
   const cacheKey = repoKey();
 
-  // Reset the quickstart area so one repo's guide never lingers on another's tab
-  const qsBtn = document.getElementById("gen-quickstart-btn");
-  const qsContent = document.getElementById("quickstart-content");
-  if (repoCache[cacheKey]?.quickstart) {
-    qsContent.innerHTML = renderMarkdown(repoCache[cacheKey].quickstart);
-    qsBtn.style.display = "none";
-  } else {
-    qsContent.innerHTML = "";
-    qsBtn.style.display = "";
-    qsBtn.disabled = false;
-    qsBtn.innerHTML = `${icon("sparkles")}Generate setup steps`;
-  }
-
   let health = Promise.resolve(true);
   if (repoCache[cacheKey]?.health) {
     renderHealthCard(repoCache[cacheKey].health);
@@ -1322,61 +1290,6 @@ function renderOpenPRs(prs) {
     </li>`).join("");
 }
 
-// ── Getting Started Quickstart ────────────────────────────────────────────────
-async function generateQuickstart() {
-  const repoRef = currentRepo;
-  const cacheKey = repoKey(repoRef);
-  const btn = document.getElementById("gen-quickstart-btn");
-  const content = document.getElementById("quickstart-content");
-
-  if (repoCache[cacheKey]?.quickstart) {
-    content.innerHTML = withCodeCopy(renderMarkdown(repoCache[cacheKey].quickstart));
-    btn.style.display = "none";
-    return;
-  }
-
-  if (aiProvider !== "ollama" && !aiApiKey) {
-    content.innerHTML = stateItem(`AI isn't set up yet. <a href="#" id="open-opts">Open settings</a>`, { error: true, tag: "div" });
-    document.getElementById("open-opts")?.addEventListener("click", (e) => {
-      e.preventDefault();
-      document.querySelector('.tab-btn[data-tab="settings"]')?.click();
-    });
-    return;
-  }
-
-  btn.disabled = true;
-  btn.innerHTML = `${icon("sparkles")}Writing setup steps…`;
-  content.innerHTML = "";
-
-  try {
-    // Setup-relevant files + the commands CI runs — no file tree or source code,
-    // so the result is a runbook rather than an analysis of the project
-    const [{ context }, ciCommands] = await Promise.all([
-      buildSetupContext(repoRef),
-      loadVerifyCommands(repoRef).catch(() => []),
-    ]);
-    const prompt = setupGuidePrompt(repoRef, context, ciCommands);
-
-    // Stream tokens directly into the content area for a premium feel
-    const result = await callAIStreaming([{ role: "user", parts: [{ text: prompt }] }], (partial) => {
-      if (isCurrentRepo(cacheKey)) content.innerHTML = renderMarkdown(partial) + '<span class="streaming-cursor"></span>';
-    });
-
-    cacheFor(cacheKey).quickstart = result;
-    if (!isCurrentRepo(cacheKey)) return;
-    content.innerHTML = withCodeCopy(renderMarkdown(result));
-    btn.style.display = "none";
-  } catch (err) {
-    if (!isCurrentRepo(cacheKey)) return;
-    let msg = err.message;
-    if (msg === "OLLAMA_NOT_RUNNING") msg = "Ollama is not running. Start it with: OLLAMA_ORIGINS='*' ollama serve";
-    if (msg === "OLLAMA_CORS")        msg = "Ollama is blocking the extension. Restart with: OLLAMA_ORIGINS='*' ollama serve";
-    content.innerHTML = stateItem(escapeHtml(msg), { error: true, tag: "div" });
-    btn.disabled = false;
-    btn.innerHTML = `${icon("refresh")}Try again`;
-  }
-}
-
 // ── Chat ──────────────────────────────────────────────────────────────────────
 async function handleChat() {
   const input = document.getElementById("chat-input");
@@ -1430,24 +1343,17 @@ async function handleChat() {
   try {
     const previousQuestion = messages.slice(0, -1).reverse().find(m => m.role === "user")?.text;
     const setStatus = (t) => { if (!isStale()) document.getElementById("typing-status").textContent = t; };
-    const { context, sources, ref } = await buildChatContext(repo, query, previousQuestion, setStatus);
-    const systemText = `You are an expert on the GitHub repository "${repo.owner}/${repo.repo}". Answer using the context below. ` +
-      `It includes excerpts of the repo's source code; each line starts with its line number ("42| …").\n` +
-      `When you rely on code, cite it inline as \`path:line\` (for example \`src/app.ts:42\`). ` +
-      `If the answer isn't in the context, say so plainly and name the files most likely to contain it — never invent code or APIs.` +
-      `\n\n${context}\n\nUser question: `;
-
-    // Error bubbles are UI only — never feed them back to the model as its own words
-    const history = messages.slice(0, -1).filter(m => !m.error).slice(-6).map(m => ({
-      role: m.role === "user" ? "user" : "model",
-      parts: [{ text: m.text }]
-    }));
-    // Providers such as Anthropic reject a conversation that opens with the assistant
-    while (history.length && history[0].role !== "user") history.shift();
-    history.push({ role: "user", parts: [{ text: systemText + query }] });
+    // Files behind the previous answer stay in play for follow-up questions
+    const previousFiles = [...new Set((messages.slice(0, -1).reverse().find(m => m.role === "bot" && m.sources)?.sources || []).map(s => s.path))];
+    const { context, sources, ref } = await buildChatContext(repo, query, previousQuestion, setStatus, { previousFiles });
+    const { system, contents } = buildChatPrompt({
+      repo, context, question: query,
+      history: messages.slice(0, -1),
+      historyBudget: Math.floor((CONTEXT_BUDGET[aiProvider] || 20000) * 0.25),
+    });
 
     // Stream tokens directly into the bot bubble
-    fullReply = await callAIStreaming(history, (partial) => {
+    fullReply = await callAIStreaming(contents, (partial) => {
       fullReply = partial;
       if (isStale()) return;
       if (!streamStarted) {
@@ -1459,7 +1365,7 @@ async function handleChat() {
       }
       botBubble.innerHTML = renderMarkdown(partial) + '<span class="streaming-cursor"></span>';
       if (isNearBottom(chatHistEl)) chatHistEl.scrollTop = chatHistEl.scrollHeight;
-    });
+    }, { system });
 
     const botTime = Date.now();
     messages.push({ role: "bot", text: fullReply, time: botTime, sources, ref });
@@ -2019,18 +1925,46 @@ async function pullOllamaModel(model) {
 // provider. `onChunk(cumulativeText)` is called after every received token so
 // the caller can update the UI incrementally.
 
-async function callAIStreaming(contents, onChunk) {
-  if (aiProvider === "groq")      return callGroqStreaming(contents, onChunk);
-  if (aiProvider === "ollama")    return callOllamaStreaming(contents, onChunk);
-  if (aiProvider === "openai")    return callOpenAIStreaming(contents, onChunk);
-  if (aiProvider === "anthropic") return callAnthropicStreaming(contents, onChunk);
-  return callGeminiStreaming(contents, onChunk);
+// `opts.system` carries the instructions (kept apart from repo data, where each
+// provider supports it); `opts.temperature` defaults low for grounded answers.
+async function callAIStreaming(contents, onChunk, opts = {}) {
+  const o = { temperature: 0.2, ...opts };
+  if (aiProvider === "groq")      return callGroqStreaming(contents, onChunk, o);
+  if (aiProvider === "ollama")    return callOllamaStreaming(contents, onChunk, o);
+  if (aiProvider === "openai")    return callOpenAIStreaming(contents, onChunk, o);
+  if (aiProvider === "anthropic") return callAnthropicStreaming(contents, onChunk, o);
+  return callGeminiStreaming(contents, onChunk, o);
+}
+
+// Request body for each provider: instructions go in its dedicated system slot
+// and the context window is sized to what we're actually sending (Ollama's
+// default is only 2–4k tokens and it silently cuts longer prompts).
+function providerBody(provider, contents, { system, temperature = 0.2 } = {}) {
+  const chat = geminiToOpenAI(contents);
+  const withSystem = system ? [{ role: "system", content: system }, ...chat] : chat;
+  switch (provider) {
+    case "gemini":
+      return { contents, ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}), generationConfig: { temperature } };
+    case "groq":
+    case "openai":
+      return { model: MODELS[provider], messages: withSystem, temperature, stream: true };
+    case "anthropic":
+      return { model: MODELS.anthropic, max_tokens: 2048, ...(system ? { system } : {}), temperature, messages: chat, stream: true };
+    case "ollama": {
+      const chars = (system || "").length + chat.reduce((n, m) => n + m.content.length, 0);
+      const needed = Math.ceil(chars / 3.5) + 1536; // prompt tokens + room for the answer
+      let numCtx = 8192;
+      while (numCtx < needed && numCtx < 32768) numCtx *= 2;
+      return { model: ollamaModel || "llama3.2", messages: withSystem, stream: true, options: { temperature, num_ctx: numCtx } };
+    }
+  }
+  throw new Error(`Unknown provider ${provider}`);
 }
 
 // ── Streaming: Gemini (Server-Sent Events) ────────────────────────────────────
 // Endpoint: streamGenerateContent?alt=sse
 // Each SSE event carries the DELTA text for that chunk.
-async function callGeminiStreaming(contents, onChunk) {
+async function callGeminiStreaming(contents, onChunk, opts = {}) {
   let response;
   try {
     response = await fetch(
@@ -2038,7 +1972,7 @@ async function callGeminiStreaming(contents, onChunk) {
       {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": aiApiKey },
-        body: JSON.stringify({ contents })
+        body: JSON.stringify(providerBody("gemini", contents, opts))
       }
     );
   } catch {
@@ -2076,14 +2010,13 @@ async function callGeminiStreaming(contents, onChunk) {
 // Both providers use the same SSE wire format:
 //   data: {"choices":[{"delta":{"content":"..."}}]}
 //   data: [DONE]
-async function callGroqStreaming(contents, onChunk) {
-  const messages = geminiToOpenAI(contents);
+async function callGroqStreaming(contents, onChunk, opts = {}) {
   let response;
   try {
     response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${aiApiKey}` },
-      body: JSON.stringify({ model: MODELS.groq, messages, stream: true })
+      body: JSON.stringify(providerBody("groq", contents, opts))
     });
   } catch { throw new Error("Could not reach Groq. Check your internet connection."); }
   if (!response.ok) {
@@ -2095,14 +2028,13 @@ async function callGroqStreaming(contents, onChunk) {
   return readOpenAISSEStream(response, onChunk);
 }
 
-async function callOpenAIStreaming(contents, onChunk) {
-  const messages = geminiToOpenAI(contents);
+async function callOpenAIStreaming(contents, onChunk, opts = {}) {
   let response;
   try {
     response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${aiApiKey}` },
-      body: JSON.stringify({ model: MODELS.openai, messages, stream: true })
+      body: JSON.stringify(providerBody("openai", contents, opts))
     });
   } catch { throw new Error("Could not reach OpenAI. Check your internet connection."); }
   if (!response.ok) {
@@ -2140,8 +2072,7 @@ async function readOpenAISSEStream(response, onChunk) {
 
 // ── Streaming: Anthropic (SSE with typed events) ──────────────────────────────
 // Relevant event: content_block_delta → delta.type === "text_delta" → delta.text
-async function callAnthropicStreaming(contents, onChunk) {
-  const messages = geminiToOpenAI(contents);
+async function callAnthropicStreaming(contents, onChunk, opts = {}) {
   let response;
   try {
     response = await fetch("https://api.anthropic.com/v1/messages", {
@@ -2152,7 +2083,7 @@ async function callAnthropicStreaming(contents, onChunk) {
         "anthropic-version": "2023-06-01",
         "anthropic-dangerous-direct-browser-access": "true"
       },
-      body: JSON.stringify({ model: MODELS.anthropic, max_tokens: 2048, messages, stream: true })
+      body: JSON.stringify(providerBody("anthropic", contents, opts))
     });
   } catch { throw new Error("Could not reach Anthropic. Check your internet connection."); }
   if (!response.ok) {
@@ -2186,14 +2117,14 @@ async function callAnthropicStreaming(contents, onChunk) {
 // ── Streaming: Ollama (NDJSON, stream:true) ────────────────────────────────────
 // Wire format: newline-delimited JSON, each line: {"message":{"content":"..."},"done":false}
 // Final line has "done":true. Auto-pulls missing models via pullOllamaModel.
-async function callOllamaStreaming(contents, onChunk) {
-  const messages = geminiToOpenAI(contents);
+async function callOllamaStreaming(contents, onChunk, opts = {}) {
+  const body = providerBody("ollama", contents, opts);
   const model    = ollamaModel || "llama3.2";
 
   const ollamaFetch = () => fetch("http://localhost:11434/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, messages, stream: true })
+    body: JSON.stringify(body)
   });
 
   let response;
