@@ -9,7 +9,7 @@ const PROVIDER_META = {
     label: "Gemini API Key",
     placeholder: "AIzaSy...",
     helpHtml: 'Get a free key at <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a>. ' +
-              'Free tier: 15 req/min, 1,500 req/day.',
+              'Uses <strong>Gemini 2.5 Flash</strong> — generous free tier.',
   },
   ollama: {
     label: null,
@@ -27,7 +27,7 @@ const PROVIDER_META = {
     label: "Anthropic API Key",
     placeholder: "sk-ant-...",
     helpHtml: 'Get a key at <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com</a>. ' +
-              'Uses <strong>Claude 3.5 Haiku</strong> — pay-as-you-go.',
+              'Uses <strong>Claude Haiku 4.5</strong> — pay-as-you-go.',
   },
 };
 
@@ -172,7 +172,7 @@ function selectProvider(provider, clearKey) {
 
 function updateBadge(provider, key) {
   const badge = document.getElementById("current-provider-badge");
-  const labels = { groq: "Groq (Llama 3.3)", gemini: "Gemini 2.0 Flash", ollama: "Ollama (local)", openai: "OpenAI (GPT-4o mini)", anthropic: "Anthropic (Claude 3.5 Haiku)" };
+  const labels = { groq: "Groq (Llama 3.3)", gemini: "Gemini 2.5 Flash", ollama: "Ollama (local)", openai: "OpenAI (GPT-4o mini)", anthropic: "Anthropic (Claude Haiku 4.5)" };
   const hasKey = provider === "ollama" || !!key;
   if (hasKey) {
     badge.textContent = `Active: ${labels[provider] || provider}`;

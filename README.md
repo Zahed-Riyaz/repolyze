@@ -1,6 +1,6 @@
 # GitHub Repo Analyzer & RAG Chat
 
-A Chrome extension that gives you an AI-powered side panel for any GitHub repository — browse issues, inspect the tech stack, see top contributors, generate a contributor quickstart guide, and chat with the repo using retrieval-augmented generation (RAG).
+A Chrome extension that gives you an AI-powered side panel for any GitHub repository — browse issues, inspect the tech stack, see top contributors, generate a contributor quickstart guide, and chat with an AI that has read the repo's key files and file tree.
 
 ---
 
@@ -16,8 +16,8 @@ A Chrome extension that gives you an AI-powered side panel for any GitHub reposi
 5. [AI Providers](#ai-providers)
    - [Provider Routing](#provider-routing)
    - [Message Format Conversion](#message-format-conversion)
-   - [Ollama Auto-Pull & Auto-Wait](#ollama-auto-pull--auto-wait)
-6. [RAG (Retrieval-Augmented Generation)](#rag-retrieval-augmented-generation)
+   - [Ollama Auto-Pull](#ollama-auto-pull)
+6. [Repo Context ("RAG")](#repo-context-rag)
 7. [Storage Architecture](#storage-architecture)
 8. [Session Cache](#session-cache)
 9. [Installation](#installation)
@@ -30,11 +30,11 @@ A Chrome extension that gives you an AI-powered side panel for any GitHub reposi
 
 | Tab | What it does |
 |---|---|
-| **Issues** | Lists open, unassigned issues. Filter by `good first issue` or `help wanted`. |
+| **Issues** | Lists open, unassigned issues. Filter by `good first issue` or `help wanted` — label spelling variants (`good-first-issue`, `first-timers-only`, `beginner`, …) are matched too. |
 | **Stack** | Shows languages used (from GitHub's language breakdown) with percentage bars. |
 | **Maintainers** | Top contributors by commit count with avatars. |
 | **Contribute** | Repo health card (has README? CONTRIBUTING? license? recent activity?), open PRs, and an AI-generated "Getting Started as a Contributor" guide. |
-| **Chat** | Multi-turn chat grounded in the repo's actual files (README, CONTRIBUTING, package.json, etc.). |
+| **Chat** | Multi-turn chat grounded in the repo's key files (README, CONTRIBUTING, package.json, etc.) and its file tree. |
 | **Settings ⚙** | Switch AI provider, enter/rotate API keys, configure Ollama model, and set a GitHub token — all without leaving the panel. |
 
 ---
@@ -43,18 +43,17 @@ A Chrome extension that gives you an AI-powered side panel for any GitHub reposi
 
 If you have never built a Chrome extension, here is the minimum context to understand this codebase.
 
-A Manifest V3 extension is a collection of plain web pages and scripts that Chrome loads with elevated permissions. There are four distinct execution contexts:
+A Manifest V3 extension is a collection of plain web pages and scripts that Chrome loads with elevated permissions. This extension uses three execution contexts:
 
 | Context | File | Lifetime | Access |
 |---|---|---|---|
 | **Service worker** | `background.js` | Event-driven; wakes on demand | `chrome.*` APIs, no DOM |
-| **Content script** | `content.js` | Runs inside each GitHub tab | Limited DOM + `chrome.runtime` |
 | **Side panel page** | `sidepanel.html` + `sidepanel.js` | Lives as long as the panel is open | Full DOM + `chrome.*` APIs |
 | **Options page** | `options.html` + `options.js` | Opens in a new tab when user visits extension settings | Full DOM + `chrome.*` APIs |
 
-Scripts in different contexts **cannot share variables**. They communicate either through `chrome.runtime.sendMessage` / `chrome.tabs.onUpdated`, or through the shared `chrome.storage.local` key-value store.
+Scripts in different contexts **cannot share variables**. They communicate through the shared `chrome.storage.local` key-value store (the side panel listens to `chrome.storage.onChanged`, so settings saved on the options page apply immediately). The side panel learns which repo you are viewing from the `chrome.tabs` API — no content script is needed.
 
-`host_permissions` in `manifest.json` is what allows the extension to make `fetch()` calls to external domains (GitHub API, Gemini, Groq, OpenAI, Anthropic, local Ollama). Without those entries, all cross-origin requests would be blocked.
+`host_permissions` in `manifest.json` is what allows the extension to make `fetch()` calls to external domains (GitHub API, Gemini, Groq, OpenAI, Anthropic, local Ollama). Without those entries, all cross-origin requests would be blocked. The only other permissions are `sidePanel`, `storage` and `tabs` (to read the active tab's URL).
 
 ---
 
@@ -64,9 +63,8 @@ Scripts in different contexts **cannot share variables**. They communicate eithe
 github-repo-analyzer/
 ├── manifest.json       # Extension manifest: declares permissions, pages, scripts
 ├── background.js       # Service worker: opens side panel when toolbar icon is clicked
-├── content.js          # Content script: runs on github.com, extracts owner/repo from URL
 ├── sidepanel.html      # Side panel UI markup (tabs, chat, settings)
-├── sidepanel.js        # All side panel logic (~1000 lines) — the core of the extension
+├── sidepanel.js        # All side panel logic (~1800 lines) — the core of the extension
 ├── styles.css          # All styling for the side panel
 ├── options.html        # Standalone settings page (mirrors the in-panel ⚙ tab)
 └── options.js          # Logic for the standalone settings page
@@ -84,9 +82,9 @@ github-repo-analyzer/
 ┌─────────────────────────────────────────────────────────────┐
 │                        Chrome Browser                        │
 │                                                              │
-│  ┌──────────────┐     chrome.tabs.onUpdated      ┌────────┐ │
-│  │ content.js   │ ──────────────────────────────▶ │        │ │
-│  │ (github.com) │  URL change events              │        │ │
+│  ┌──────────────┐  chrome.tabs.onUpdated /       ┌────────┐ │
+│  │ active tab   │  onActivated (URL changes,     │        │ │
+│  │ (github.com) │  tab switches) ───────────────▶ │        │ │
 │  └──────────────┘                                 │ side   │ │
 │                                                   │ panel  │ │
 │  ┌──────────────┐     openPanelOnActionClick       │ .js    │ │
@@ -122,10 +120,11 @@ github-repo-analyzer/
 1. User navigates to https://github.com/owner/repo
         │
         ▼
-2. content.js fires chrome.tabs.onUpdated with the new URL
+2. chrome.tabs.onUpdated / onActivated fire in sidepanel.js
+   (only for the active tab in the panel's own window)
         │
         ▼
-3. sidepanel.js handleRepoRefresh(url) parses owner + repo
+3. handleRepoRefresh(url) parses owner + repo
         │
         ▼
 4. updateRepoInfo() — parallel GitHub API fetches:
@@ -136,6 +135,8 @@ github-repo-analyzer/
         │
         ▼
 5. Results stored in repoCache["{owner}/{repo}"]  (in-memory, session only)
+   Each request remembers which repo it was for; if you have navigated
+   away by the time it returns, it fills the cache but does not render.
         │
         ▼
 6. UI tabs render from cache; subsequent tab switches never re-fetch
@@ -155,16 +156,17 @@ github-repo-analyzer/
               ▼
         Fetches (in parallel, results cached):
         README, CONTRIBUTING.md, package.json,
-        requirements.txt, pyproject.toml, Cargo.toml, Makefile
+        requirements.txt, pyproject.toml, Cargo.toml, Makefile,
+        + the recursive file tree
               │
               ▼
 3. Builds conversation history (last 6 turns) in Gemini format:
    [ {role:"user", parts:[{text:"..."}]}, ... ]
         │
         ▼
-4. callAI(history)
-   └── routes to callGemini / callGroq / callOpenAI /
-       callAnthropic / callOllama based on aiProvider global
+4. callAIStreaming(history, onChunk)
+   └── routes to the Gemini / Groq / OpenAI / Anthropic / Ollama
+       streaming call based on aiProvider; tokens render as they arrive
         │
         ▼
 5. Response appended as bot bubble; saved to chrome.storage.local
@@ -175,27 +177,27 @@ github-repo-analyzer/
 
 ## AI Providers
 
-Five providers are supported. All are called through a single `callAI(contents)` router function.
+Five providers are supported. All are called through a single `callAIStreaming(contents, onChunk)` router function. Model IDs live in the `MODELS` constant at the top of `sidepanel.js` — the one place to update when a provider retires a model.
 
 ### Provider Routing
 
 ```javascript
 // sidepanel.js
-async function callAI(contents) {
-  if (aiProvider === "groq")      return callGroq(contents);
-  if (aiProvider === "ollama")    return callOllama(contents);
-  if (aiProvider === "openai")    return callOpenAI(contents);
-  if (aiProvider === "anthropic") return callAnthropic(contents);
-  return callGemini(contents);   // default
+async function callAIStreaming(contents, onChunk) {
+  if (aiProvider === "groq")      return callGroqStreaming(contents, onChunk);
+  if (aiProvider === "ollama")    return callOllamaStreaming(contents, onChunk);
+  if (aiProvider === "openai")    return callOpenAIStreaming(contents, onChunk);
+  if (aiProvider === "anthropic") return callAnthropicStreaming(contents, onChunk);
+  return callGeminiStreaming(contents, onChunk);   // default
 }
 ```
 
 | Provider | Endpoint | Auth | Default model | Cost |
 |---|---|---|---|---|
 | **Groq** | `api.groq.com/openai/v1/chat/completions` | `Authorization: Bearer {key}` | `llama-3.3-70b-versatile` | Free tier (14,400 req/day) |
-| **Gemini** | `generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash` | `?key={key}` query param | `gemini-2.0-flash` | Free tier (1,500 req/day) |
+| **Gemini** | `generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash` | `x-goog-api-key` header | `gemini-2.5-flash` | Free tier |
 | **OpenAI** | `api.openai.com/v1/chat/completions` | `Authorization: Bearer {key}` | `gpt-4o-mini` | Pay-as-you-go |
-| **Anthropic** | `api.anthropic.com/v1/messages` | `x-api-key: {key}` | `claude-3-5-haiku-20241022` | Pay-as-you-go |
+| **Anthropic** | `api.anthropic.com/v1/messages` | `x-api-key: {key}` | `claude-haiku-4-5-20251001` | Pay-as-you-go |
 | **Ollama** | `localhost:11434/api/chat` | None (local) | Configurable (default: `llama3.2`) | Free |
 
 ### Message Format Conversion
@@ -226,21 +228,21 @@ anthropic-version: 2023-06-01
 anthropic-dangerous-direct-browser-access: true
 ```
 
-### Ollama Auto-Pull & Auto-Wait
+### Ollama Auto-Pull
 
-Ollama is the only provider that runs locally and requires manual setup. Two quality-of-life automations handle common failure modes:
+Ollama is the only provider that runs locally and requires manual setup. The extension handles the common failure modes:
 
-**Auto-wait** — if Ollama is not running when the user sends a message, instead of showing an error, the extension polls `GET /api/tags` every 2 seconds and shows *"Waiting for Ollama… run `ollama serve` in your terminal"* in the typing indicator. The Send button becomes a Cancel button. When Ollama comes online the pending request continues automatically.
+**Setup guide** — if Ollama is not running (or is blocking the extension's origin), the chat shows a card with copy-paste commands for macOS/Linux and Windows, and puts your message back in the input box so you can resend once Ollama is up.
 
 **Auto-pull** — if Ollama is running but the requested model is not downloaded (HTTP 404 from `/api/chat`), the extension streams `POST /api/pull` and shows download progress in the typing indicator (e.g. *"Downloading llama3.2… 47%"*). Once complete, the original chat request is retried.
 
 ---
 
-## RAG (Retrieval-Augmented Generation)
+## Repo Context ("RAG")
 
-RAG means augmenting the AI's prompt with content retrieved from an external source — here, the repository itself.
+The chat is grounded in the repository, but it is **not** retrieval in the embeddings/vector-search sense: the same bundle of context is sent with every question. That makes it good at "what is this, how do I set it up, where does X live" questions, but it has not read the source code itself.
 
-`getDeepRepoContext()` fetches up to seven files via the GitHub Contents API:
+`getDeepRepoContext()` fetches up to seven files via the GitHub Contents API (decoded as UTF-8), plus the repo's file tree:
 
 | File | Max chars included | Why |
 |---|---|---|
@@ -251,6 +253,7 @@ RAG means augmenting the AI's prompt with content retrieved from an external sou
 | `pyproject.toml` | 1,500 | Modern Python project config |
 | `Cargo.toml` | 1,500 | Rust dependencies |
 | `Makefile` | 1,500 | Build commands |
+| File tree (`git/trees/HEAD?recursive=1`) | 5,000 | Paths up to 4 levels deep, skipping `node_modules`, `dist`, `vendor`, etc. — lets the model answer structure questions |
 
 All fetches run in parallel with `Promise.allSettled` so missing files (404) are silently skipped. The combined text is prepended to every chat message as a system prompt:
 
@@ -266,7 +269,7 @@ Answer questions based on this context:
 User question: {query}
 ```
 
-The context is cached in `repoCache` for the session so it is only fetched once per repo.
+The context is cached in `repoCache` for the session so it is only fetched once per repo (chat and the quickstart generator share one in-flight request).
 
 ---
 
@@ -304,7 +307,7 @@ repoCache["owner/repo"] = {
   health:       { ... },  // README/CONTRIBUTING/license checks
   prs:          [ ... ],  // recent open PRs
   quickstart:   "...",    // AI-generated quickstart guide text
-  context:      "...",    // concatenated RAG context string
+  context:      "...",    // concatenated files + file tree sent with chat
 }
 ```
 
@@ -341,7 +344,7 @@ repoCache["owner/repo"] = {
 
 ### Gemini
 - Free key at [aistudio.google.com](https://aistudio.google.com/app/apikey)
-- 1,500 requests/day, 15 requests/minute on the free tier
+- Generous free tier; uses Gemini 2.5 Flash
 
 ### OpenAI
 - Key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
@@ -349,7 +352,7 @@ repoCache["owner/repo"] = {
 
 ### Anthropic
 - Key at [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
-- Pay-as-you-go; Claude 3.5 Haiku is the fastest/cheapest option
+- Pay-as-you-go; uses Claude Haiku 4.5, Anthropic's fastest/cheapest model
 
 ### Ollama (local, fully private)
 1. Install from [ollama.com](https://ollama.com)

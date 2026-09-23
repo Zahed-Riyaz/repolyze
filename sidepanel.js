@@ -4,11 +4,26 @@ let githubToken = "";
 let aiProvider = "groq";   // "groq" | "gemini" | "ollama" | "openai" | "anthropic"
 let aiApiKey = "";          // API key for cloud providers
 let ollamaModel = "llama3.2";
-let chatMessages = []; // [{role:"user"|"bot", text:"..."}]
+let chatMessages = []; // [{role:"user"|"bot", text:"...", error?:true}]
+let panelWindowId = null; // the browser window this side panel belongs to
+
+// Model used for each provider — the one place to bump when a model is retired
+const MODELS = {
+  groq:      "llama-3.3-70b-versatile",
+  gemini:    "gemini-2.5-flash",
+  openai:    "gpt-4o-mini",
+  anthropic: "claude-haiku-4-5-20251001",
+};
 
 // Session cache keyed by "owner/repo"
 // Stores: { repoData, issues, languages, contributors, health, prs, quickstart, context }
 const repoCache = {};
+
+function repoKey(repo = currentRepo) { return `${repo.owner}/${repo.repo}`; }
+function cacheFor(key) { return (repoCache[key] ??= {}); }
+// Async work captures the repo it started for and checks this before touching
+// the UI, so a slow response never renders into a different repo's view.
+function isCurrentRepo(key) { return !!currentRepo && repoKey() === key; }
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", async () => {
@@ -64,18 +79,25 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.querySelector('.tab-btn[data-tab="settings"]')?.click();
   }
 
-  // Listen for tab URL changes
+  // Follow the active tab of this panel's window only — navigation in
+  // background tabs or other windows must not hijack the panel.
+  panelWindowId = (await chrome.windows.getCurrent()).id;
+
   chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    if (changeInfo.url && changeInfo.url.includes("github.com")) {
+    if (changeInfo.url && tab.active && tab.windowId === panelWindowId) {
       handleRepoRefresh(changeInfo.url);
     }
   });
 
-  // Load current tab
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    const activeTab = tabs[0];
-    if (activeTab && activeTab.url) handleRepoRefresh(activeTab.url);
+  chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
+    if (windowId !== panelWindowId) return;
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (tab?.url) handleRepoRefresh(tab.url);
   });
+
+  // Load current tab
+  const [activeTab] = await chrome.tabs.query({ active: true, windowId: panelWindowId });
+  if (activeTab?.url) handleRepoRefresh(activeTab.url);
 });
 
 // ── Welcome splash ────────────────────────────────────────────────────────────
@@ -97,13 +119,22 @@ function handleRepoRefresh(url) {
   let urlObj;
   try { urlObj = new URL(url); } catch { return; }
 
-  if (!urlObj.hostname.includes("github.com")) return;
+  if (urlObj.hostname !== "github.com" && urlObj.hostname !== "www.github.com") {
+    showNotRepoMessage();
+    return;
+  }
 
   const pathParts = urlObj.pathname.split("/").filter(p => p);
 
   // Ignore special GitHub paths that aren't repos
-  const nonRepoPaths = ["explore", "trending", "marketplace", "login", "settings", "notifications", "pulls", "issues"];
-  if (pathParts.length < 2 || nonRepoPaths.includes(pathParts[0])) {
+  const nonRepoPaths = [
+    "explore", "trending", "marketplace", "login", "logout", "signup", "session", "sessions",
+    "settings", "notifications", "pulls", "issues", "orgs", "organizations", "users",
+    "sponsors", "topics", "collections", "features", "enterprise", "pricing", "about",
+    "search", "new", "codespaces", "dashboard", "account", "apps", "stars", "watching",
+    "security", "readme", "site", "customer-stories", "github-copilot",
+  ];
+  if (pathParts.length < 2 || nonRepoPaths.includes(pathParts[0].toLowerCase())) {
     showNotRepoMessage();
     return;
   }
@@ -151,10 +182,12 @@ async function updateRepoInfo() {
 }
 
 // ── GitHub API helper ─────────────────────────────────────────────────────────
-async function fetchGitHub(endpoint, rawResponse = false) {
+// `repo` defaults to the current repo; callers that have already awaited
+// something must pass the repo they captured, since currentRepo may have moved on.
+async function fetchGitHub(endpoint, rawResponse = false, repo = currentRepo) {
   const url = endpoint.startsWith("http")
     ? endpoint
-    : `https://api.github.com/repos/${currentRepo.owner}/${currentRepo.repo}${endpoint}`;
+    : `https://api.github.com/repos/${repo.owner}/${repo.repo}${endpoint}`;
 
   const headers = { "Accept": "application/vnd.github+json" };
   // Send the token only to GitHub's own API host — endpoint may be a full URL
@@ -186,17 +219,22 @@ function updateRateLimitBadge(remaining, limit) {
 }
 
 // ── Repo metadata ─────────────────────────────────────────────────────────────
+// Returns a shared promise for the repo metadata so the header and the health
+// score (which needs pushed_at / open_issues_count) wait on the same request.
+function loadRepoData(repo = currentRepo) {
+  const cache = cacheFor(repoKey(repo));
+  if (cache.repoData) return Promise.resolve(cache.repoData);
+  cache.repoDataPromise ??= fetchGitHub("", false, repo)
+    .then(data => (cache.repoData = data))
+    .finally(() => { delete cache.repoDataPromise; });
+  return cache.repoDataPromise;
+}
+
 async function fetchRepoData() {
-  const cacheKey = `${currentRepo.owner}/${currentRepo.repo}`;
-  if (repoCache[cacheKey]?.repoData) {
-    applyRepoData(repoCache[cacheKey].repoData);
-    return;
-  }
+  const cacheKey = repoKey();
   try {
-    const data = await fetchGitHub("");
-    if (!repoCache[cacheKey]) repoCache[cacheKey] = {};
-    repoCache[cacheKey].repoData = data;
-    applyRepoData(data);
+    const data = await loadRepoData();
+    if (isCurrentRepo(cacheKey)) applyRepoData(data);
   } catch (err) {
     console.warn("fetchRepoData:", err.message);
   }
@@ -230,7 +268,7 @@ async function fetchIssues() {
   const list = document.getElementById("issues-list");
   list.innerHTML = "<li class='loading-item'>Loading issues…</li>";
 
-  const cacheKey = `${currentRepo.owner}/${currentRepo.repo}`;
+  const cacheKey = repoKey();
 
   if (repoCache[cacheKey]?.issues) {
     renderIssues("");
@@ -239,21 +277,42 @@ async function fetchIssues() {
 
   try {
     const issues = await fetchGitHub("/issues?state=open&assignee=none&sort=comments&direction=desc&per_page=100");
-    if (!repoCache[cacheKey]) repoCache[cacheKey] = {};
-    repoCache[cacheKey].issues = issues.filter(i => !i.pull_request);
-    renderIssues("");
+    cacheFor(cacheKey).issues = issues.filter(i => !i.pull_request);
+    if (isCurrentRepo(cacheKey)) renderIssues(activeIssueFilter());
   } catch (err) {
-    list.innerHTML = `<li class="error-item">Error: ${err.message}</li>`;
+    if (isCurrentRepo(cacheKey)) list.innerHTML = `<li class="error-item">Error: ${escapeHtml(err.message)}</li>`;
   }
+}
+
+function activeIssueFilter() {
+  return document.querySelector(".filter-btn.active")?.dataset.label || "";
+}
+
+// Repos spell these labels many ways ("good first issue", "good-first-issue",
+// "Good First Issue 👋", "first-timers-only"…), so compare normalised names.
+const LABEL_ALIASES = {
+  "good-first-issue": ["good first issue", "good first issues", "good first bug", "first timers only", "first timer", "beginner", "beginner friendly", "starter", "newcomer"],
+  "help-wanted":      ["help wanted", "contributions welcome", "pr welcome", "prs welcome", "up for grabs"],
+};
+
+function normalizeLabel(name) {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function issueMatchesFilter(issue, filter) {
+  const aliases = LABEL_ALIASES[filter] || [normalizeLabel(filter)];
+  return issue.labels.some(l => {
+    const n = normalizeLabel(l.name);
+    return aliases.some(a => n === a || n.endsWith(" " + a) || n.startsWith(a + " "));
+  });
 }
 
 function renderIssues(activeLabel) {
   const list = document.getElementById("issues-list");
-  const cacheKey = `${currentRepo.owner}/${currentRepo.repo}`;
-  const allIssues = repoCache[cacheKey]?.issues || [];
+  const allIssues = repoCache[repoKey()]?.issues || [];
 
   const filtered = activeLabel
-    ? allIssues.filter(i => i.labels.some(l => l.name === activeLabel))
+    ? allIssues.filter(i => issueMatchesFilter(i, activeLabel))
     : allIssues;
 
   if (filtered.length === 0) {
@@ -291,7 +350,7 @@ async function fetchTechStack() {
   const list = document.getElementById("tech-list");
   list.innerHTML = "<li class='loading-item'>Loading stack…</li>";
 
-  const cacheKey = `${currentRepo.owner}/${currentRepo.repo}`;
+  const cacheKey = repoKey();
   if (repoCache[cacheKey]?.languages && repoCache[cacheKey]?.tools !== undefined) {
     renderTechStack(repoCache[cacheKey].languages, repoCache[cacheKey].tools);
     return;
@@ -301,16 +360,12 @@ async function fetchTechStack() {
     const [languages, tools] = await Promise.all([
       repoCache[cacheKey]?.languages
         ? Promise.resolve(repoCache[cacheKey].languages)
-        : fetchGitHub("/languages").then(l => {
-            if (!repoCache[cacheKey]) repoCache[cacheKey] = {};
-            repoCache[cacheKey].languages = l;
-            return l;
-          }),
+        : fetchGitHub("/languages").then(l => (cacheFor(cacheKey).languages = l)),
       detectTools(),
     ]);
-    renderTechStack(languages, tools);
+    if (isCurrentRepo(cacheKey)) renderTechStack(languages, tools);
   } catch (err) {
-    list.innerHTML = `<li class="error-item">Error: ${err.message}</li>`;
+    if (isCurrentRepo(cacheKey)) list.innerHTML = `<li class="error-item">Error: ${escapeHtml(err.message)}</li>`;
   }
 }
 
@@ -335,7 +390,8 @@ function renderTechStack(languages, tools = []) {
 
 // ── Tools & Services detection ────────────────────────────────────────────────
 async function detectTools() {
-  const cacheKey = `${currentRepo.owner}/${currentRepo.repo}`;
+  const repo = currentRepo;
+  const cacheKey = repoKey(repo);
   if (repoCache[cacheKey]?.tools !== undefined) return repoCache[cacheKey].tools;
 
   const tools = new Map(); // name → { emoji, category }
@@ -438,7 +494,7 @@ async function detectTools() {
     // .github/workflows → GitHub Actions (one extra call)
     if (byName[".github"]?.type === "dir") {
       try {
-        const ghContents = await fetchGitHub("/contents/.github");
+        const ghContents = await fetchGitHub("/contents/.github", false, repo);
         if (Array.isArray(ghContents) && ghContents.some(f => f.name === "workflows")) {
           add("GitHub Actions");
         }
@@ -449,7 +505,7 @@ async function detectTools() {
   // ── package.json dependency scanning ────────────────────────────────────────
   if (pkgResult.status === "fulfilled") {
     try {
-      const pkg  = JSON.parse(atob(pkgResult.value.content.replace(/\n/g, "")));
+      const pkg  = JSON.parse(decodeGitHubContent(pkgResult.value));
       const deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
 
       const PKG_MAP = [
@@ -492,7 +548,7 @@ async function detectTools() {
   // ── requirements.txt keyword scanning ───────────────────────────────────────
   if (reqResult.status === "fulfilled") {
     try {
-      const req = atob(reqResult.value.content.replace(/\n/g, "")).toLowerCase();
+      const req = decodeGitHubContent(reqResult.value).toLowerCase();
 
       const REQ_MAP = [
         [["boto3", "botocore", "awscli"],              "AWS"],
@@ -523,8 +579,7 @@ async function detectTools() {
   }
 
   const result = Array.from(tools.entries()).map(([name, meta]) => ({ name, ...meta }));
-  if (!repoCache[cacheKey]) repoCache[cacheKey] = {};
-  repoCache[cacheKey].tools = result;
+  cacheFor(cacheKey).tools = result;
   return result;
 }
 
@@ -564,7 +619,7 @@ async function fetchMaintainers() {
   const list = document.getElementById("maintainers-list");
   list.innerHTML = "<li class='loading-item'>Loading contributors…</li>";
 
-  const cacheKey = `${currentRepo.owner}/${currentRepo.repo}`;
+  const cacheKey = repoKey();
   if (repoCache[cacheKey]?.contributors) {
     renderMaintainers(repoCache[cacheKey].contributors);
     return;
@@ -572,11 +627,10 @@ async function fetchMaintainers() {
 
   try {
     const contributors = await fetchGitHub("/contributors?per_page=10");
-    if (!repoCache[cacheKey]) repoCache[cacheKey] = {};
-    repoCache[cacheKey].contributors = contributors;
-    renderMaintainers(contributors);
+    cacheFor(cacheKey).contributors = contributors;
+    if (isCurrentRepo(cacheKey)) renderMaintainers(contributors);
   } catch (err) {
-    list.innerHTML = `<li class="error-item">Error: ${err.message}</li>`;
+    if (isCurrentRepo(cacheKey)) list.innerHTML = `<li class="error-item">Error: ${escapeHtml(err.message)}</li>`;
   }
 }
 
@@ -600,7 +654,21 @@ function renderMaintainers(contributors) {
 
 // ── Contribute Tab ────────────────────────────────────────────────────────────
 async function fetchContributeTab() {
-  const cacheKey = `${currentRepo.owner}/${currentRepo.repo}`;
+  const cacheKey = repoKey();
+
+  // Reset the quickstart area so one repo's guide never lingers on another's tab
+  const qsBtn = document.getElementById("gen-quickstart-btn");
+  const qsContent = document.getElementById("quickstart-content");
+  if (repoCache[cacheKey]?.quickstart) {
+    qsContent.innerHTML = renderMarkdown(repoCache[cacheKey].quickstart);
+    qsBtn.style.display = "none";
+  } else {
+    qsContent.innerHTML = "";
+    qsBtn.style.display = "";
+    qsBtn.disabled = false;
+    qsBtn.textContent = "Generate with AI ✨";
+  }
+
   if (repoCache[cacheKey]?.health) {
     renderHealthCard(repoCache[cacheKey].health);
   } else {
@@ -616,45 +684,61 @@ async function fetchContributeTab() {
 async function fetchRepoHealth() {
   document.getElementById("health-card").innerHTML = "<p class='loading-item'>Loading repo health…</p>";
 
-  const cacheKey = `${currentRepo.owner}/${currentRepo.repo}`;
+  const repo = currentRepo;
+  const cacheKey = repoKey(repo);
+  const exists = (path) => fetchGitHub(path, true, repo).then(r => r.ok);
+  const anyExists = async (paths) => (await Promise.all(paths.map(exists))).some(Boolean);
 
   try {
-    const [contribResult, templateResult, openPRsResult, closedPRsResult] = await Promise.allSettled([
-      fetchGitHub("/contents/CONTRIBUTING.md", true).then(r => r.status === 200),
-      fetchGitHub("/contents/.github/ISSUE_TEMPLATE", true).then(r => r.status === 200)
-        .catch(() => fetchGitHub("/contents/.github/ISSUE_TEMPLATE.md", true).then(r => r.status === 200)),
-      fetchGitHub("/pulls?state=open&per_page=1", true).then(async r => {
+    const [profileResult, openPRsResult, closedPRsResult, repoDataResult] = await Promise.allSettled([
+      // The community profile finds CONTRIBUTING / issue templates wherever GitHub
+      // recognises them (root, .github/, docs/) in a single request.
+      fetchGitHub("/community/profile", false, repo),
+      fetchGitHub("/pulls?state=open&per_page=1", true, repo).then(async r => {
         const linkHeader = r.headers.get("Link") || "";
         const match = linkHeader.match(/page=(\d+)>; rel="last"/);
         if (match) return parseInt(match[1]);
         const data = await r.json().catch(() => []);
         return data.length;
       }),
-      fetchGitHub("/pulls?state=closed&sort=updated&per_page=10").then(prs => {
+      fetchGitHub("/pulls?state=closed&sort=updated&per_page=10", false, repo).then(prs => {
         const merged = prs.filter(p => p.merged_at);
         if (merged.length === 0) return null;
         const avgMs = merged.reduce((sum, p) => {
           return sum + (new Date(p.merged_at) - new Date(p.created_at));
         }, 0) / merged.length;
         return Math.round(avgMs / (1000 * 60 * 60 * 24));
-      })
+      }),
+      // Wait for the metadata instead of reading whatever happens to be cached,
+      // otherwise the activity score silently drops to 0 when this wins the race.
+      loadRepoData(repo),
     ]);
 
-    const repoData = repoCache[cacheKey]?.repoData;
+    const files = profileResult.status === "fulfilled" ? profileResult.value.files || {} : null;
+    const [hasContributing, hasIssueTemplates] = await Promise.all([
+      files?.contributing
+        ? true
+        : files ? false : anyExists(["/contents/CONTRIBUTING.md", "/contents/.github/CONTRIBUTING.md", "/contents/docs/CONTRIBUTING.md"]),
+      // The profile misses directory-style templates (.github/ISSUE_TEMPLATE/), so check that too
+      files?.issue_template ? true : anyExists(["/contents/.github/ISSUE_TEMPLATE", "/contents/.github/ISSUE_TEMPLATE.md"]),
+    ]);
+
+    const repoData = repoDataResult.status === "fulfilled" ? repoDataResult.value : null;
     const health = {
-      hasContributing: contribResult.status === "fulfilled" ? contribResult.value : false,
-      hasIssueTemplates: templateResult.status === "fulfilled" ? templateResult.value : false,
+      hasContributing,
+      hasIssueTemplates,
       openPRs: openPRsResult.status === "fulfilled" ? openPRsResult.value : "?",
       avgMergeDays: closedPRsResult.status === "fulfilled" ? closedPRsResult.value : null,
       lastPush: repoData?.pushed_at || null,
       openIssues: repoData?.open_issues_count || 0,
     };
 
-    if (!repoCache[cacheKey]) repoCache[cacheKey] = {};
-    repoCache[cacheKey].health = health;
-    renderHealthCard(health);
+    cacheFor(cacheKey).health = health;
+    if (isCurrentRepo(cacheKey)) renderHealthCard(health);
   } catch (err) {
-    document.getElementById("health-card").innerHTML = `<p class="error-item">Error loading health: ${err.message}</p>`;
+    if (isCurrentRepo(cacheKey)) {
+      document.getElementById("health-card").innerHTML = `<p class="error-item">Error loading health: ${escapeHtml(err.message)}</p>`;
+    }
   }
 }
 
@@ -706,8 +790,7 @@ function calculateHealthScore(h, repoData) {
 }
 
 function renderHealthCard(h) {
-  const cacheKey = `${currentRepo.owner}/${currentRepo.repo}`;
-  const repoData = repoCache[cacheKey]?.repoData;
+  const repoData = repoCache[repoKey()]?.repoData;
   const { score, grade, color, emoji } = calculateHealthScore(h, repoData);
 
   const lastPushText = h.lastPush ? daysAgo(h.lastPush) : "unknown";
@@ -744,15 +827,14 @@ async function fetchOpenPRs() {
   const list = document.getElementById("prs-list");
   list.innerHTML = "<li class='loading-item'>Loading PRs…</li>";
 
-  const cacheKey = `${currentRepo.owner}/${currentRepo.repo}`;
+  const cacheKey = repoKey();
 
   try {
     const prs = await fetchGitHub("/pulls?state=open&per_page=8&sort=updated");
-    if (!repoCache[cacheKey]) repoCache[cacheKey] = {};
-    repoCache[cacheKey].prs = prs;
-    renderOpenPRs(prs);
+    cacheFor(cacheKey).prs = prs;
+    if (isCurrentRepo(cacheKey)) renderOpenPRs(prs);
   } catch (err) {
-    list.innerHTML = `<li class="error-item">Error: ${err.message}</li>`;
+    if (isCurrentRepo(cacheKey)) list.innerHTML = `<li class="error-item">Error: ${escapeHtml(err.message)}</li>`;
   }
 }
 
@@ -779,7 +861,8 @@ function renderOpenPRs(prs) {
 
 // ── Getting Started Quickstart ────────────────────────────────────────────────
 async function generateQuickstart() {
-  const cacheKey = `${currentRepo.owner}/${currentRepo.repo}`;
+  const repoRef = currentRepo;
+  const cacheKey = repoKey(repoRef);
   const btn = document.getElementById("gen-quickstart-btn");
   const content = document.getElementById("quickstart-content");
 
@@ -804,7 +887,7 @@ async function generateQuickstart() {
 
   try {
     const context = await getDeepRepoContext();
-    const { owner, repo } = currentRepo;
+    const { owner, repo } = repoRef;
     const prompt = `You are a helpful open-source contributor guide writer.
 
 Generate a concise, practical "Getting Started as a Contributor" guide for the repository "${owner}/${repo}".
@@ -822,14 +905,15 @@ ${context}`;
 
     // Stream tokens directly into the content area for a premium feel
     const result = await callAIStreaming([{ role: "user", parts: [{ text: prompt }] }], (partial) => {
-      content.innerHTML = renderMarkdown(partial) + '<span class="streaming-cursor"></span>';
+      if (isCurrentRepo(cacheKey)) content.innerHTML = renderMarkdown(partial) + '<span class="streaming-cursor"></span>';
     });
 
+    cacheFor(cacheKey).quickstart = result;
+    if (!isCurrentRepo(cacheKey)) return;
     content.innerHTML = renderMarkdown(result);
-    if (!repoCache[cacheKey]) repoCache[cacheKey] = {};
-    repoCache[cacheKey].quickstart = result;
     btn.style.display = "none";
   } catch (err) {
+    if (!isCurrentRepo(cacheKey)) return;
     let msg = err.message;
     if (msg === "OLLAMA_NOT_RUNNING") msg = "Ollama is not running. Start it with: OLLAMA_ORIGINS='*' ollama serve";
     if (msg === "OLLAMA_CORS")        msg = "Ollama is blocking the extension. Restart with: OLLAMA_ORIGINS='*' ollama serve";
@@ -850,9 +934,16 @@ async function handleChat() {
     return;
   }
 
+  // Capture the repo and its message list: if the user navigates mid-reply,
+  // loadChatHistory swaps chatMessages out and this reply must still be saved
+  // to the repo it belongs to, without drawing into the new repo's chat.
+  const repo = currentRepo;
+  const messages = chatMessages;
+  const isStale = () => currentRepo !== repo;
+
   document.getElementById("chat-starters")?.remove();
   const userTime = Date.now();
-  chatMessages.push({ role: "user", text: query, time: userTime });
+  messages.push({ role: "user", text: query, time: userTime });
   appendChatMessage("user", query, false, true, userTime);
   input.value = "";
 
@@ -882,16 +973,21 @@ async function handleChat() {
 
   try {
     const context = await getDeepRepoContext();
-    const systemText = `You are an expert on the GitHub repository "${currentRepo.owner}/${currentRepo.repo}". Answer questions based on this context:\n\n${context}\n\nUser question: `;
+    const systemText = `You are an expert on the GitHub repository "${repo.owner}/${repo.repo}". Answer questions based on this context:\n\n${context}\n\nUser question: `;
 
-    const history = chatMessages.slice(-7, -1).map(m => ({
+    // Error bubbles are UI only — never feed them back to the model as its own words
+    const history = messages.slice(0, -1).filter(m => !m.error).slice(-6).map(m => ({
       role: m.role === "user" ? "user" : "model",
       parts: [{ text: m.text }]
     }));
+    // Providers such as Anthropic reject a conversation that opens with the assistant
+    while (history.length && history[0].role !== "user") history.shift();
     history.push({ role: "user", parts: [{ text: systemText + query }] });
 
     // Stream tokens directly into the bot bubble
     fullReply = await callAIStreaming(history, (partial) => {
+      fullReply = partial;
+      if (isStale()) return;
       if (!streamStarted) {
         streamStarted = true;
         typingEl.style.display = "none";
@@ -903,10 +999,15 @@ async function handleChat() {
       if (isNearBottom(chatHistEl)) chatHistEl.scrollTop = chatHistEl.scrollHeight;
     });
 
+    const botTime = Date.now();
+    messages.push({ role: "bot", text: fullReply, time: botTime });
+    saveChatHistory(repo, messages);
+    if (isStale()) return;
+
     // Streaming done — remove glow, stamp time, render final content
     botBubble.classList.remove("streaming");
     botBubble.innerHTML = renderMarkdown(fullReply);
-    const botTime = Date.now();
+    if (!streamStarted) chatHistEl.appendChild(botWrap); // empty reply: no chunk ever arrived
     const botTimeEl = document.createElement("span");
     botTimeEl.className = "msg-time";
     botTimeEl.textContent = formatTime(botTime);
@@ -917,22 +1018,28 @@ async function handleChat() {
     regenBtn.addEventListener("click", () => regenerateResponse(botWrap, query));
     botWrap.appendChild(regenBtn);
     if (isNearBottom(chatHistEl)) chatHistEl.scrollTop = chatHistEl.scrollHeight;
-    chatMessages.push({ role: "bot", text: fullReply, time: botTime });
-    saveChatHistory();
   } catch (err) {
     const ollamaErr = err.message === "OLLAMA_NOT_RUNNING" || err.message === "OLLAMA_CORS";
     if (ollamaErr) {
       // Errors happen before streaming starts — clean up and show guide
-      chatMessages.pop();
-      chatHistEl.lastElementChild?.remove(); // remove user bubble
-      showOllamaGuide(err.message, query);
-    } else if (!streamStarted) {
+      messages.pop();
+      if (!isStale()) {
+        const userWraps = chatHistEl.querySelectorAll(".msg-wrap-user");
+        userWraps[userWraps.length - 1]?.remove(); // remove user bubble
+        showOllamaGuide(err.message, query);
+      }
+    } else if (fullReply) {
+      // Mid-stream error: keep the partial answer so user/bot turns stay paired
+      messages.push({ role: "bot", text: fullReply, time: Date.now() });
+      saveChatHistory(repo, messages);
+      if (!isStale()) botBubble.classList.remove("streaming");
+    } else {
       // Error before first token — show error bubble
       const errText = `Error: ${err.message}`;
-      chatMessages.push({ role: "bot", text: errText });
-      appendChatMessage("bot", errText, false);
+      messages.push({ role: "bot", text: errText, error: true });
+      saveChatHistory(repo, messages);
+      if (!isStale()) appendChatMessage("bot", errText, false);
     }
-    // Mid-stream error: partial content already visible, leave it as-is
   } finally {
     typingEl.style.display = "none";
     chatHistEl.classList.remove("responding");
@@ -941,16 +1048,20 @@ async function handleChat() {
 }
 
 async function regenerateResponse(botWrap, query) {
+  if (document.getElementById("send-btn").disabled) return; // a reply is already streaming
+
   const chatHistEl = document.getElementById("chat-history");
   const allMsgWraps = Array.from(chatHistEl.querySelectorAll(".msg-wrap"));
   const wrapIdx = allMsgWraps.indexOf(botWrap);
   if (wrapIdx === -1) return;
 
-  // Remove this bot wrap and all subsequent wraps from DOM
-  allMsgWraps.slice(wrapIdx).forEach(w => w.remove());
+  // Also drop the user message that prompted this reply — handleChat re-adds
+  // it, so keeping it would duplicate the question.
+  const cutIdx = allMsgWraps[wrapIdx - 1]?.classList.contains("msg-wrap-user") ? wrapIdx - 1 : wrapIdx;
+  allMsgWraps.slice(cutIdx).forEach(w => w.remove());
 
-  // Trim chatMessages to match — drop everything from wrapIdx onward
-  chatMessages.splice(wrapIdx);
+  // DOM wraps and chatMessages are 1:1, so trim at the same index
+  chatMessages.splice(cutIdx);
   await saveChatHistory();
 
   // Re-send the original query
@@ -1133,11 +1244,11 @@ async function loadChatHistory() {
   historyEl.scrollTop = historyEl.scrollHeight;
 }
 
-async function saveChatHistory() {
-  if (!currentRepo) return;
-  const key = `chat_${currentRepo.owner}_${currentRepo.repo}`;
+async function saveChatHistory(repo = currentRepo, messages = chatMessages) {
+  if (!repo) return;
+  const key = `chat_${repo.owner}_${repo.repo}`;
   // Keep last 50 messages to avoid storage bloat
-  const trimmed = chatMessages.slice(-50);
+  const trimmed = messages.slice(-50);
   await chrome.storage.local.set({ [key]: trimmed });
 }
 
@@ -1153,10 +1264,10 @@ function initSettingsTab() {
   };
   const PROVIDER_HELP = {
     groq:      'Free key at <a href="https://console.groq.com/keys" target="_blank">console.groq.com</a>. Uses <strong>Llama 3.3 70B</strong> — 14,400 req/day.',
-    gemini:    'Free key at <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a>. <strong>Gemini 2.0 Flash</strong> — 1,500 req/day.',
+    gemini:    'Free key at <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a>. Uses <strong>Gemini 2.5 Flash</strong> — generous free tier.',
     ollama:    'Download at <a href="https://ollama.com" target="_blank">ollama.com</a>. Models pull automatically on first use.',
     openai:    'Key at <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com</a>. Uses <strong>GPT-4o mini</strong>.',
-    anthropic: 'Key at <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com</a>. Uses <strong>Claude 3.5 Haiku</strong>.',
+    anthropic: 'Key at <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com</a>. Uses <strong>Claude Haiku 4.5</strong>.',
   };
 
   let settingsProvider = aiProvider;
@@ -1193,9 +1304,9 @@ function initSettingsTab() {
     const badge  = document.getElementById("sp-active-badge");
     const banner = document.getElementById("sp-quickstart-banner");
     const names  = {
-      groq: "Groq — Llama 3.3 70B", gemini: "Gemini 2.0 Flash",
+      groq: "Groq — Llama 3.3 70B", gemini: "Gemini 2.5 Flash",
       ollama: `Ollama — ${ollamaModel || "llama3.2"}`,
-      openai: "OpenAI — GPT-4o mini", anthropic: "Anthropic — Claude 3.5 Haiku",
+      openai: "OpenAI — GPT-4o mini", anthropic: "Anthropic — Claude Haiku 4.5",
     };
     const configured = aiProvider === "ollama" || !!aiApiKey;
     badge.textContent = configured
@@ -1285,6 +1396,26 @@ function initSettingsTab() {
     document.getElementById("sp-gh-token").placeholder = "ghp_...";
     showSpStatus("sp-gh-status", "Token cleared.");
   });
+
+  // Settings saved from the standalone options page must reach an open panel
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local") return;
+    if (changes.aiProvider)  aiProvider  = changes.aiProvider.newValue  || "groq";
+    if (changes.aiApiKey)    aiApiKey    = changes.aiApiKey.newValue    || "";
+    if (changes.ollamaModel) ollamaModel = changes.ollamaModel.newValue || "llama3.2";
+    if (changes.githubToken) {
+      githubToken = changes.githubToken.newValue || "";
+      document.getElementById("sp-gh-token").placeholder = githubToken ? maskApiKey(githubToken) : "ghp_...";
+    }
+    if (changes.aiProvider || changes.aiApiKey || changes.ollamaModel) {
+      settingsProvider = aiProvider;
+      updateSettingsUI(aiProvider);
+      document.getElementById("sp-api-key").placeholder =
+        aiApiKey ? maskApiKey(aiApiKey) : PROVIDER_PLACEHOLDERS[aiProvider] || "";
+      document.getElementById("sp-ollama-model").value = ollamaModel;
+      refreshBadge();
+    }
+  });
 }
 
 function maskApiKey(key) {
@@ -1299,95 +1430,8 @@ function showSpStatus(elementId, msg, isError = false) {
   setTimeout(() => { el.textContent = ""; }, 3000);
 }
 
-// ── AI routing ────────────────────────────────────────────────────────────────
-// `contents` is always in Gemini format: [{role:"user"|"model", parts:[{text}]}]
-async function callAI(contents) {
-  if (aiProvider === "groq")      return callGroq(contents);
-  if (aiProvider === "ollama")    return callOllama(contents);
-  if (aiProvider === "openai")    return callOpenAI(contents);
-  if (aiProvider === "anthropic") return callAnthropic(contents);
-  return callGemini(contents);
-}
-
-async function callGemini(contents) {
-  let response;
-  try {
-    response = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": aiApiKey },
-        body: JSON.stringify({ contents })
-      }
-    );
-  } catch {
-    throw new Error("Could not reach Gemini. Check your internet connection.");
-  }
-  const data = await response.json();
-  if (data.error) {
-    if (response.status === 400) throw new Error(`Gemini: Invalid API key. Go to Settings to update it.`);
-    if (response.status === 429) throw new Error(`Gemini: Rate limit hit. Try again in a moment.`);
-    throw new Error(`Gemini ${data.error.code}: ${data.error.message}`);
-  }
-  if (!data.candidates?.[0]) throw new Error("Gemini returned no response.");
-  return data.candidates[0].content.parts[0].text;
-}
-
-async function callGroq(contents) {
-  const messages = geminiToOpenAI(contents);
-  let response;
-  try {
-    response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${aiApiKey}` },
-      body: JSON.stringify({ model: "llama-3.3-70b-versatile", messages })
-    });
-  } catch {
-    throw new Error("Could not reach Groq. Check your internet connection.");
-  }
-  const data = await response.json();
-  if (!response.ok) {
-    if (response.status === 401) throw new Error("Groq: Invalid API key. Go to Settings to update it.");
-    if (response.status === 429) throw new Error("Groq: Rate limit hit. Try again in a moment.");
-    throw new Error(`Groq ${response.status}: ${data.error?.message || "Unknown error"}`);
-  }
-  if (!data.choices?.[0]) throw new Error("Groq returned no response.");
-  return data.choices[0].message.content;
-}
-
-async function callOllama(contents) {
-  const messages = geminiToOpenAI(contents);
-  const model = ollamaModel || "llama3.2";
-
-  const ollamaFetch = () => fetch("http://localhost:11434/api/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, messages, stream: false })
-  });
-
-  let response;
-  try {
-    response = await ollamaFetch();
-  } catch {
-    throw new Error("OLLAMA_NOT_RUNNING");
-  }
-
-  if (response.status === 403) throw new Error("OLLAMA_CORS");
-
-  if (response.status === 404) {
-    await pullOllamaModel(model);
-    response = await ollamaFetch();
-  }
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(`Ollama ${response.status}: ${text || "Unexpected error"}`);
-  }
-  const data = await response.json();
-  if (!data.message?.content) throw new Error("Ollama returned no response.");
-  return data.message.content;
-}
-
+// ── Ollama model pull ─────────────────────────────────────────────────────────
+// Streams POST /api/pull and reports progress in the typing indicator.
 async function pullOllamaModel(model) {
   const setStatus = (text) => {
     const el = document.getElementById("typing-status");
@@ -1434,55 +1478,6 @@ async function pullOllamaModel(model) {
   }
 }
 
-async function callOpenAI(contents) {
-  const messages = geminiToOpenAI(contents);
-  let response;
-  try {
-    response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${aiApiKey}` },
-      body: JSON.stringify({ model: "gpt-4o-mini", messages })
-    });
-  } catch {
-    throw new Error("Could not reach OpenAI. Check your internet connection.");
-  }
-  const data = await response.json();
-  if (!response.ok) {
-    if (response.status === 401) throw new Error("OpenAI: Invalid API key. Go to Settings to update it.");
-    if (response.status === 429) throw new Error("OpenAI: Rate limit hit. Try again in a moment.");
-    throw new Error(`OpenAI ${response.status}: ${data.error?.message || "Unknown error"}`);
-  }
-  if (!data.choices?.[0]) throw new Error("OpenAI returned no response.");
-  return data.choices[0].message.content;
-}
-
-async function callAnthropic(contents) {
-  const messages = geminiToOpenAI(contents);
-  let response;
-  try {
-    response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": aiApiKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true"
-      },
-      body: JSON.stringify({ model: "claude-3-5-haiku-20241022", max_tokens: 1024, messages })
-    });
-  } catch {
-    throw new Error("Could not reach Anthropic. Check your internet connection.");
-  }
-  const data = await response.json();
-  if (!response.ok) {
-    if (response.status === 401) throw new Error("Anthropic: Invalid API key. Go to Settings to update it.");
-    if (response.status === 429) throw new Error("Anthropic: Rate limit hit. Try again in a moment.");
-    throw new Error(`Anthropic ${response.status}: ${data.error?.message || "Unknown error"}`);
-  }
-  if (!data.content?.[0]) throw new Error("Anthropic returned no response.");
-  return data.content[0].text;
-}
-
 // ── AI Streaming ──────────────────────────────────────────────────────────────
 // callAIStreaming mirrors callAI but calls the streaming variant of each
 // provider. `onChunk(cumulativeText)` is called after every received token so
@@ -1503,7 +1498,7 @@ async function callGeminiStreaming(contents, onChunk) {
   let response;
   try {
     response = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse",
+      `https://generativelanguage.googleapis.com/v1beta/models/${MODELS.gemini}:streamGenerateContent?alt=sse`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": aiApiKey },
@@ -1552,7 +1547,7 @@ async function callGroqStreaming(contents, onChunk) {
     response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${aiApiKey}` },
-      body: JSON.stringify({ model: "llama-3.3-70b-versatile", messages, stream: true })
+      body: JSON.stringify({ model: MODELS.groq, messages, stream: true })
     });
   } catch { throw new Error("Could not reach Groq. Check your internet connection."); }
   if (!response.ok) {
@@ -1571,7 +1566,7 @@ async function callOpenAIStreaming(contents, onChunk) {
     response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${aiApiKey}` },
-      body: JSON.stringify({ model: "gpt-4o-mini", messages, stream: true })
+      body: JSON.stringify({ model: MODELS.openai, messages, stream: true })
     });
   } catch { throw new Error("Could not reach OpenAI. Check your internet connection."); }
   if (!response.ok) {
@@ -1621,7 +1616,7 @@ async function callAnthropicStreaming(contents, onChunk) {
         "anthropic-version": "2023-06-01",
         "anthropic-dangerous-direct-browser-access": "true"
       },
-      body: JSON.stringify({ model: "claude-3-5-haiku-20241022", max_tokens: 2048, messages, stream: true })
+      body: JSON.stringify({ model: MODELS.anthropic, max_tokens: 2048, messages, stream: true })
     });
   } catch { throw new Error("Could not reach Anthropic. Check your internet connection."); }
   if (!response.ok) {
@@ -1712,48 +1707,65 @@ function geminiToOpenAI(contents) {
   }));
 }
 
-// ── Deep repo context for RAG ─────────────────────────────────────────────────
-async function getDeepRepoContext() {
-  const cacheKey = `${currentRepo.owner}/${currentRepo.repo}`;
-  if (repoCache[cacheKey]?.context) return repoCache[cacheKey].context;
+// ── Repo context for chat ────────────────────────────────────────────────────
+// Not retrieval in the embeddings sense: a fixed bundle of key files plus the
+// repo's file tree, fetched once per repo and sent with every question.
+function getDeepRepoContext(repo = currentRepo) {
+  const cache = cacheFor(repoKey(repo));
+  if (cache.context) return Promise.resolve(cache.context);
+  // Share one in-flight build between chat and the quickstart generator
+  cache.contextPromise ??= buildRepoContext(repo)
+    .then(context => (cache.context = context))
+    .finally(() => { delete cache.contextPromise; });
+  return cache.contextPromise;
+}
 
+async function buildRepoContext(repo) {
   const fileTargets = [
-    { endpoint: "/readme", label: "README", transform: async (d) => atob(d.content.replace(/\n/g, "")) },
-    { endpoint: "/contents/CONTRIBUTING.md", label: "CONTRIBUTING.md", transform: (d) => atob(d.content.replace(/\n/g, "")) },
-    { endpoint: "/contents/package.json", label: "package.json", transform: (d) => atob(d.content.replace(/\n/g, "")) },
-    { endpoint: "/contents/requirements.txt", label: "requirements.txt", transform: (d) => atob(d.content.replace(/\n/g, "")) },
-    { endpoint: "/contents/pyproject.toml", label: "pyproject.toml", transform: (d) => atob(d.content.replace(/\n/g, "")) },
-    { endpoint: "/contents/Cargo.toml", label: "Cargo.toml", transform: (d) => atob(d.content.replace(/\n/g, "")) },
-    { endpoint: "/contents/Makefile", label: "Makefile", transform: (d) => atob(d.content.replace(/\n/g, "")) },
+    { endpoint: "/readme",                    label: "README",           limit: 3000 },
+    { endpoint: "/contents/CONTRIBUTING.md",  label: "CONTRIBUTING.md",  limit: 1500 },
+    { endpoint: "/contents/package.json",     label: "package.json",     limit: 1500 },
+    { endpoint: "/contents/requirements.txt", label: "requirements.txt", limit: 1500 },
+    { endpoint: "/contents/pyproject.toml",   label: "pyproject.toml",   limit: 1500 },
+    { endpoint: "/contents/Cargo.toml",       label: "Cargo.toml",       limit: 1500 },
+    { endpoint: "/contents/Makefile",         label: "Makefile",         limit: 1500 },
   ];
 
-  const results = await Promise.allSettled(
-    fileTargets.map(f =>
-      fetchGitHub(f.endpoint)
-        .then(d => f.transform(d))
-        .then(text => ({ label: f.label, text }))
-    )
-  );
+  const [tree, ...results] = await Promise.allSettled([
+    fetchGitHub("/git/trees/HEAD?recursive=1", false, repo).then(formatFileTree),
+    ...fileTargets.map(f =>
+      fetchGitHub(f.endpoint, false, repo).then(d => `=== ${f.label} ===\n${decodeGitHubContent(d).substring(0, f.limit)}`)
+    ),
+  ]);
 
-  // Also get root file listing
-  const rootFiles = await fetchGitHub("/contents")
-    .then(items => items.map(i => i.name).join(", "))
-    .catch(() => "");
+  const parts = results.filter(r => r.status === "fulfilled").map(r => r.value);
+  if (tree.status === "fulfilled" && tree.value) parts.push(`=== File Tree ===\n${tree.value}`);
+  return parts.join("\n\n");
+}
 
-  const parts = [];
-  results.forEach(r => {
-    if (r.status === "fulfilled") {
-      const { label, text } = r.value;
-      const limit = label === "README" ? 3000 : 1500;
-      parts.push(`=== ${label} ===\n${text.substring(0, limit)}`);
-    }
-  });
-  if (rootFiles) parts.push(`=== Root Files ===\n${rootFiles}`);
+// Turns a recursive git tree into a compact path listing the model can use to
+// answer "where is X / walk me through the structure" questions.
+function formatFileTree(treeData, maxDepth = 4, maxChars = 5000) {
+  const NOISE = /(^|\/)(node_modules|vendor|dist|build|out|target|coverage|__pycache__|\.git|\.next|\.venv|venv)(\/|$)/;
+  const lines = [];
+  let chars = 0;
+  for (const item of treeData.tree || []) {
+    if (NOISE.test(item.path) || item.path.split("/").length > maxDepth) continue;
+    const line = item.type === "tree" ? `${item.path}/` : item.path;
+    if (chars + line.length > maxChars) { lines.push("… (truncated)"); break; }
+    lines.push(line);
+    chars += line.length + 1;
+  }
+  if (treeData.truncated && lines[lines.length - 1] !== "… (truncated)") lines.push("… (truncated)");
+  return lines.join("\n");
+}
 
-  const context = parts.join("\n\n");
-  if (!repoCache[cacheKey]) repoCache[cacheKey] = {};
-  repoCache[cacheKey].context = context;
-  return context;
+// The contents API returns base64 of the raw bytes; atob() alone yields Latin-1,
+// which garbles any UTF-8 (emoji, CJK, accents), so decode the bytes properly.
+function decodeGitHubContent(data) {
+  const binary = atob((data.content || "").replace(/\n/g, ""));
+  const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+  return new TextDecoder("utf-8").decode(bytes);
 }
 
 // ── Markdown renderer ─────────────────────────────────────────────────────────
@@ -1783,7 +1795,7 @@ function renderMarkdown(text) {
   // Numbered list items
   html = html.replace(/^\d+\. (.+)$/gm, "<li>$1</li>");
   // Links
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s"]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
   // Paragraph breaks
   html = html.replace(/\n\n/g, "<br><br>");
 
