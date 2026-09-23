@@ -390,11 +390,12 @@ function isRateLimitResponse(res, body, resource = "core") {
   const quotaGone = res.headers.get("X-RateLimit-Remaining") === "0";
   const retryAfter = Number(res.headers.get("Retry-After")) || 0;
   if (!quotaGone && !retryAfter && res.status !== 429 && !/rate limit/i.test(body?.message || "")) return false;
-  // Secondary limits don't zero the quota — pause for Retry-After (or a minute)
+  // Secondary limits don't zero the quota — pause for Retry-After (or a minute).
+  // Not until X-RateLimit-Reset: that's the primary window, often an hour away.
   if (!quotaGone) {
     const l = limitsFor(resource);
     l.remaining = 0;
-    l.resetAt = Math.max(l.resetAt, Date.now() + (retryAfter || 60) * 1000);
+    l.resetAt = Date.now() + (retryAfter || 60) * 1000;
     if (l === ghState) renderRateLimit();
   }
   return true;

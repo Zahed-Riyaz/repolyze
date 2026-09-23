@@ -69,6 +69,8 @@ github-repo-analyzer/
 ├── sidepanel.js        # Side panel UI, GitHub API layer, AI providers, chat, settings
 ├── retrieval.js        # Reading the repo: file tree, raw file reads, chat code retrieval
 ├── insights.js         # Maintainers, health signals & scoring, beginner-issue search
+├── test/               # Node tests (see Running Tests) — not needed by Chrome
+├── package.json        # `npm test` / `npm run check` — no dependencies
 ├── theme.css           # Design tokens (light + dark), base styles and shared controls — used by both pages
 ├── styles.css          # Side panel layout and components
 ├── options.html        # Standalone settings page (mirrors the in-panel ⚙ tab)
@@ -321,6 +323,27 @@ Without a token GitHub allows **60 API requests an hour per IP address**, shared
 - **When the quota runs out**, requests stop until the reset time. A banner shows when it resumes, and its **Get token** button opens [github.com/settings/tokens](https://github.com/settings/tokens) in a new tab while the panel jumps to the token field, ready to paste, tabs show "Paused until …" rather than an error, and everything reloads automatically once the window resets.
 
 A token (no scopes needed for public repos) raises the limit to 5,000/hour. It's checked against GitHub before it's saved.
+
+---
+
+## Running Tests
+
+```bash
+npm test          # 70 unit + flow tests, ~3s, no dependencies (Node 22+)
+npm run check     # syntax-check every script
+```
+
+The tests use Node's built-in runner. `test/helpers/panel.js` loads the real `retrieval.js`, `insights.js` and `sidepanel.js` — in the same order as `sidepanel.html` — with in-memory stand-ins for the DOM, `chrome.*` and `fetch`; `test/helpers/github-mock.js` is a fake GitHub (API routes, raw files, AI replies) that records every request. So the suites exercise the actual extension code:
+
+| File | Covers |
+|---|---|
+| `rendering.test.js` | Markdown (escaping, safe links, code blocks, lists), citation links, UTF-8 decoding, label matching |
+| `github-api.test.js` | Response cache, ETag revalidation, session persistence, primary / secondary / search rate limits, bad tokens, token scoping, PR sort order |
+| `retrieval.test.js` | File ranking, file picking, snippets, context budgets, chat context end-to-end, private repos |
+| `insights.test.js` | Maintainer detection, CODEOWNERS, response times, PR stats, health scoring |
+| `panel-flows.test.js` | API request budgets, lazy tabs and retries, token recovery, stale-response guards, issue search, rendering, chat saving, token validation |
+
+GitHub Actions runs both commands on every push and pull request (`.github/workflows/test.yml`). When packaging for the Chrome Web Store, leave out `test/`, `package.json` and `.github/`.
 
 ---
 
