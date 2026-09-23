@@ -67,6 +67,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       selectedProvider = card.dataset.provider;
       selectProvider(selectedProvider, true);
     });
+    // Cards are focusable divs, so give them button-like keyboard activation
+    card.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); card.click(); }
+    });
   });
 
   // Show/Hide toggles
@@ -176,11 +180,11 @@ function updateBadge(provider, key) {
   const hasKey = provider === "ollama" || !!key;
   if (hasKey) {
     badge.textContent = `Active: ${labels[provider] || provider}`;
-    badge.style.color = "#3fb950";
   } else {
     badge.textContent = "Not configured — select a provider and save a key.";
-    badge.style.color = "#f0883e";
   }
+  badge.classList.toggle("is-ok", hasKey);
+  badge.classList.toggle("is-warn", !hasKey);
 }
 
 function maskKey(key) {
@@ -191,6 +195,6 @@ function maskKey(key) {
 function showStatus(elementId, msg, isError = false) {
   const el = document.getElementById(elementId);
   el.textContent = msg;
-  el.className = isError ? "error" : "";
+  el.classList.toggle("is-error", isError);
   setTimeout(() => { el.textContent = ""; }, 3000);
 }

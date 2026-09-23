@@ -3,262 +3,174 @@
 <head>
   <meta charset="UTF-8">
   <title>GitHub Repo Analyzer — Settings</title>
+  <link rel="stylesheet" href="theme.css">
   <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-      background: #0d1117;
-      color: #c9d1d9;
-      margin: 0;
-      padding: 40px;
-      min-height: 100vh;
-    }
-    .container { max-width: 520px; margin: 0 auto; }
-    h1 { font-size: 1.4em; margin: 0 0 6px; color: #e6edf3; }
-    .subtitle { color: #8b949e; font-size: 0.9em; margin: 0 0 28px; }
+    body { padding: 48px 20px; background: var(--bg-elev); }
+    .container { max-width: 540px; margin: 0 auto; }
+
+    .page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+    .page-head svg { border-radius: 10px; box-shadow: var(--shadow-sm); }
+    h1 { margin: 0; font-size: 20px; font-weight: 600; }
+    .subtitle { margin: 2px 0 0; color: var(--fg-muted); font-size: 13px; }
 
     .settings-section {
-      background: #161b22;
-      border: 1px solid #30363d;
-      border-radius: 8px;
-      padding: 22px;
-      margin-bottom: 14px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      padding: 20px;
+      margin-bottom: 16px;
+      box-shadow: var(--shadow-sm);
     }
-    .settings-section h2 {
-      font-size: 0.95em;
-      margin: 0 0 14px;
-      color: #e6edf3;
-      border-bottom: 1px solid #30363d;
-      padding-bottom: 10px;
-    }
-
-    /* Provider cards */
-    .provider-cards {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
-      gap: 8px;
-      margin-bottom: 18px;
-    }
-    .provider-card {
-      background: #0d1117;
-      border: 1px solid #30363d;
-      border-radius: 8px;
-      padding: 12px 10px;
-      cursor: pointer;
-      text-align: center;
-      transition: border-color 0.15s;
-      position: relative;
-    }
-    .provider-card:hover { border-color: #58a6ff; }
-    .provider-card.active {
-      border-color: #238636;
-      background: #0d1117;
-      box-shadow: 0 0 0 1px #238636;
-    }
-    .provider-card.active::after {
-      content: "✓";
-      position: absolute;
-      top: 6px;
-      right: 8px;
-      font-size: 0.7em;
-      color: #3fb950;
-    }
-    .provider-card-icon { font-size: 1.4em; margin-bottom: 4px; }
-    .provider-card-name { font-size: 0.88em; font-weight: 600; color: #e6edf3; }
-    .provider-card-tag {
-      font-size: 0.68em;
-      margin-top: 3px;
-      padding: 1px 6px;
-      border-radius: 8px;
-      display: inline-block;
-    }
-    .tag-free { background: #238636; color: white; }
-    .tag-local { background: #1f6feb; color: white; }
-    .tag-paid  { background: #9e6a03; color: white; }
-
-    /* Key fields */
-    label {
-      display: block;
-      font-size: 0.82em;
-      color: #8b949e;
-      margin-bottom: 5px;
-    }
-    .key-row { display: flex; gap: 8px; margin-bottom: 12px; }
-    .key-row input {
-      flex: 1;
-      background: #0d1117;
-      color: #c9d1d9;
-      border: 1px solid #30363d;
-      border-radius: 6px;
-      padding: 8px 10px;
-      font-size: 0.88em;
-      outline: none;
-    }
-    .key-row input:focus { border-color: #58a6ff; }
-    input[type="text"].model-input {
-      width: 100%;
-      box-sizing: border-box;
-      background: #0d1117;
-      color: #c9d1d9;
-      border: 1px solid #30363d;
-      border-radius: 6px;
-      padding: 8px 10px;
-      font-size: 0.88em;
-      outline: none;
-      margin-bottom: 12px;
-    }
-    input[type="text"].model-input:focus { border-color: #58a6ff; }
-
-    .toggle-btn {
-      background: #21262d;
-      color: #8b949e;
-      border: 1px solid #30363d;
-      border-radius: 6px;
-      padding: 8px 12px;
-      cursor: pointer;
-      font-size: 0.82em;
-      white-space: nowrap;
-    }
-    .toggle-btn:hover { border-color: #58a6ff; color: #c9d1d9; }
-
-    /* Ollama notice */
-    .ollama-notice {
-      background: #1f2937;
-      border: 1px solid #1f6feb;
-      border-radius: 6px;
-      padding: 10px 12px;
-      font-size: 0.82em;
-      color: #79c0ff;
-      margin-bottom: 12px;
-      line-height: 1.5;
-    }
-    .ollama-notice code {
-      background: #0d1117;
-      padding: 1px 5px;
-      border-radius: 3px;
-      font-family: monospace;
-    }
-
-    /* GitHub token */
-    .gh-section { margin-top: 4px; }
-
-    /* Actions */
-    .actions { display: flex; gap: 10px; margin-top: 4px; }
-    .btn-save {
-      background: #238636; color: white; border: none;
-      border-radius: 6px; padding: 8px 20px; cursor: pointer;
-      font-size: 0.9em; flex: 1;
-    }
-    .btn-save:hover { background: #2ea043; }
-    .btn-clear {
-      background: transparent; color: #f85149;
-      border: 1px solid #f85149; border-radius: 6px;
-      padding: 8px 16px; cursor: pointer; font-size: 0.9em;
-    }
-    .btn-clear:hover { background: rgba(248,81,73,0.1); }
-
-    #status-msg { margin-top: 10px; font-size: 0.84em; min-height: 18px; color: #3fb950; }
-    #status-msg.error { color: #f85149; }
-
-    .help-links {
-      font-size: 0.8em;
-      color: #8b949e;
-      margin-top: 16px;
-      line-height: 1.8;
-    }
-    .help-links a { color: #58a6ff; text-decoration: none; }
-    .help-links a:hover { text-decoration: underline; }
+    .settings-section h2 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+    .section-desc { margin: 0 0 16px; font-size: 13px; color: var(--fg-muted); }
 
     .current-provider-badge {
-      font-size: 0.78em;
-      color: #3fb950;
-      margin-bottom: 14px;
+      display: inline-flex; align-items: center; gap: 6px;
+      margin-bottom: 16px; padding: 3px 10px;
+      border-radius: var(--r-full); font-size: 12px; font-weight: 500;
     }
+    .current-provider-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .current-provider-badge.is-ok   { background: var(--success-subtle); color: var(--success); }
+    .current-provider-badge.is-warn { background: var(--warning-subtle); color: var(--warning); }
+
+    .provider-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; margin-bottom: 18px; }
+    .provider-card {
+      display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      background: var(--bg);
+      cursor: pointer;
+      position: relative;
+      transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease), box-shadow var(--dur);
+    }
+    .provider-card:hover { border-color: var(--border-strong); }
+    .provider-card.active { border-color: var(--accent); background: var(--accent-subtle); box-shadow: 0 0 0 1px var(--accent); }
+    .provider-card-name { font-size: 13px; font-weight: 600; }
+    .provider-card-tag {
+      padding: 0 6px; border-radius: var(--r-full);
+      font-size: 10.5px; font-weight: 600; line-height: 17px;
+      background: var(--bg-subtle); color: var(--fg-muted);
+    }
+    .tag-free  { background: var(--success-subtle); color: var(--success); }
+    .tag-local { background: var(--accent-subtle); color: var(--accent); }
+
+    label { display: block; margin-bottom: 6px; font-size: 12.5px; font-weight: 600; }
+    .key-row { display: flex; gap: 8px; margin-bottom: 14px; }
+    .model-input { margin-bottom: 14px; }
+    .toggle-btn { min-width: 62px; }
+
+    .ollama-notice {
+      margin-bottom: 14px; padding: 10px 12px;
+      border-radius: var(--r-md);
+      background: var(--accent-subtle);
+      font-size: 12.5px; color: var(--fg-muted);
+    }
+    .ollama-notice code, .help-links code {
+      padding: 1px 5px; border-radius: 4px;
+      background: var(--bg-subtle); border: 1px solid var(--border);
+    }
+
+    .actions { display: flex; gap: 8px; }
+    .actions .btn-primary { flex: 1; }
+
+    .help-links { margin-top: 12px; font-size: 12.5px; color: var(--fg-muted); line-height: 1.7; }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>GitHub Repo Analyzer Settings</h1>
-    <p class="subtitle">All settings are stored locally in your browser.</p>
+    <div class="page-head">
+      <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 34 34" aria-hidden="true">
+        <rect width="34" height="34" rx="8" fill="#161b22"/>
+        <rect width="34" height="11" rx="8" fill="#21262d"/>
+        <rect y="8" width="34" height="3" fill="#21262d"/>
+        <circle cx="7"  cy="5.5" r="1.9" fill="#f85149"/>
+        <circle cx="13" cy="5.5" r="1.9" fill="#e3b341"/>
+        <circle cx="19" cy="5.5" r="1.9" fill="#3fb950"/>
+        <text x="4" y="26" font-family="'SF Mono','Fira Code',Consolas,monospace" font-size="10.5" font-weight="700" fill="#58a6ff">&lt;/&gt;</text>
+        <rect x="25" y="21.5" width="5" height="2" rx="1" fill="#3fb950"/>
+      </svg>
+      <div>
+        <h1>Settings</h1>
+        <p class="subtitle">GitHub Repo Analyzer · everything is stored locally in your browser</p>
+      </div>
+    </div>
 
     <!-- AI Provider section -->
-    <div class="settings-section">
-      <h2>AI Provider</h2>
+    <section class="settings-section">
+      <h2>AI provider</h2>
+      <p class="section-desc">Powers the chat and the getting-started guide.</p>
       <div id="current-provider-badge" class="current-provider-badge"></div>
 
       <div class="provider-cards">
-        <div class="provider-card" data-provider="groq">
-          <div class="provider-card-icon">⚡</div>
-          <div class="provider-card-name">Groq</div>
+        <div class="provider-card" data-provider="groq" tabindex="0" role="button">
+          <span class="provider-card-name">Groq</span>
           <span class="provider-card-tag tag-free">Free</span>
         </div>
-        <div class="provider-card" data-provider="gemini">
-          <div class="provider-card-icon">✦</div>
-          <div class="provider-card-name">Gemini</div>
+        <div class="provider-card" data-provider="gemini" tabindex="0" role="button">
+          <span class="provider-card-name">Gemini</span>
           <span class="provider-card-tag tag-free">Free tier</span>
         </div>
-        <div class="provider-card" data-provider="ollama">
-          <div class="provider-card-icon">🦙</div>
-          <div class="provider-card-name">Ollama</div>
+        <div class="provider-card" data-provider="ollama" tabindex="0" role="button">
+          <span class="provider-card-name">Ollama</span>
           <span class="provider-card-tag tag-local">Local</span>
         </div>
-        <div class="provider-card" data-provider="openai">
-          <div class="provider-card-icon">🤖</div>
-          <div class="provider-card-name">OpenAI</div>
-          <span class="provider-card-tag tag-paid">Paid</span>
+        <div class="provider-card" data-provider="openai" tabindex="0" role="button">
+          <span class="provider-card-name">OpenAI</span>
+          <span class="provider-card-tag">Paid</span>
         </div>
-        <div class="provider-card" data-provider="anthropic">
-          <div class="provider-card-icon">🧠</div>
-          <div class="provider-card-name">Anthropic</div>
-          <span class="provider-card-tag tag-paid">Paid</span>
+        <div class="provider-card" data-provider="anthropic" tabindex="0" role="button">
+          <span class="provider-card-name">Anthropic</span>
+          <span class="provider-card-tag">Paid</span>
         </div>
       </div>
 
-      <!-- API Key field (Groq / Gemini) -->
+      <!-- API key field (cloud providers) -->
       <div id="key-section">
-        <label id="key-label" for="ai-key">API Key</label>
+        <label id="key-label" for="ai-key">API key</label>
         <div class="key-row">
-          <input type="password" id="ai-key" placeholder="" autocomplete="off">
-          <button class="toggle-btn" data-target="ai-key">Show</button>
+          <input type="password" id="ai-key" class="input" placeholder="" autocomplete="off">
+          <button class="btn toggle-btn" data-target="ai-key">Show</button>
         </div>
       </div>
 
       <!-- Ollama config -->
       <div id="ollama-section" style="display:none">
         <div class="ollama-notice">
-          Ollama must be running locally. Start it with <code>ollama serve</code> and pull a model with
-          <code>ollama pull llama3.2</code>. No API key required.
+          Ollama runs on your machine. Start it with <code>ollama serve</code> — the model downloads
+          automatically on first use. No API key required.
         </div>
         <label for="ollama-model">Model name</label>
-        <input type="text" id="ollama-model" class="model-input" placeholder="llama3.2" autocomplete="off">
+        <input type="text" id="ollama-model" class="input model-input" placeholder="llama3.2" autocomplete="off">
       </div>
 
       <div class="actions">
-        <button class="btn-save" id="save-btn">Save</button>
-        <button class="btn-clear" id="clear-ai-btn">Clear</button>
+        <button class="btn btn-primary" id="save-btn">Save</button>
+        <button class="btn btn-danger" id="clear-ai-btn">Clear</button>
       </div>
-      <div id="status-msg"></div>
+      <div id="status-msg" class="status-msg"></div>
 
       <div class="help-links" id="help-links"></div>
-    </div>
+    </section>
 
     <!-- GitHub Token section -->
-    <div class="settings-section">
-      <h2>GitHub Token <span style="font-size:0.8em;color:#8b949e;font-weight:400">(optional)</span></h2>
-      <p style="font-size:0.82em;color:#8b949e;margin:0 0 10px">Raises API rate limit from 60 to 5,000 requests/hour.</p>
+    <section class="settings-section">
+      <h2>GitHub token <span style="font-weight:400;color:var(--fg-muted)">· optional</span></h2>
+      <p class="section-desc">Raises the GitHub API limit from 60 to 5,000 requests an hour.</p>
       <div class="key-row">
-        <input type="password" id="gh-token" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" autocomplete="off">
-        <button class="toggle-btn" data-target="gh-token">Show</button>
+        <input type="password" id="gh-token" class="input" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" autocomplete="off">
+        <button class="btn toggle-btn" data-target="gh-token">Show</button>
       </div>
       <div class="actions">
-        <button class="btn-save" id="save-gh-btn">Save Token</button>
-        <button class="btn-clear" id="clear-gh-btn">Clear</button>
+        <button class="btn btn-primary" id="save-gh-btn">Save token</button>
+        <button class="btn btn-danger" id="clear-gh-btn">Clear</button>
       </div>
-      <div id="gh-status-msg" style="margin-top:10px;font-size:0.84em;min-height:18px;color:#3fb950;"></div>
-      <div class="help-links" style="margin-top:12px;">
+      <div id="gh-status-msg" class="status-msg"></div>
+      <div class="help-links">
         Create one at <a href="https://github.com/settings/tokens" target="_blank">github.com/settings/tokens</a>
-        with <code style="background:#0d1117;padding:1px 4px;border-radius:3px;font-size:0.9em">public_repo</code> scope.
+        with the <code>public_repo</code> scope.
       </div>
-    </div>
+    </section>
   </div>
 
   <script src="options.js"></script>

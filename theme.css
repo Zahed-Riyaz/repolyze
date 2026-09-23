@@ -1,0 +1,203 @@
+/* ── Design tokens ────────────────────────────────────────────────────────────
+   Shared by the side panel and the options page. Light is the default; dark
+   follows the OS setting. `data-theme` on <html> forces either one.        */
+:root {
+  color-scheme: light;
+
+  --bg:             #ffffff;
+  --bg-elev:        #f6f8fa;
+  --bg-subtle:      #eff2f5;
+  --bg-hover:       #eaeef2;
+  --border:         #d8dee4;
+  --border-strong:  #c4ccd4;
+  --fg:             #1f2328;
+  --fg-muted:       #59636e;
+  --fg-subtle:      #818b98;
+
+  --accent:         #0969da;
+  --accent-hover:   #0860c7;
+  --accent-fg:      #ffffff;
+  --accent-subtle:  rgba(9, 105, 218, 0.09);
+  --success:        #1a7f37;
+  --success-subtle: rgba(26, 127, 55, 0.10);
+  --warning:        #9a6700;
+  --warning-subtle: rgba(154, 103, 0, 0.10);
+  --danger:         #cf222e;
+  --danger-subtle:  rgba(207, 34, 46, 0.08);
+
+  --shadow-sm: 0 1px 2px rgba(31, 35, 40, 0.06);
+  --shadow-md: 0 4px 14px rgba(31, 35, 40, 0.10);
+  --skeleton:  #eaeef2;
+  --skeleton-shine: #f6f8fa;
+  --label-mix: 30%;
+
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-full: 999px;
+
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dur: 160ms;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg:             #0d1117;
+    --bg-elev:        #151b23;
+    --bg-subtle:      #1b222c;
+    --bg-hover:       #212830;
+    --border:         #2a313c;
+    --border-strong:  #3d444d;
+    --fg:             #e6edf3;
+    --fg-muted:       #9198a1;
+    --fg-subtle:      #6e7681;
+    --accent:         #4493f8;
+    --accent-hover:   #5ba1fa;
+    --accent-fg:      #ffffff;
+    --accent-subtle:  rgba(68, 147, 248, 0.13);
+    --success:        #3fb950;
+    --success-subtle: rgba(63, 185, 80, 0.13);
+    --warning:        #d29922;
+    --warning-subtle: rgba(210, 153, 34, 0.14);
+    --danger:         #f85149;
+    --danger-subtle:  rgba(248, 81, 73, 0.12);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.4);
+    --skeleton:  #1b222c;
+    --skeleton-shine: #242c37;
+    --label-mix: 62%;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg:             #0d1117;
+  --bg-elev:        #151b23;
+  --bg-subtle:      #1b222c;
+  --bg-hover:       #212830;
+  --border:         #2a313c;
+  --border-strong:  #3d444d;
+  --fg:             #e6edf3;
+  --fg-muted:       #9198a1;
+  --fg-subtle:      #6e7681;
+  --accent:         #4493f8;
+  --accent-hover:   #5ba1fa;
+  --accent-fg:      #ffffff;
+  --accent-subtle:  rgba(68, 147, 248, 0.13);
+  --success:        #3fb950;
+  --success-subtle: rgba(63, 185, 80, 0.13);
+  --warning:        #d29922;
+  --warning-subtle: rgba(210, 153, 34, 0.14);
+  --danger:         #f85149;
+  --danger-subtle:  rgba(248, 81, 73, 0.12);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.4);
+  --skeleton:  #1b222c;
+  --skeleton-shine: #242c37;
+  --label-mix: 62%;
+}
+
+/* ── Base ─────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+  background: var(--bg);
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+button, input, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+code { font-family: var(--mono); font-size: 0.9em; }
+
+.icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vertical-align: -3px;
+}
+.icon-sm { width: 14px; height: 14px; vertical-align: -2px; }
+
+/* ── Shared controls ──────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease), color var(--dur) var(--ease), transform 80ms;
+}
+.btn:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border-strong); }
+.btn:active:not(:disabled) { transform: scale(0.98); }
+.btn:disabled { opacity: 0.55; }
+
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+.btn-danger { background: transparent; color: var(--danger); }
+.btn-danger:hover:not(:disabled) { background: var(--danger-subtle); border-color: var(--danger); }
+
+.btn-ghost { background: transparent; border-color: transparent; color: var(--fg-muted); }
+.btn-ghost:hover:not(:disabled) { background: var(--bg-hover); border-color: transparent; color: var(--fg); }
+
+.btn-block { width: 100%; }
+
+.input {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+  outline: none;
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.input::placeholder { color: var(--fg-subtle); }
+.input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-subtle); }
+
+.status-msg { min-height: 18px; margin-top: 8px; font-size: 12px; color: var(--success); }
+.status-msg.is-error { color: var(--danger); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

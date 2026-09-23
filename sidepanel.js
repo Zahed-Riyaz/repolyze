@@ -27,17 +27,20 @@ function isCurrentRepo(key) { return !!currentRepo && repoKey() === key; }
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", async () => {
-  showWelcomeSplash();
-
-  // Tab switching
-  document.querySelectorAll(".tab-btn").forEach(tab => { //tab just represents the current "DOM element" in .tab-btn
+  // Tab switching — the settings gear in the header is a .tab-btn too, and
+  // toggles back to the last content tab when clicked again.
+  document.querySelectorAll(".tab-btn").forEach(tab => {
     tab.addEventListener("click", () => {
-      document.querySelectorAll(".tab-btn").forEach(t => t.classList.remove("active")); 
-      document.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active")); //literally make every tab inactive
-      tab.classList.add("active");
-      document.getElementById(`${tab.dataset.tab}-tab`).classList.add("active");
+      const target = tab.dataset.tab;
+      if (target === "settings" && tab.classList.contains("active")) {
+        switchTab(lastContentTab);
+      } else {
+        switchTab(target);
+      }
     });
   });
+  new ResizeObserver(moveTabIndicator).observe(document.getElementById("tabs"));
+  moveTabIndicator();
 
   // Issue filter buttons
   document.querySelectorAll(".filter-btn").forEach(btn => {
@@ -50,9 +53,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Chat controls
   document.getElementById("send-btn").addEventListener("click", () => { handleChat(); });
-  document.getElementById("chat-input").addEventListener("keypress", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleChat(); }
+  const chatInput = document.getElementById("chat-input");
+  chatInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); handleChat(); }
   });
+  chatInput.addEventListener("input", autosizeChatInput);
   document.getElementById("clear-chat-btn").addEventListener("click", clearChat);
 
   // Quickstart generator
@@ -83,7 +88,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   // background tabs or other windows must not hijack the panel.
   panelWindowId = (await chrome.windows.getCurrent()).id;
 
-  chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
     if (changeInfo.url && tab.active && tab.windowId === panelWindowId) {
       handleRepoRefresh(changeInfo.url);
     }
@@ -100,18 +105,72 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (activeTab?.url) handleRepoRefresh(activeTab.url);
 });
 
-// ── Welcome splash ────────────────────────────────────────────────────────────
-function showWelcomeSplash() {
-  const splash = document.getElementById("welcome-splash");
-  if (!splash) return;
+// ── View & tab state ──────────────────────────────────────────────────────────
+let onRepoPage = false;
+let lastContentTab = "issues";
 
-  const dismiss = () => {
-    splash.classList.add("splash-hidden");
-    splash.addEventListener("transitionend", () => splash.remove(), { once: true });
-  };
+function switchTab(name) {
+  document.querySelectorAll(".tab-btn").forEach(t => {
+    const on = t.dataset.tab === name;
+    t.classList.toggle("active", on);
+    if (t.getAttribute("role") === "tab") t.setAttribute("aria-selected", String(on));
+  });
+  document.querySelectorAll(".tab-pane").forEach(p => p.classList.toggle("active", p.id === `${name}-tab`));
+  if (name !== "settings") lastContentTab = name;
+  applyView();
+  moveTabIndicator();
+  if (name === "chat") autosizeChatInput();
+}
 
-  splash.addEventListener("click", dismiss);
-  setTimeout(dismiss, 2000);
+// Settings must stay reachable off-repo, so it overrides the welcome screen
+function applyView() {
+  const settingsOpen = document.getElementById("settings-tab").classList.contains("active");
+  const showMain = onRepoPage || settingsOpen;
+  document.body.classList.toggle("no-repo", !onRepoPage);
+  document.getElementById("not-repo-msg").style.display = showMain ? "none" : "";
+  document.getElementById("main-content").style.display = showMain ? "" : "none";
+}
+
+function moveTabIndicator() {
+  const nav = document.getElementById("tabs");
+  const active = nav.querySelector(".tab-btn.active");
+  nav.classList.toggle("no-indicator", !active);
+  if (!active) return;
+  nav.style.setProperty("--ind-x", `${active.offsetLeft}px`);
+  nav.style.setProperty("--ind-w", `${active.offsetWidth}px`);
+}
+
+function autosizeChatInput() {
+  const el = document.getElementById("chat-input");
+  el.style.height = "auto";
+  el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+}
+
+// ── Render helpers ────────────────────────────────────────────────────────────
+function icon(name, cls = "") {
+  return `<svg class="icon ${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+}
+
+// Placeholder rows shaped like the content they stand in for, so nothing
+// jumps when real data arrives.
+function skeletonList(count, kind = "row") {
+  const row = {
+    row:    `<span class="sk-lines"><span class="sk sk-line"></span><span class="sk sk-line short"></span></span>`,
+    person: `<span class="sk sk-circle"></span><span class="sk-lines"><span class="sk sk-line short"></span><span class="sk sk-line"></span></span>`,
+    bar:    `<span class="sk-lines"><span class="sk sk-line short"></span></span>`,
+  }[kind];
+  return Array.from({ length: count }, () => `<li class="skeleton-item" aria-hidden="true">${row}</li>`).join("");
+}
+
+// Ask GitHub for an appropriately sized avatar instead of the full-size image
+function avatarUrl(url, size) {
+  try { const u = new URL(url); u.searchParams.set("s", String(size)); return u.href; }
+  catch { return url; }
+}
+
+// Empty / error row. `html` must already be escaped.
+function stateItem(html, { error = false, iconName = error ? "alert" : "inbox", tag = "li" } = {}) {
+  return `<${tag} class="state-item${error ? " is-error" : ""}">${icon(iconName)}<span>${html}</span></${tag}>`;
 }
 
 // ── Repo detection ────────────────────────────────────────────────────────────
@@ -149,24 +208,27 @@ function handleRepoRefresh(url) {
 }
 
 function showNotRepoMessage() {
-  document.getElementById("not-repo-msg").style.display = "block";
-  document.getElementById("main-content").style.display = "none";
+  onRepoPage = false;
+  applyView();
 }
 
 function hideNotRepoMessage() {
-  document.getElementById("not-repo-msg").style.display = "none";
-  document.getElementById("main-content").style.display = "block";
+  onRepoPage = true;
+  applyView();
+  moveTabIndicator(); // tabs were display:none, so their geometry was unknown
 }
 
 // ── Core update ───────────────────────────────────────────────────────────────
 async function updateRepoInfo() {
   if (!currentRepo) return;
   const { owner, repo } = currentRepo;
-  document.getElementById("repo-name").textContent = `${owner}/${repo}`;
+  document.getElementById("repo-name").innerHTML =
+    `<span class="repo-owner">${escapeHtml(owner)} / </span>${escapeHtml(repo)}`;
   document.getElementById("repo-description").textContent = "";
-  document.getElementById("repo-stars").textContent = "⭐ —";
-  document.getElementById("repo-forks").textContent = "⑂ —";
-  document.getElementById("repo-license").textContent = "";
+  document.getElementById("repo-stars").textContent = "—";
+  document.getElementById("repo-forks").textContent = "—";
+  document.getElementById("repo-license-wrap").hidden = true;
+  document.getElementById("repo-fork-badge").style.display = "none";
 
   // Reset issue filter to "All"
   document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
@@ -214,7 +276,7 @@ async function fetchGitHub(endpoint, rawResponse = false, repo = currentRepo) {
 
 function updateRateLimitBadge(remaining, limit) {
   const badge = document.getElementById("rate-limit-badge");
-  badge.textContent = `API: ${remaining}/${limit}`;
+  document.getElementById("rate-limit-text").textContent = `${remaining}/${limit}`;
   badge.classList.toggle("rate-limit-low", parseInt(remaining) < 100);
 }
 
@@ -242,17 +304,17 @@ async function fetchRepoData() {
 
 function applyRepoData(data) {
   document.getElementById("repo-description").textContent = data.description || "";
-  document.getElementById("repo-stars").textContent = `⭐ ${formatNumber(data.stargazers_count)}`;
-  document.getElementById("repo-forks").textContent = `⑂ ${formatNumber(data.forks_count)}`;
+  document.getElementById("repo-stars").textContent = formatNumber(data.stargazers_count);
+  document.getElementById("repo-forks").textContent = formatNumber(data.forks_count);
   const license = data.license?.spdx_id;
-  if (license && license !== "NOASSERTION") {
-    document.getElementById("repo-license").textContent = license;
-  }
+  const hasLicense = !!license && license !== "NOASSERTION";
+  document.getElementById("repo-license").textContent = hasLicense ? license : "";
+  document.getElementById("repo-license-wrap").hidden = !hasLicense;
   // Fork detection — show upstream repo link if this is a fork
   const forkBadge = document.getElementById("repo-fork-badge");
   if (data.fork && data.parent) {
-    forkBadge.innerHTML = `⑂ fork of <a href="${data.parent.html_url}" target="_blank">${escapeHtml(data.parent.full_name)}</a>`;
-    forkBadge.style.display = "inline";
+    forkBadge.innerHTML = `${icon("fork", "icon-sm")}fork of <a href="${data.parent.html_url}" target="_blank">${escapeHtml(data.parent.full_name)}</a>`;
+    forkBadge.style.display = "";
   } else {
     forkBadge.style.display = "none";
   }
@@ -266,7 +328,7 @@ function formatNumber(n) {
 // ── Issues (fetch once, filter client-side) ───────────────────────────────────
 async function fetchIssues() {
   const list = document.getElementById("issues-list");
-  list.innerHTML = "<li class='loading-item'>Loading issues…</li>";
+  list.innerHTML = skeletonList(5);
 
   const cacheKey = repoKey();
 
@@ -280,7 +342,7 @@ async function fetchIssues() {
     cacheFor(cacheKey).issues = issues.filter(i => !i.pull_request);
     if (isCurrentRepo(cacheKey)) renderIssues(activeIssueFilter());
   } catch (err) {
-    if (isCurrentRepo(cacheKey)) list.innerHTML = `<li class="error-item">Error: ${escapeHtml(err.message)}</li>`;
+    if (isCurrentRepo(cacheKey)) list.innerHTML = stateItem(escapeHtml(err.message), { error: true });
   }
 }
 
@@ -317,38 +379,37 @@ function renderIssues(activeLabel) {
 
   if (filtered.length === 0) {
     const msgs = {
-      "good-first-issue": `No "good first issue" labels found — but don't stop here. Many maintainers don't use this label consistently. Browse <strong>All</strong> issues and look for small scope, clear description, or "bug" labels.`,
-      "help-wanted":      `No "help wanted" issues right now. Try <strong>All</strong> issues — any unassigned issue is fair game if you comment first.`,
-      "":                 `No open unassigned issues. The repo may be in a quiet period — check the <strong>Contribute</strong> tab for other ways to help.`,
+      "good-first-issue": `No <strong>good first issue</strong> labels here — many maintainers don't use it consistently. Browse <strong>All</strong> and look for small, clearly described issues.`,
+      "help-wanted":      `No <strong>help wanted</strong> issues right now. Any unassigned issue in <strong>All</strong> is fair game if you comment first.`,
+      "":                 `No open, unassigned issues. The repo may be in a quiet period — the <strong>Contribute</strong> tab has other ways to help.`,
     };
-    list.innerHTML = `<li class="empty-item">${msgs[activeLabel] ?? msgs[""]}</li>`;
+    list.innerHTML = stateItem(msgs[activeLabel] ?? msgs[""]);
     return;
   }
 
-  list.innerHTML = "";
-  filtered.forEach(issue => {
-    const li = document.createElement("li");
+  list.innerHTML = filtered.map(issue => {
     const labelsHtml = issue.labels
-      .map(l => `<span class="label-chip" style="background:#${l.color}20;color:#${l.color};border:1px solid #${l.color}40">${escapeHtml(l.name)}</span>`)
+      .map(l => `<span class="label-chip" style="--lc:#${/^[0-9a-f]{6}$/i.test(l.color) ? l.color : "8b949e"}">${escapeHtml(l.name)}</span>`)
       .join("");
-
-    li.innerHTML = `
-      <a href="${issue.html_url}" target="_blank" class="issue-link">#${issue.number} ${escapeHtml(issue.title)}</a>
-      <div class="issue-meta">
-        <span>💬 ${issue.comments}</span>
-        <span>👍 ${issue.reactions?.total_count || 0}</span>
-        <span class="issue-age">${daysAgo(issue.created_at)}</span>
-      </div>
-      ${labelsHtml ? `<div class="issue-labels">${labelsHtml}</div>` : ""}
-    `;
-    list.appendChild(li);
-  });
+    const reactions = issue.reactions?.total_count || 0;
+    return `
+      <li class="list-card">
+        <a href="${issue.html_url}" target="_blank" class="issue-link"><span class="issue-number">#${issue.number}</span> ${escapeHtml(issue.title)}</a>
+        <div class="issue-meta">
+          <span title="Comments">${icon("comment", "icon-sm")}${issue.comments}</span>
+          ${reactions ? `<span title="Reactions">${icon("heart", "icon-sm")}${reactions}</span>` : ""}
+          <span class="issue-age">${daysAgo(issue.created_at)}</span>
+        </div>
+        ${labelsHtml ? `<div class="issue-labels">${labelsHtml}</div>` : ""}
+      </li>`;
+  }).join("");
 }
 
 // ── Tech Stack ────────────────────────────────────────────────────────────────
 async function fetchTechStack() {
   const list = document.getElementById("tech-list");
-  list.innerHTML = "<li class='loading-item'>Loading stack…</li>";
+  list.classList.add("skeleton-mode");
+  list.innerHTML = skeletonList(4, "bar");
 
   const cacheKey = repoKey();
   if (repoCache[cacheKey]?.languages && repoCache[cacheKey]?.tools !== undefined) {
@@ -365,26 +426,43 @@ async function fetchTechStack() {
     ]);
     if (isCurrentRepo(cacheKey)) renderTechStack(languages, tools);
   } catch (err) {
-    if (isCurrentRepo(cacheKey)) list.innerHTML = `<li class="error-item">Error: ${escapeHtml(err.message)}</li>`;
+    if (isCurrentRepo(cacheKey)) list.innerHTML = stateItem(escapeHtml(err.message), { error: true });
   }
 }
 
+// GitHub's linguist colours for the most common languages; others fall back to a
+// neutral tone so the bar still reads.
+const LANG_COLORS = {
+  JavaScript: "#f1e05a", TypeScript: "#3178c6", Python: "#3572A5", Java: "#b07219", Go: "#00ADD8",
+  Rust: "#dea584", "C++": "#f34b7d", C: "#555555", "C#": "#178600", Ruby: "#701516", PHP: "#4F5D95",
+  Swift: "#F05138", Kotlin: "#A97BFF", Dart: "#00B4AB", Shell: "#89e051", HTML: "#e34c26", CSS: "#563d7c",
+  SCSS: "#c6538c", Vue: "#41b883", Svelte: "#ff3e00", Lua: "#000080", Scala: "#c22d40", Elixir: "#6e4a7e",
+  Haskell: "#5e5086", "Objective-C": "#438eff", R: "#198CE7", Julia: "#a270ba", Dockerfile: "#384d54",
+  Makefile: "#427819", TeX: "#3D6117", "Jupyter Notebook": "#DA5B0B", Nix: "#7e7eff", Zig: "#ec915c",
+  MDX: "#fcb32c", Astro: "#ff5a03", Perl: "#0298c3", PowerShell: "#012456", CMake: "#DA3434",
+};
+const langColor = (lang) => LANG_COLORS[lang] || "#8b949e";
+
 function renderTechStack(languages, tools = []) {
   const list = document.getElementById("tech-list");
-  list.innerHTML = "";
-  const total = Object.values(languages).reduce((a, b) => a + b, 0);
-  Object.entries(languages).sort((a, b) => b[1] - a[1]).forEach(([lang, size]) => {
-    const pct = ((size / total) * 100).toFixed(1);
-    const li = document.createElement("li");
-    li.innerHTML = `
-      <div class="tech-row">
+  list.classList.remove("skeleton-mode");
+  const entries = Object.entries(languages).sort((a, b) => b[1] - a[1]);
+  const total = entries.reduce((sum, [, n]) => sum + n, 0);
+
+  if (!entries.length) {
+    list.innerHTML = stateItem("GitHub hasn't detected any languages in this repo.");
+  } else {
+    const pct = (n) => (n / total) * 100;
+    const bar = entries
+      .map(([lang, n]) => `<span style="width:${pct(n)}%;background:${langColor(lang)}" title="${escapeHtml(lang)} ${pct(n).toFixed(1)}%"></span>`)
+      .join("");
+    list.innerHTML = `<li class="lang-bar-row"><div class="lang-bar">${bar}</div></li>` + entries.map(([lang, n]) => `
+      <li class="lang-row">
+        <span class="lang-dot" style="background:${langColor(lang)}"></span>
         <span class="tech-name">${escapeHtml(lang)}</span>
-        <span class="tech-pct">${pct}%</span>
-      </div>
-      <div class="tech-bar-bg"><div class="tech-bar-fill" style="width:${pct}%"></div></div>
-    `;
-    list.appendChild(li);
-  });
+        <span class="tech-pct">${pct(n) < 0.1 ? "<0.1" : pct(n).toFixed(1)}%</span>
+      </li>`).join("");
+  }
   renderTools(tools);
 }
 
@@ -606,7 +684,7 @@ function renderTools(tools) {
     div.innerHTML = `
       <span class="tools-cat-label">${escapeHtml(category)}</span>
       <div class="tools-cat-pills">
-        ${items.map(t => `<span class="tool-pill">${t.emoji} ${escapeHtml(t.name)}</span>`).join("")}
+        ${items.map(t => `<span class="tool-pill">${escapeHtml(t.name)}</span>`).join("")}
       </div>
     `;
     grid.appendChild(div);
@@ -617,7 +695,7 @@ function renderTools(tools) {
 // ── Maintainers ───────────────────────────────────────────────────────────────
 async function fetchMaintainers() {
   const list = document.getElementById("maintainers-list");
-  list.innerHTML = "<li class='loading-item'>Loading contributors…</li>";
+  list.innerHTML = skeletonList(6, "person");
 
   const cacheKey = repoKey();
   if (repoCache[cacheKey]?.contributors) {
@@ -630,26 +708,29 @@ async function fetchMaintainers() {
     cacheFor(cacheKey).contributors = contributors;
     if (isCurrentRepo(cacheKey)) renderMaintainers(contributors);
   } catch (err) {
-    if (isCurrentRepo(cacheKey)) list.innerHTML = `<li class="error-item">Error: ${escapeHtml(err.message)}</li>`;
+    if (isCurrentRepo(cacheKey)) list.innerHTML = stateItem(escapeHtml(err.message), { error: true });
   }
 }
 
 function renderMaintainers(contributors) {
   const list = document.getElementById("maintainers-list");
-  list.innerHTML = "";
-  contributors.forEach(user => {
-    const li = document.createElement("li");
-    li.innerHTML = `
-      <div class="contributor-row">
-        <img src="${user.avatar_url}" class="contributor-avatar" alt="${escapeHtml(user.login)}">
-        <div class="contributor-info">
+  if (!contributors.length) {
+    list.innerHTML = stateItem("No contributor data available for this repo.");
+    return;
+  }
+  const top = contributors[0].contributions || 1;
+  list.innerHTML = contributors.map((user, i) => `
+    <li class="person" style="animation-delay:${i * 25}ms">
+      <span class="person-rank">${i + 1}</span>
+      <img src="${avatarUrl(user.avatar_url, 64)}" class="contributor-avatar" alt="" loading="lazy">
+      <div class="contributor-info">
+        <div class="contributor-top">
           <a href="${user.html_url}" target="_blank" class="contributor-name">${escapeHtml(user.login)}</a>
           <span class="contributor-commits">${formatNumber(user.contributions)} commits</span>
         </div>
+        <div class="share-bar"><span style="width:${Math.max(3, (user.contributions / top) * 100)}%"></span></div>
       </div>
-    `;
-    list.appendChild(li);
-  });
+    </li>`).join("");
 }
 
 // ── Contribute Tab ────────────────────────────────────────────────────────────
@@ -666,7 +747,7 @@ async function fetchContributeTab() {
     qsContent.innerHTML = "";
     qsBtn.style.display = "";
     qsBtn.disabled = false;
-    qsBtn.textContent = "Generate with AI ✨";
+    qsBtn.innerHTML = `${icon("sparkles")}Generate with AI`;
   }
 
   if (repoCache[cacheKey]?.health) {
@@ -682,7 +763,8 @@ async function fetchContributeTab() {
 }
 
 async function fetchRepoHealth() {
-  document.getElementById("health-card").innerHTML = "<p class='loading-item'>Loading repo health…</p>";
+  document.getElementById("health-card").innerHTML =
+    `<div class="health-score-row"><span class="sk sk-circle" style="width:64px;height:64px"></span><span class="sk-lines" style="flex:1;display:flex;flex-direction:column;gap:8px"><span class="sk sk-line short"></span><span class="sk sk-line"></span></span></div><div class="sk sk-block"></div>`;
 
   const repo = currentRepo;
   const cacheKey = repoKey(repo);
@@ -737,7 +819,7 @@ async function fetchRepoHealth() {
     if (isCurrentRepo(cacheKey)) renderHealthCard(health);
   } catch (err) {
     if (isCurrentRepo(cacheKey)) {
-      document.getElementById("health-card").innerHTML = `<p class="error-item">Error loading health: ${escapeHtml(err.message)}</p>`;
+      document.getElementById("health-card").innerHTML = stateItem(`Couldn't load repo health — ${escapeHtml(err.message)}`, { error: true, tag: "div" });
     }
   }
 }
@@ -780,52 +862,63 @@ function calculateHealthScore(h, repoData) {
 
   score = Math.min(100, score);
 
-  let grade, color, emoji;
-  if (score >= 80)      { grade = "Excellent";       color = "#3fb950"; emoji = "🟢"; }
-  else if (score >= 60) { grade = "Good";             color = "#58a6ff"; emoji = "🔵"; }
-  else if (score >= 40) { grade = "Fair";             color = "#e3b341"; emoji = "🟡"; }
-  else                  { grade = "Needs attention";  color = "#f85149"; emoji = "🔴"; }
+  // `tone` maps to a .grade-* class so colours follow the light/dark theme
+  let grade, tone;
+  if (score >= 80)      { grade = "Excellent";       tone = "excellent"; }
+  else if (score >= 60) { grade = "Good";            tone = "good"; }
+  else if (score >= 40) { grade = "Fair";            tone = "fair"; }
+  else                  { grade = "Needs attention"; tone = "poor"; }
 
-  return { score, grade, color, emoji };
+  return { score, grade, tone };
 }
 
 function renderHealthCard(h) {
   const repoData = repoCache[repoKey()]?.repoData;
-  const { score, grade, color, emoji } = calculateHealthScore(h, repoData);
+  const { score, grade, tone } = calculateHealthScore(h, repoData);
+  const circumference = 2 * Math.PI * 26;
 
   const lastPushText = h.lastPush ? daysAgo(h.lastPush) : "unknown";
-  const avgMergeText = h.avgMergeDays !== null ? `${h.avgMergeDays}d avg` : "N/A";
+  const avgMergeText = h.avgMergeDays !== null ? `${h.avgMergeDays}d avg` : "n/a";
+  const check = (ok, label) => `
+    <div class="health-item ${ok ? "good" : "bad"}">${icon(ok ? "check" : "x")}<span><b>${label}</b>${ok ? "Present" : "Missing"}</span></div>`;
+  const stat = (iconName, label, value) => `
+    <div class="health-item">${icon(iconName)}<span><b>${value}</b>${label}</span></div>`;
 
-  document.getElementById("health-card").innerHTML = `
+  const card = document.getElementById("health-card");
+  card.className = `card grade-${tone}`;
+  card.innerHTML = `
     <div class="health-score-row">
-      <div class="health-score-circle" style="border-color:${color}">
-        <span class="health-score-num" style="color:${color}">${score}</span>
-        <span class="health-score-denom">/100</span>
+      <div class="health-ring" role="img" aria-label="Score ${score} out of 100">
+        <svg viewBox="0 0 60 60">
+          <circle class="ring-track" cx="30" cy="30" r="26" fill="none" stroke-width="6"/>
+          <circle class="ring-value" cx="30" cy="30" r="26" fill="none" stroke-width="6"
+            stroke-dasharray="${circumference}" stroke-dashoffset="${circumference}"/>
+        </svg>
+        <span class="health-score-num">${score}</span>
       </div>
-      <div class="health-score-info">
-        <div class="health-score-grade" style="color:${color}">${emoji} ${grade}</div>
-        <div class="health-score-sub">Contributor Friendliness</div>
+      <div>
+        <div class="health-score-grade">${grade}</div>
+        <div class="health-score-sub">Contributor friendliness</div>
       </div>
     </div>
-    <div class="health-section-title">Details</div>
     <div class="health-grid">
-      <div class="health-item ${h.hasContributing ? "good" : "bad"}">
-        ${h.hasContributing ? "✓" : "✗"} CONTRIBUTING.md
-      </div>
-      <div class="health-item ${h.hasIssueTemplates ? "good" : "bad"}">
-        ${h.hasIssueTemplates ? "✓" : "✗"} Issue Templates
-      </div>
-      <div class="health-item neutral">🕐 Last Push: ${lastPushText}</div>
-      <div class="health-item neutral">🔀 Open PRs: ${h.openPRs}</div>
-      <div class="health-item neutral">⏱ Merge Time: ${avgMergeText}</div>
-      <div class="health-item neutral">🐛 Open Issues: ${formatNumber(h.openIssues)}</div>
+      ${check(h.hasContributing, "CONTRIBUTING")}
+      ${check(h.hasIssueTemplates, "Issue templates")}
+      ${stat("clock", "Last push", lastPushText)}
+      ${stat("merge", "Merge time", avgMergeText)}
+      ${stat("pr", "Open PRs", h.openPRs)}
+      ${stat("issue", "Open issues", formatNumber(h.openIssues))}
     </div>
   `;
+  // Animate the ring from empty on the next frame
+  requestAnimationFrame(() => {
+    card.querySelector(".ring-value")?.setAttribute("stroke-dashoffset", String(circumference * (1 - score / 100)));
+  });
 }
 
 async function fetchOpenPRs() {
   const list = document.getElementById("prs-list");
-  list.innerHTML = "<li class='loading-item'>Loading PRs…</li>";
+  list.innerHTML = skeletonList(3);
 
   const cacheKey = repoKey();
 
@@ -834,29 +927,25 @@ async function fetchOpenPRs() {
     cacheFor(cacheKey).prs = prs;
     if (isCurrentRepo(cacheKey)) renderOpenPRs(prs);
   } catch (err) {
-    if (isCurrentRepo(cacheKey)) list.innerHTML = `<li class="error-item">Error: ${escapeHtml(err.message)}</li>`;
+    if (isCurrentRepo(cacheKey)) list.innerHTML = stateItem(escapeHtml(err.message), { error: true });
   }
 }
 
 function renderOpenPRs(prs) {
   const list = document.getElementById("prs-list");
   if (prs.length === 0) {
-    list.innerHTML = "<li class='empty-item'>No open PRs.</li>";
+    list.innerHTML = stateItem("No open pull requests.");
     return;
   }
-  list.innerHTML = "";
-  prs.forEach(pr => {
-    const li = document.createElement("li");
-    li.innerHTML = `
-      <a href="${pr.html_url}" target="_blank" class="issue-link">#${pr.number} ${escapeHtml(pr.title)}</a>
+  list.innerHTML = prs.map(pr => `
+    <li class="list-card">
+      <a href="${pr.html_url}" target="_blank" class="issue-link"><span class="issue-number">#${pr.number}</span> ${escapeHtml(pr.title)}</a>
       <div class="issue-meta">
-        <img src="${pr.user.avatar_url}" class="contributor-avatar-sm" alt="${escapeHtml(pr.user.login)}">
-        <span>${escapeHtml(pr.user.login)}</span>
-        <span class="issue-age">opened ${daysAgo(pr.created_at)}</span>
+        <span><img src="${avatarUrl(pr.user.avatar_url, 32)}" class="avatar-sm" alt="" loading="lazy">${escapeHtml(pr.user.login)}</span>
+        ${pr.draft ? `<span class="chip">Draft</span>` : ""}
+        <span class="issue-age">${daysAgo(pr.created_at)}</span>
       </div>
-    `;
-    list.appendChild(li);
-  });
+    </li>`).join("");
 }
 
 // ── Getting Started Quickstart ────────────────────────────────────────────────
@@ -873,7 +962,7 @@ async function generateQuickstart() {
   }
 
   if (aiProvider !== "ollama" && !aiApiKey) {
-    content.innerHTML = `<p class="error-item">AI not configured. <a href="#" id="open-opts">Open Settings</a></p>`;
+    content.innerHTML = stateItem(`AI isn't set up yet. <a href="#" id="open-opts">Open settings</a>`, { error: true, tag: "div" });
     document.getElementById("open-opts")?.addEventListener("click", (e) => {
       e.preventDefault();
       document.querySelector('.tab-btn[data-tab="settings"]')?.click();
@@ -882,7 +971,7 @@ async function generateQuickstart() {
   }
 
   btn.disabled = true;
-  btn.textContent = "Generating…";
+  btn.innerHTML = `${icon("sparkles")}Generating…`;
   content.innerHTML = "";
 
   try {
@@ -917,9 +1006,9 @@ ${context}`;
     let msg = err.message;
     if (msg === "OLLAMA_NOT_RUNNING") msg = "Ollama is not running. Start it with: OLLAMA_ORIGINS='*' ollama serve";
     if (msg === "OLLAMA_CORS")        msg = "Ollama is blocking the extension. Restart with: OLLAMA_ORIGINS='*' ollama serve";
-    content.innerHTML = `<p class="error-item">Error: ${escapeHtml(msg)}</p>`;
+    content.innerHTML = stateItem(escapeHtml(msg), { error: true, tag: "div" });
     btn.disabled = false;
-    btn.textContent = "Retry ✨";
+    btn.innerHTML = `${icon("refresh")}Try again`;
   }
 }
 
@@ -946,6 +1035,7 @@ async function handleChat() {
   messages.push({ role: "user", text: query, time: userTime });
   appendChatMessage("user", query, false, true, userTime);
   input.value = "";
+  autosizeChatInput();
 
   const typingEl   = document.getElementById("typing-indicator");
   const chatHistEl = document.getElementById("chat-history");
@@ -963,7 +1053,7 @@ async function handleChat() {
   botWrap.className = "msg-wrap msg-wrap-bot";
   const botLabel = document.createElement("span");
   botLabel.className = "msg-sender";
-  botLabel.textContent = "</> AI";
+  botLabel.innerHTML = BOT_LABEL_HTML;
   botWrap.appendChild(botLabel);
   const botBubble = document.createElement("div");
   botBubble.className = "chat-msg chat-msg-bot";
@@ -1008,15 +1098,7 @@ async function handleChat() {
     botBubble.classList.remove("streaming");
     botBubble.innerHTML = renderMarkdown(fullReply);
     if (!streamStarted) chatHistEl.appendChild(botWrap); // empty reply: no chunk ever arrived
-    const botTimeEl = document.createElement("span");
-    botTimeEl.className = "msg-time";
-    botTimeEl.textContent = formatTime(botTime);
-    botWrap.appendChild(botTimeEl);
-    const regenBtn = document.createElement("button");
-    regenBtn.className = "regen-btn";
-    regenBtn.textContent = "↺ Regenerate";
-    regenBtn.addEventListener("click", () => regenerateResponse(botWrap, query));
-    botWrap.appendChild(regenBtn);
+    appendBotFooter(botWrap, botTime, query);
     if (isNearBottom(chatHistEl)) chatHistEl.scrollTop = chatHistEl.scrollHeight;
   } catch (err) {
     const ollamaErr = err.message === "OLLAMA_NOT_RUNNING" || err.message === "OLLAMA_CORS";
@@ -1084,7 +1166,7 @@ function appendChatMessage(role, text, save = true, animate = true, time = null,
   if (role === "bot") {
     const label = document.createElement("span");
     label.className = "msg-sender";
-    label.textContent = "</> AI";
+    label.innerHTML = BOT_LABEL_HTML;
     wrap.appendChild(label);
   }
 
@@ -1097,24 +1179,41 @@ function appendChatMessage(role, text, save = true, animate = true, time = null,
   }
   wrap.appendChild(msg);
 
-  if (time) {
+  if (role === "bot") {
+    appendBotFooter(wrap, time, query);
+  } else if (time) {
     const t = document.createElement("span");
     t.className = "msg-time";
     t.textContent = formatTime(time);
     wrap.appendChild(t);
   }
 
-  if (role === "bot" && query) {
-    const regenBtn = document.createElement("button");
-    regenBtn.className = "regen-btn";
-    regenBtn.textContent = "↺ Regenerate";
-    regenBtn.addEventListener("click", () => regenerateResponse(wrap, query));
-    wrap.appendChild(regenBtn);
-  }
-
   history.appendChild(wrap);
   history.scrollTop = history.scrollHeight;
   if (save) saveChatHistory();
+}
+
+const BOT_LABEL_HTML = `${icon("sparkles", "icon-sm")}Assistant`;
+
+// Timestamp + (hover-revealed) regenerate action under a bot reply
+function appendBotFooter(wrap, time, query) {
+  if (!time && !query) return;
+  const actions = document.createElement("div");
+  actions.className = "msg-actions";
+  if (time) {
+    const t = document.createElement("span");
+    t.className = "msg-time";
+    t.textContent = formatTime(time);
+    actions.appendChild(t);
+  }
+  if (query) {
+    const regenBtn = document.createElement("button");
+    regenBtn.className = "regen-btn";
+    regenBtn.innerHTML = `${icon("refresh", "icon-sm")}Regenerate`;
+    regenBtn.addEventListener("click", () => regenerateResponse(wrap, query));
+    actions.appendChild(regenBtn);
+  }
+  wrap.appendChild(actions);
 }
 
 async function clearChat() {
@@ -1135,13 +1234,18 @@ function renderChatStarters() {
   const el = document.createElement("div");
   el.id = "chat-starters";
   el.className = "chat-starters";
+  const starters = [
+    ["What does this repo do and who is it for?", "What does this repo do?"],
+    ["How do I set up this project locally from scratch?", "How do I set it up locally?"],
+    ["What are the easiest issues I could work on as a new contributor?", "Which issues suit a newcomer?"],
+    ["Walk me through the project structure and the most important files", "Walk me through the structure"],
+  ];
   el.innerHTML = `
-    <p class="chat-starters-label">Try asking:</p>
+    <svg class="icon chat-starters-icon" aria-hidden="true"><use href="#i-sparkles"/></svg>
+    <p class="chat-starters-title">Ask about ${escapeHtml(currentRepo?.repo || "this repo")}</p>
+    <p class="chat-starters-label">Answers are grounded in its README, configs and file tree.</p>
     <div class="chat-starters-grid">
-      <button class="starter-chip" data-q="What does this repo do and who is it for?">💡 What does this repo do?</button>
-      <button class="starter-chip" data-q="How do I set up this project locally from scratch?">🛠️ How do I set up this project?</button>
-      <button class="starter-chip" data-q="What are the easiest issues I could work on as a new contributor?">🐛 Good first issues for me?</button>
-      <button class="starter-chip" data-q="Walk me through the project structure and the most important files">🗂️ Walk me through the structure</button>
+      ${starters.map(([q, label]) => `<button class="starter-chip" data-q="${escapeHtml(q)}">${label}${icon("arrow-right", "icon-sm")}</button>`).join("")}
     </div>
   `;
 
@@ -1161,20 +1265,20 @@ function showOllamaGuide(reason, retryQuery) {
   const history = document.getElementById("chat-history");
 
   const card = document.createElement("div");
-  card.className = "chat-msg chat-msg-bot ollama-guide";
+  card.className = "ollama-guide msg-entering";
   card.innerHTML = `
-    <div class="ollama-guide-header">🦙 ${isCors ? "Ollama is blocked (CORS)" : "Ollama is not running"}</div>
+    <div class="ollama-guide-header">${icon("alert")}${isCors ? "Ollama is blocking the extension" : "Ollama isn't running"}</div>
     <p class="ollama-guide-desc">${
       isCors
         ? "Ollama is running but blocking browser extension requests. Restart it with the <code>OLLAMA_ORIGINS</code> flag:"
-        : "Start Ollama in your terminal, then press Send again."
+        : "Start Ollama in your terminal, then press Send again:"
     }</p>
 
     <div class="cmd-block">
       <span class="cmd-os">macOS / Linux</span>
       <div class="cmd-row">
         <code class="cmd-code">OLLAMA_ORIGINS='*' ollama serve</code>
-        <button class="copy-btn" data-cmd="OLLAMA_ORIGINS='*' ollama serve">Copy</button>
+        <button class="copy-btn" data-cmd="OLLAMA_ORIGINS='*' ollama serve">${icon("copy", "icon-sm")}Copy</button>
       </div>
     </div>
 
@@ -1182,12 +1286,12 @@ function showOllamaGuide(reason, retryQuery) {
       <span class="cmd-os">Windows (PowerShell)</span>
       <div class="cmd-row">
         <code class="cmd-code">$env:OLLAMA_ORIGINS='*'; ollama serve</code>
-        <button class="copy-btn" data-cmd="$env:OLLAMA_ORIGINS='*'; ollama serve">Copy</button>
+        <button class="copy-btn" data-cmd="$env:OLLAMA_ORIGINS='*'; ollama serve">${icon("copy", "icon-sm")}Copy</button>
       </div>
     </div>
 
-    ${!isCors ? `<p class="ollama-guide-link">Not installed? → <a href="https://ollama.com" target="_blank">ollama.com</a></p>` : ""}
-    <p class="ollama-guide-ready">✓ Your message has been restored below — just press Send once Ollama is running.</p>
+    ${!isCors ? `<p class="ollama-guide-link">Not installed? Get it at <a href="https://ollama.com" target="_blank">ollama.com</a></p>` : ""}
+    <p class="ollama-guide-ready">Your message is back in the box below — press Send once Ollama is up.</p>
   `;
 
   history.appendChild(card);
@@ -1197,8 +1301,8 @@ function showOllamaGuide(reason, retryQuery) {
   card.querySelectorAll(".copy-btn").forEach(btn => {
     btn.addEventListener("click", () => {
       navigator.clipboard.writeText(btn.dataset.cmd).then(() => {
-        btn.textContent = "Copied!";
-        setTimeout(() => { btn.textContent = "Copy"; }, 2000);
+        btn.innerHTML = `${icon("check", "icon-sm")}Copied`;
+        setTimeout(() => { btn.innerHTML = `${icon("copy", "icon-sm")}Copy`; }, 2000);
       });
     });
   });
@@ -1207,6 +1311,7 @@ function showOllamaGuide(reason, retryQuery) {
   if (retryQuery) {
     const input = document.getElementById("chat-input");
     input.value = retryQuery;
+    autosizeChatInput();
     input.focus();
   }
 }
@@ -1311,8 +1416,9 @@ function initSettingsTab() {
     const configured = aiProvider === "ollama" || !!aiApiKey;
     badge.textContent = configured
       ? `Active: ${names[aiProvider] || aiProvider}`
-      : "Not configured — choose a provider below";
-    badge.style.color = configured ? "#3fb950" : "#f0883e";
+      : "Not configured — choose a provider";
+    badge.classList.toggle("is-ok", configured);
+    badge.classList.toggle("is-warn", !configured);
 
     // Quick Start banner: show only when nothing is configured
     if (banner) banner.style.display = configured ? "none" : "flex";
@@ -1425,9 +1531,10 @@ function maskApiKey(key) {
 
 function showSpStatus(elementId, msg, isError = false) {
   const el = document.getElementById(elementId);
-  el.textContent  = msg;
-  el.style.color  = isError ? "#f85149" : "#3fb950";
-  setTimeout(() => { el.textContent = ""; }, 3000);
+  el.textContent = msg;
+  el.classList.toggle("is-error", isError);
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => { el.textContent = ""; }, 3000);
 }
 
 // ── Ollama model pull ─────────────────────────────────────────────────────────
@@ -1776,30 +1883,35 @@ function renderMarkdown(text) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
 
-  // Fenced code blocks
-  html = html.replace(/```[\w]*\n([\s\S]*?)```/g, "<pre><code>$1</code></pre>");
-  // Inline code
-  html = html.replace(/`([^`\n]+)`/g, "<code>$1</code>");
-  // Bold
-  html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
-  // Italic
-  html = html.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+  // Pull code blocks out first so nothing below rewrites their contents. An
+  // unclosed fence (mid-stream) is treated as code too, so it doesn't flash as prose.
+  const blocks = [];
+  const stash = (code) => `\u0000${blocks.push(`<pre><code>${code.replace(/\n$/, "")}</code></pre>`) - 1}\u0000`;
+  html = html.replace(/```[\w+-]*\n([\s\S]*?)```/g, (_, code) => stash(code));
+  html = html.replace(/```[\w+-]*\n([\s\S]*)$/, (_, code) => stash(code));
+
   // Headings
   html = html.replace(/^#### (.+)$/gm, "<h5>$1</h5>");
   html = html.replace(/^### (.+)$/gm, "<h4>$1</h4>");
   html = html.replace(/^## (.+)$/gm, "<h3>$1</h3>");
   html = html.replace(/^# (.+)$/gm, "<h2>$1</h2>");
-  // Unordered list items
-  html = html.replace(/^[\-\*] (.+)$/gm, "<li>$1</li>");
+  // Lists — before emphasis, so a "* item" bullet isn't read as italics
+  html = html.replace(/^\s*[-*] (.+)$/gm, "<li>$1</li>");
   html = html.replace(/(<li>[\s\S]*?<\/li>\n?)+/g, (m) => `<ul>${m}</ul>`);
-  // Numbered list items
-  html = html.replace(/^\d+\. (.+)$/gm, "<li>$1</li>");
+  html = html.replace(/^\s*\d+[.)] (.+)$/gm, "<oli>$1</oli>");
+  html = html.replace(/(<oli>[\s\S]*?<\/oli>\n?)+/g, (m) => `<ol>${m.replace(/<(\/?)oli>/g, "<$1li>")}</ol>`);
+  // Inline code, bold, italic
+  html = html.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
   // Links
   html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s"]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-  // Paragraph breaks
-  html = html.replace(/\n\n/g, "<br><br>");
+  // Paragraph breaks — but block elements already carry their own spacing
+  html = html.replace(/\n{2,}/g, "<br><br>");
+  html = html.replace(/(?:<br>\s*)+(?=<(?:h[2-5]|ul|ol)|\u0000)/g, "");
+  html = html.replace(/(<\/(?:h[2-5]|ul|ol)>|\u0000\d+\u0000)\s*(?:<br>\s*)+/g, "$1");
 
-  return html;
+  return html.replace(/\u0000(\d+)\u0000/g, (_, i) => blocks[i]);
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────

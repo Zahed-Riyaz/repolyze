@@ -32,10 +32,12 @@ A Chrome extension that gives you an AI-powered side panel for any GitHub reposi
 |---|---|
 | **Issues** | Lists open, unassigned issues. Filter by `good first issue` or `help wanted` — label spelling variants (`good-first-issue`, `first-timers-only`, `beginner`, …) are matched too. |
 | **Stack** | Shows languages used (from GitHub's language breakdown) with percentage bars. |
-| **Maintainers** | Top contributors by commit count with avatars. |
+| **People** | Top contributors by commit count, with each one's share of commits. |
 | **Contribute** | Repo health card (has README? CONTRIBUTING? license? recent activity?), open PRs, and an AI-generated "Getting Started as a Contributor" guide. |
 | **Chat** | Multi-turn chat grounded in the repo's key files (README, CONTRIBUTING, package.json, etc.) and its file tree. |
-| **Settings ⚙** | Switch AI provider, enter/rotate API keys, configure Ollama model, and set a GitHub token — all without leaving the panel. |
+| **Settings** (gear icon in the header) | Switch AI provider, enter/rotate API keys, configure Ollama model, and set a GitHub token — all without leaving the panel. |
+
+The UI follows your system's light/dark setting, shows skeleton placeholders while data loads, and keeps the chat input pinned while the conversation scrolls.
 
 ---
 
@@ -65,7 +67,8 @@ github-repo-analyzer/
 ├── background.js       # Service worker: opens side panel when toolbar icon is clicked
 ├── sidepanel.html      # Side panel UI markup (tabs, chat, settings)
 ├── sidepanel.js        # All side panel logic (~1800 lines) — the core of the extension
-├── styles.css          # All styling for the side panel
+├── theme.css           # Design tokens (light + dark), base styles and shared controls — used by both pages
+├── styles.css          # Side panel layout and components
 ├── options.html        # Standalone settings page (mirrors the in-panel ⚙ tab)
 └── options.js          # Logic for the standalone settings page
 ```
@@ -329,7 +332,7 @@ repoCache["owner/repo"] = {
 
 1. Navigate to any GitHub repository page (e.g. `https://github.com/owner/repo`).
 2. Click the extension icon — the side panel opens on the right.
-3. The **⚙ Settings tab** opens automatically on first launch.
+3. **Settings** (the gear icon, top right) opens automatically on first launch.
 4. Choose an AI provider, enter your key, and click **Save**.
 5. Optionally add a **GitHub Token** to raise the API rate limit from 60 to 5,000 requests/hour.
 
