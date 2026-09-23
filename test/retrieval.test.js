@@ -106,7 +106,7 @@ function repoPanel({ ai, raw = RAW, repoData = { default_branch: "main" }, route
 
 test("repo context is found through the tree: no 404 probing, CONTRIBUTING in .github, test workflow preferred", async () => {
   const { gh, panel } = repoPanel();
-  const ctx = await panel.fn.getDeepRepoContext();
+  const ctx = (await panel.fn.getRepoContextParts()).map(p => `=== ${p.label} ===\n${p.text}`).join("\n\n");
   assert.match(ctx, /=== README ===\n# Rocket/);
   assert.match(ctx, /=== CONTRIBUTING ===\nRun npm test/);
   assert.match(ctx, /=== package\.json ===/);
@@ -175,6 +175,6 @@ test("private repos read files through the contents API instead of raw", async (
 test("a rate-limited tree surfaces as a rate-limit error instead of an empty context", async () => {
   const { panel } = repoPanel({ routes: { "/git/trees/HEAD?recursive=1": json({ message: "API rate limit exceeded" }, {
     status: 403, headers: { "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": String(Math.floor(Date.now() / 1000) + 600) } }) } });
-  const err = await panel.fn.getDeepRepoContext().catch(e => e);
+  const err = await panel.fn.getRepoContextParts().catch(e => e);
   assert.equal(err.rateLimited, true);
 });

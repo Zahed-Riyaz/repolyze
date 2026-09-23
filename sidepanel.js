@@ -69,8 +69,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   chatInput.addEventListener("input", autosizeChatInput);
   document.getElementById("clear-chat-btn").addEventListener("click", clearChat);
 
-  // Quickstart generator
+  // Local setup guide
   document.getElementById("gen-quickstart-btn").addEventListener("click", generateQuickstart);
+  document.getElementById("quickstart-content").addEventListener("click", copyCodeBlock);
 
   // Load saved settings — also migrate legacy geminiApiKey → aiApiKey
   const stored = await chrome.storage.local.get(["githubToken", "aiProvider", "aiApiKey", "ollamaModel", "geminiApiKey"]);
@@ -191,6 +192,21 @@ function errorState(err, tag = "li") {
     return stateItem(`Paused until <strong>${formatTime(err.resetAt)}</strong> — GitHub's hourly limit is used up.`, { iconName: "clock", tag });
   }
   return stateItem(escapeHtml(err?.message || "Something went wrong."), { error: true, tag });
+}
+
+// Adds a Copy button to each rendered code block (see copyCodeBlock)
+function withCodeCopy(html) {
+  return html.replace(/<pre><code>([\s\S]*?)<\/code><\/pre>/g,
+    `<div class="code-wrap"><pre><code>$1</code></pre><button class="copy-btn code-copy" title="Copy">${icon("copy", "icon-sm")}Copy</button></div>`);
+}
+
+function copyCodeBlock(e) {
+  const btn = e.target.closest?.(".code-copy");
+  if (!btn) return;
+  navigator.clipboard.writeText(btn.previousElementSibling.textContent).then(() => {
+    btn.innerHTML = `${icon("check", "icon-sm")}Copied`;
+    setTimeout(() => { btn.innerHTML = `${icon("copy", "icon-sm")}Copy`; }, 1500);
+  });
 }
 
 // Ask GitHub for an appropriately sized avatar instead of the full-size image
@@ -1178,7 +1194,7 @@ async function fetchContributeTab() {
     qsContent.innerHTML = "";
     qsBtn.style.display = "";
     qsBtn.disabled = false;
-    qsBtn.innerHTML = `${icon("sparkles")}Generate with AI`;
+    qsBtn.innerHTML = `${icon("sparkles")}Generate setup steps`;
   }
 
   let health = Promise.resolve(true);
@@ -1314,7 +1330,7 @@ async function generateQuickstart() {
   const content = document.getElementById("quickstart-content");
 
   if (repoCache[cacheKey]?.quickstart) {
-    content.innerHTML = renderMarkdown(repoCache[cacheKey].quickstart);
+    content.innerHTML = withCodeCopy(renderMarkdown(repoCache[cacheKey].quickstart));
     btn.style.display = "none";
     return;
   }
@@ -1329,26 +1345,17 @@ async function generateQuickstart() {
   }
 
   btn.disabled = true;
-  btn.innerHTML = `${icon("sparkles")}Generating…`;
+  btn.innerHTML = `${icon("sparkles")}Writing setup steps…`;
   content.innerHTML = "";
 
   try {
-    const context = await getDeepRepoContext();
-    const { owner, repo } = repoRef;
-    const prompt = `You are a helpful open-source contributor guide writer.
-
-Generate a concise, practical "Getting Started as a Contributor" guide for the repository "${owner}/${repo}".
-
-Include these sections (use markdown headers and bullet points):
-1. **Prerequisites** – what to install/know
-2. **Fork & Clone** – the exact git commands
-3. **Set Up Dev Environment** – based on the config files provided
-4. **Run Tests** – based on scripts or test commands found in context
-5. **Submit a PR** – branching, commit, PR steps
-
-Keep it to the point. Use markdown code blocks for commands. Base it on this repository context:
-
-${context}`;
+    // Setup-relevant files + the commands CI runs — no file tree or source code,
+    // so the result is a runbook rather than an analysis of the project
+    const [{ context }, ciCommands] = await Promise.all([
+      buildSetupContext(repoRef),
+      loadVerifyCommands(repoRef).catch(() => []),
+    ]);
+    const prompt = setupGuidePrompt(repoRef, context, ciCommands);
 
     // Stream tokens directly into the content area for a premium feel
     const result = await callAIStreaming([{ role: "user", parts: [{ text: prompt }] }], (partial) => {
@@ -1357,7 +1364,7 @@ ${context}`;
 
     cacheFor(cacheKey).quickstart = result;
     if (!isCurrentRepo(cacheKey)) return;
-    content.innerHTML = renderMarkdown(result);
+    content.innerHTML = withCodeCopy(renderMarkdown(result));
     btn.style.display = "none";
   } catch (err) {
     if (!isCurrentRepo(cacheKey)) return;

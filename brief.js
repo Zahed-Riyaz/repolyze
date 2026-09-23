@@ -3,7 +3,7 @@
 //   • Is it free?      assignees, PRs that reference it, "I'll take this" comments
 //   • What / where / plan   AI summary grounded in the repo's code (cited)
 //   • Who to ask       CODEOWNERS for the files involved + maintainers in the thread
-//   • How to verify    commands from the CI workflow and package.json scripts
+//   • Run before opening a PR   the checks CI will run (workflow + package.json)
 // Everything except the AI section is deterministic and shows instantly.
 // Cost: 2 API requests (issue comments + timeline); files come from raw reads.
 
@@ -217,7 +217,7 @@ function briefMarkdown(repo, issue, brief) {
     for (const p of people.inThread) lines.push(`- @${p.login} — replied ${p.replies}× in this thread`);
   }
   if (brief.commands.length) {
-    lines.push("", "## How to verify", "```bash", ...brief.commands.map(c => c.cmd), "```");
+    lines.push("", "## Run before opening a PR", "```bash", ...brief.commands.map(c => c.cmd), "```");
   }
   return lines.join("\n");
 }
@@ -343,7 +343,7 @@ function renderBrief(repo, issue, brief) {
       <div id="brief-people"><p class="brief-note">Working out which files are involved…</p></div>
     </section>
     <section class="brief-section">
-      <h2 class="section-title">How to verify</h2>
+      <h2 class="section-title">Run before opening a PR</h2>
       ${commands}
     </section>`;
   if (brief.ai) renderBriefAI(repo, brief);

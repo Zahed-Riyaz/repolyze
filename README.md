@@ -1,6 +1,6 @@
 # GitHub Repo Analyzer & RAG Chat
 
-A Chrome extension that gives you an AI-powered side panel for any GitHub repository — browse issues, inspect the tech stack, see top contributors, generate a contributor quickstart guide, and chat with an AI that has read the repo's key files and file tree.
+A Chrome extension that gives you an AI-powered side panel for any GitHub repository — browse issues, inspect the tech stack, see top contributors, get step-by-step local setup instructions, start any issue with a brief, and chat with an AI that reads the repo's source code.
 
 ---
 
@@ -31,10 +31,10 @@ A Chrome extension that gives you an AI-powered side panel for any GitHub reposi
 | Tab | What it does |
 |---|---|
 | **Issues** | Open issues with sort (most discussed / newest / recently updated) and paging. **Good first** and **Help wanted** search *every* open issue using the repo's real label names (`good-first-issue`, `E-easy`, `first-timers-only`, …) and show the total. **Unclaimed** hides assigned issues and, for label filters, ones with a linked PR — and says so when that hides everything. |
-| **Start this issue** | Every issue card opens a brief: **is it free?** (assignees, open/merged/closed PRs that reference it, "I'll take this" comments, whether a maintainer has replied), **what's being asked, where to start and a plan** (AI, citing the code as `path:line`), **who to ask** (CODEOWNERS for the files involved + maintainers in the thread) and **how to verify** (commands from the CI workflow and `package.json`). Works without an AI key too — availability, likely files, owners and commands are all deterministic. Costs 2 API requests. |
+| **Start this issue** | Every issue card opens a brief: **is it free?** (assignees, open/merged/closed PRs that reference it, "I'll take this" comments, whether a maintainer has replied), **what's being asked, where to start and a plan** (AI, citing the code as `path:line`), **who to ask** (CODEOWNERS for the files involved + maintainers in the thread) and **what to run before opening a PR** (the checks CI will run, from the workflow and `package.json`). Works without an AI key too — availability, likely files, owners and commands are all deterministic. Costs 2 API requests. |
 | **Stack** | Shows languages used (from GitHub's language breakdown) with percentage bars. |
 | **Maintainers** | **Active maintainers**: people GitHub marks as owner / org member / collaborator who actually replied on issues or PRs in the last 90 days, ranked by threads answered, merged with `CODEOWNERS` (including code-owner teams). All-time top committers are listed below for context. |
-| **Contribute** | A contributor-friendliness score built from measured signals — each shown with what it measured (see [Health Score](#health-score)) — plus open PRs and an AI-generated "Getting Started as a Contributor" guide. |
+| **Contribute** | A contributor-friendliness score built from measured signals — each shown with what it measured (see [Health Score](#health-score)) — plus open PRs and **Set up locally**: an AI-written runbook (prerequisites, install, configure, run, test) where every command comes from a named repo file — README, manifests, version pins, `.env.example`, Docker Compose, CI. It doesn't describe the project; that's what Chat is for. |
 | **Chat** | Multi-turn chat that reads the repo's **actual source code** for each question and cites it as `path:line`, with links to the exact lines on GitHub (see [Chat Retrieval](#chat-retrieval)). |
 | **Settings** (gear icon in the header) | Switch AI provider, enter/rotate API keys, configure Ollama model, and set a GitHub token — all without leaving the panel. |
 
@@ -307,7 +307,7 @@ repoCache["owner/repo"] = {
   contributors: [ ... ],  // top contributors
   health:       { ... },  // README/CONTRIBUTING/license checks
   prs:          [ ... ],  // recent open PRs
-  quickstart:   "...",    // AI-generated quickstart guide text
+  quickstart:   "...",    // AI-generated local setup steps
   context:      "...",    // concatenated files + file tree sent with chat
 }
 ```

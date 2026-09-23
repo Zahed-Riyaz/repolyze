@@ -1105,3 +1105,8 @@ a.cite:hover code { background: var(--accent-subtle); }
 .brief-files code { font-size: 12px; }
 .brief-section .cmd-row + .cmd-row { margin-top: 6px; }
 .team-avatar { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--bg-subtle); color: var(--fg-muted); flex-shrink: 0; }
+
+/* Copy button on rendered code blocks (setup guide) */
+.code-wrap { position: relative; }
+.code-wrap .code-copy { position: absolute; top: 6px; right: 6px; height: 24px; opacity: 0; transition: opacity var(--dur); }
+.code-wrap:hover .code-copy, .code-wrap .code-copy:focus-visible { opacity: 1; }

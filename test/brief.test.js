@@ -146,7 +146,7 @@ test("briefMarkdown produces a shareable summary", () => {
   assert.match(md, /\*\*Looks free\*\*/);
   assert.match(md, /## What's being asked\nFix the drift\./);
   assert.match(md, /- @ada — code owner of src\/launch\/timer\.ts/);
-  assert.match(md, /```bash\nnpm test\n```/);
+  assert.match(md, /## Run before opening a PR\n```bash\nnpm test\n```/);
 });
 
 test("issueBriefPrompt includes the issue, discussion, availability and asks for cited sections", () => {
@@ -193,7 +193,7 @@ test("the brief renders availability, a cited AI plan, code owners and verify co
 
   const body = panel.el("brief-body").innerHTML;
   assert.match(body, /availability-free[\s\S]*Looks free/);
-  assert.match(body, /npm test/);
+  assert.match(body, /Run before opening a PR[\s\S]*npm test/);
   assert.match(body, /From <code>\.github\/workflows\/test\.yml<\/code>/);
   const ai = panel.el("brief-ai").innerHTML;
   assert.match(ai, /<h3>Where to start<\/h3>/);

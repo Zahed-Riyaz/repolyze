@@ -46,7 +46,7 @@ function openRepo({ routes, raw = { "README.md": "# Rockets", ".github/CODEOWNER
 async function visitAllTabs(panel) {
   await panel.fn.updateRepoInfo(); await tick(5);
   for (const tab of ["tech", "maintainers", "contribute"]) { panel.fn.switchTab(tab); await tick(5); }
-  await panel.fn.getDeepRepoContext();
+  await panel.fn.getRepoContextParts();
 }
 
 // ── Request budget ───────────────────────────────────────────────────────────
@@ -62,7 +62,7 @@ test("a full visit stays within budget, chat costs no API requests, and reopenin
   const coreCalls = first.gh.apiCalls.filter(u => !u.startsWith("/search/"));
   assert.ok(coreCalls.length <= 13, `too many API requests on a first visit (${coreCalls.length}):\n${coreCalls.join("\n")}`);
   const beforeChat = first.gh.apiCalls.length;
-  await first.panel.fn.getDeepRepoContext();
+  await first.panel.fn.getRepoContextParts();
   assert.equal(first.gh.apiCalls.length, beforeChat, "chat context re-uses the tree and raw files");
 
   const session = structuredClone(first.panel.chrome.storage.session.data);
