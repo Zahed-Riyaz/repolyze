@@ -31,6 +31,7 @@ A Chrome extension that gives you an AI-powered side panel for any GitHub reposi
 | Tab | What it does |
 |---|---|
 | **Issues** | Open issues with sort (most discussed / newest / recently updated) and paging. **Good first** and **Help wanted** search *every* open issue using the repo's real label names (`good-first-issue`, `E-easy`, `first-timers-only`, …) and show the total. **Unclaimed** hides assigned issues and, for label filters, ones with a linked PR — and says so when that hides everything. |
+| **Start this issue** | Every issue card opens a brief: **is it free?** (assignees, open/merged/closed PRs that reference it, "I'll take this" comments, whether a maintainer has replied), **what's being asked, where to start and a plan** (AI, citing the code as `path:line`), **who to ask** (CODEOWNERS for the files involved + maintainers in the thread) and **how to verify** (commands from the CI workflow and `package.json`). Works without an AI key too — availability, likely files, owners and commands are all deterministic. Costs 2 API requests. |
 | **Stack** | Shows languages used (from GitHub's language breakdown) with percentage bars. |
 | **Maintainers** | **Active maintainers**: people GitHub marks as owner / org member / collaborator who actually replied on issues or PRs in the last 90 days, ranked by threads answered, merged with `CODEOWNERS` (including code-owner teams). All-time top committers are listed below for context. |
 | **Contribute** | A contributor-friendliness score built from measured signals — each shown with what it measured (see [Health Score](#health-score)) — plus open PRs and an AI-generated "Getting Started as a Contributor" guide. |
@@ -69,6 +70,7 @@ github-repo-analyzer/
 ├── sidepanel.js        # Side panel UI, GitHub API layer, AI providers, chat, settings
 ├── retrieval.js        # Reading the repo: file tree, raw file reads, chat code retrieval
 ├── insights.js         # Maintainers, health signals & scoring, beginner-issue search
+├── brief.js            # "Start this issue" brief: availability, owners, verify commands, AI plan
 ├── test/               # Node tests (see Running Tests) — not needed by Chrome
 ├── package.json        # `npm test` / `npm run check` — no dependencies
 ├── theme.css           # Design tokens (light + dark), base styles and shared controls — used by both pages
@@ -329,11 +331,11 @@ A token (no scopes needed for public repos) raises the limit to 5,000/hour. It's
 ## Running Tests
 
 ```bash
-npm test          # 70 unit + flow tests, ~3s, no dependencies (Node 22+)
+npm test          # 91 unit + flow tests, ~3s, no dependencies (Node 22+)
 npm run check     # syntax-check every script
 ```
 
-The tests use Node's built-in runner. `test/helpers/panel.js` loads the real `retrieval.js`, `insights.js` and `sidepanel.js` — in the same order as `sidepanel.html` — with in-memory stand-ins for the DOM, `chrome.*` and `fetch`; `test/helpers/github-mock.js` is a fake GitHub (API routes, raw files, AI replies) that records every request. So the suites exercise the actual extension code:
+The tests use Node's built-in runner. `test/helpers/panel.js` loads the real `retrieval.js`, `insights.js`, `brief.js` and `sidepanel.js` — in the same order as `sidepanel.html` — with in-memory stand-ins for the DOM, `chrome.*` and `fetch`; `test/helpers/github-mock.js` is a fake GitHub (API routes, raw files, AI replies) that records every request. So the suites exercise the actual extension code:
 
 | File | Covers |
 |---|---|
@@ -341,6 +343,7 @@ The tests use Node's built-in runner. `test/helpers/panel.js` loads the real `re
 | `github-api.test.js` | Response cache, ETag revalidation, session persistence, primary / secondary / search rate limits, bad tokens, token scoping, PR sort order |
 | `retrieval.test.js` | File ranking, file picking, snippets, context budgets, chat context end-to-end, private repos |
 | `insights.test.js` | Maintainer detection, CODEOWNERS, response times, PR stats, health scoring |
+| `brief.test.js` | Code-owner matching, claim detection, availability verdicts, CI/package.json commands, the brief end-to-end (with and without AI), caching, stale-repo guards |
 | `panel-flows.test.js` | API request budgets, lazy tabs and retries, token recovery, stale-response guards, issue search, rendering, chat saving, token validation |
 
 GitHub Actions runs both commands on every push and pull request (`.github/workflows/test.yml`). When packaging for the Chrome Web Store, leave out `test/`, `package.json` and `.github/`.

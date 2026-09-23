@@ -1049,3 +1049,59 @@ kbd {
 a.cite { text-decoration: none; }
 a.cite code { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
 a.cite:hover code { background: var(--accent-subtle); }
+
+/* ── "Start this issue" ──────────────────────────────────────────────────── */
+.start-issue-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  padding: 3px 8px 3px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 500;
+  transition: background var(--dur), border-color var(--dur);
+}
+.start-issue-btn .icon:last-child { opacity: 0; transform: translateX(-3px); transition: opacity var(--dur), transform var(--dur) var(--ease); }
+.start-issue-btn:hover { background: var(--accent-subtle); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.start-issue-btn:hover .icon:last-child, .start-issue-btn:focus-visible .icon:last-child { opacity: 1; transform: none; }
+
+.issue-brief[hidden], #issues-browse[hidden] { display: none; }
+.issue-brief { animation: pane-in 180ms var(--ease); }
+.brief-topbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -4px 0 12px; }
+.brief-actions { display: flex; gap: 6px; }
+
+.brief-head { margin-bottom: 12px; }
+.brief-title { display: block; color: var(--fg); font-size: 15px; font-weight: 600; line-height: 1.35; }
+.brief-title:hover { color: var(--accent); text-decoration: none; }
+
+.availability { --tone: var(--success); --tone-subtle: var(--success-subtle); border-color: color-mix(in srgb, var(--tone) 35%, transparent); background: var(--tone-subtle); }
+.availability-maybe { --tone: var(--warning); --tone-subtle: var(--warning-subtle); }
+.availability-taken { --tone: var(--danger); --tone-subtle: var(--danger-subtle); }
+.availability-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 14px; }
+.availability-head strong { color: var(--tone); }
+.availability-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--tone); box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 20%, transparent); }
+
+.reason-list { display: flex; flex-direction: column; gap: 5px; margin-bottom: 8px; }
+.reason { display: flex; align-items: flex-start; gap: 6px; font-size: 12.5px; color: var(--fg); }
+.reason .icon { margin-top: 2px; }
+.reason a { color: inherit; text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 35%, transparent); }
+.reason-good .icon { color: var(--success); }
+.reason-bad .icon { color: var(--danger); }
+.reason-warn .icon { color: var(--warning); }
+.reason-info .icon { color: var(--fg-subtle); }
+
+.brief-section { margin-bottom: 18px; }
+.brief-note { margin: 6px 0 0; font-size: 12px; color: var(--fg-muted); }
+.brief-note code { font-size: 11px; padding: 0 4px; border-radius: 4px; background: var(--bg-subtle); }
+.brief-ai h3 { font-size: 12px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--fg-muted); margin: 18px 0 6px; }
+.brief-ai h3:first-child { margin-top: 0; }
+.brief-ai ol { margin: 6px 0; padding-left: 20px; }
+.brief-status { display: flex; align-items: center; gap: 8px; padding: 10px 0; font-size: 12px; color: var(--fg-muted); }
+.brief-files { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.brief-files code { font-size: 12px; }
+.brief-section .cmd-row + .cmd-row { margin-top: 6px; }
+.team-avatar { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--bg-subtle); color: var(--fg-muted); flex-shrink: 0; }

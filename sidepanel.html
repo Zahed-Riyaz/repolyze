@@ -128,6 +128,7 @@
       <main id="tab-content">
         <!-- Issues Tab -->
         <section id="issues-tab" class="tab-pane active">
+          <div id="issues-browse">
           <div class="pane-head">
             <div class="segmented filter-bar" role="group" aria-label="Filter issues">
               <button class="filter-btn active" data-label="">All</button>
@@ -148,6 +149,19 @@
           <p id="issues-summary" class="issues-summary"></p>
           <ul id="issues-list" class="card-list"></ul>
           <button id="issues-more" class="btn btn-block issues-more" hidden>Load more</button>
+          </div>
+
+          <!-- "Start this issue" brief — filled in by brief.js -->
+          <div id="issue-brief" class="issue-brief" hidden>
+            <div class="brief-topbar">
+              <button id="brief-back" class="btn btn-ghost btn-xs"><svg class="icon icon-sm" style="transform:rotate(180deg)"><use href="#i-arrow-right"/></svg>Issues</button>
+              <div class="brief-actions">
+                <button id="brief-copy" class="btn btn-xs" title="Copy the brief as Markdown"><svg class="icon icon-sm"><use href="#i-copy"/></svg>Copy</button>
+                <button id="brief-ask" class="btn btn-xs" title="Ask a follow-up in Chat"><svg class="icon icon-sm"><use href="#i-chat"/></svg>Ask in chat</button>
+              </div>
+            </div>
+            <div id="brief-body"></div>
+          </div>
         </section>
 
         <!-- Tech Stack Tab -->
@@ -272,6 +286,7 @@
   </div>
   <script src="retrieval.js"></script>
   <script src="insights.js"></script>
+  <script src="brief.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

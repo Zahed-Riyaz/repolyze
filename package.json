@@ -4,7 +4,7 @@
   "description": "Chrome side panel for exploring GitHub repositories as a contributor",
   "scripts": {
     "test": "node --test \"test/*.test.js\"",
-    "check": "node --check sidepanel.js && node --check retrieval.js && node --check insights.js && node --check options.js && node --check background.js"
+    "check": "node --check sidepanel.js && node --check retrieval.js && node --check insights.js && node --check brief.js && node --check options.js && node --check background.js"
   },
   "engines": {
     "node": ">=22"

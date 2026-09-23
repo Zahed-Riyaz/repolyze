@@ -50,6 +50,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("issue-unclaimed").addEventListener("change", (e) => setUnclaimed(e.target.checked));
   document.getElementById("issues-more").addEventListener("click", () => fetchIssues({ append: true }));
 
+  // "Start this issue" brief
+  document.getElementById("issues-list").addEventListener("click", (e) => {
+    const btn = e.target.closest?.(".start-issue-btn");
+    if (btn) openIssueBriefFromList(btn.dataset.issue);
+  });
+  document.getElementById("brief-back").addEventListener("click", closeIssueBrief);
+  document.getElementById("brief-copy").addEventListener("click", copyBrief);
+  document.getElementById("brief-ask").addEventListener("click", askAboutIssue);
+  document.getElementById("brief-body").addEventListener("click", handleBriefClick);
+
   // Chat controls
   document.getElementById("send-btn").addEventListener("click", () => { handleChat(); });
   const chatInput = document.getElementById("chat-input");
@@ -251,6 +261,10 @@ async function updateRepoInfo() {
   document.getElementById("repo-forks").textContent = "—";
   document.getElementById("repo-license-wrap").hidden = true;
   document.getElementById("repo-fork-badge").style.display = "none";
+
+  // A brief belongs to the repo it was opened on
+  closeIssueBrief();
+  issueIndex.clear();
 
   // New repo starts on "All" (sort and unclaimed preferences carry over)
   issueView.filter = "";
@@ -717,6 +731,7 @@ function renderIssueList(state, view) {
     return;
   }
 
+  state.items.forEach(i => issueIndex.set(i.number, i));
   list.innerHTML = state.items.map(issueCard).join("");
   more.hidden = !state.hasMore;
   more.disabled = false;
@@ -739,6 +754,7 @@ function issueCard(issue) {
         <span class="issue-age">${daysAgo(issue.created_at)}</span>
       </div>
       ${labelsHtml ? `<div class="issue-labels">${labelsHtml}</div>` : ""}
+      <button class="start-issue-btn" data-issue="${issue.number}">${icon("bolt", "icon-sm")}Start this issue${icon("arrow-right", "icon-sm")}</button>
     </li>`;
 }
 
