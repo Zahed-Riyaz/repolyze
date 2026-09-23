@@ -109,15 +109,11 @@ GitHub Repo Analyzer is a Chrome side-panel extension that surfaces actionable i
     \endfoot
 
     \texttt{manifest.json} & Config &
-        Declares extension metadata, all permissions (\texttt{sidePanel}, \texttt{tabs}, \texttt{storage}), content-script injection, and host permissions for GitHub + five AI provider APIs. \\
+        Declares extension metadata, all permissions (\texttt{sidePanel}, \texttt{tabs}, \texttt{storage}) and host permissions for GitHub + five AI provider APIs. \\
     \addlinespace
 
     \texttt{background.js} & Service Worker &
         Enables the side panel to open on toolbar-icon click via \texttt{sidePanel.setPanelBehavior}; logs extension installation. \\
-    \addlinespace
-
-    \texttt{content.js} & Content Script &
-        Runs inside every GitHub tab; parses \texttt{owner/repo} from the URL path and broadcasts it via \texttt{chrome.runtime.sendMessage}. \\
     \addlinespace
 
     \texttt{sidepanel.html} & UI Markup &
@@ -138,14 +134,7 @@ GitHub Repo Analyzer is a Chrome side-panel extension that surfaces actionable i
 
     \texttt{styles.css} & Styling &
         All CSS for the side panel: dark GitHub-like theme, tab layout, chat bubbles, streaming cursor animation, health card, and tool-category grid. \\
-    \addlinespace
 
-    \texttt{popup.html} & Unused &
-        Empty placeholder; the extension uses a side panel instead of a browser-action popup. \\
-    \addlinespace
-
-    \texttt{popup.js} & Unused &
-        Empty placeholder; no popup logic is needed. \\
 
 \end{longtable}
 
@@ -401,10 +390,10 @@ When a user sends a chat message, \texttt{getDeepRepoContext()} fetches the foll
     \addlinespace
     \texttt{Makefile} & 1,500 & Build targets and developer scripts. \\
     \addlinespace
-    Root directory listing & N/A & File names only; reveals project structure. \\
+    File tree (\texttt{git/trees/HEAD?recursive=1}) & 5,000 & Paths up to four levels deep, excluding build/vendor directories; reveals project structure. \\
 \end{longtable}
 
-Content is returned as base64-encoded strings from the GitHub API and decoded with \texttt{atob()}. The entire result is \textbf{cached in the session-scoped \texttt{repoCache}} object so subsequent messages in the same session reuse the context without additional API calls.
+Content is returned as base64-encoded strings from the GitHub API and decoded as UTF-8 (\texttt{atob()} to bytes, then \texttt{TextDecoder}), so non-ASCII text survives intact. The entire result is \textbf{cached in the session-scoped \texttt{repoCache}} object so subsequent messages in the same session reuse the context without additional API calls.
 
 \subsection{Augmentation Layer}
 
@@ -415,7 +404,7 @@ The retrieved documents are assembled into a structured context string inside \t
 parts.push(`=== README ===\n${readmeText.slice(0, 3000)}`);
 parts.push(`=== CONTRIBUTING.md ===\n${contribText.slice(0, 1500)}`);
 // ... other files ...
-parts.push(`=== Root Files ===\n${rootFiles.join(", ")}`);
+parts.push(`=== File Tree ===\n${fileTree}`);
 const context = parts.join("\n\n");
 
 // Injection into system prompt
@@ -442,10 +431,10 @@ The augmented prompt is sent to the chosen AI provider via \texttt{callAIStreami
     \bottomrule
     \endfoot
 
-    Gemini  & \texttt{gemini-2.0-flash}           & SSE (\texttt{?alt=sse}) & 1M tokens \\
+    Gemini  & \texttt{gemini-2.5-flash}           & SSE (\texttt{?alt=sse}) & 1M tokens \\
     Groq    & \texttt{llama-3.3-70b-versatile}    & OpenAI SSE              & 128k tokens \\
     OpenAI  & \texttt{gpt-4o-mini}                & OpenAI SSE              & 128k tokens \\
-    Anthropic & \texttt{claude-3-5-haiku-20241022} & Anthropic SSE          & 200k tokens \\
+    Anthropic & \texttt{claude-haiku-4-5-20251001} & Anthropic SSE          & 200k tokens \\
     Ollama  & Configurable (\texttt{llama3.2})    & NDJSON stream           & Model-dependent \\
 \end{longtable}
 
@@ -471,7 +460,8 @@ The trade-off is that very large READMEs are truncated at 3,000 characters and d
 GitHub repo URL (github.com/owner/repo)
         |
         v
-  content.js detects URL change
+  sidepanel.js: chrome.tabs onUpdated / onActivated
+  (active tab of the panel's window only)
         |
         v
   sidepanel.js: handleRepoRefresh()

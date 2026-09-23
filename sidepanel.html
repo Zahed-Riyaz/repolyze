@@ -4,37 +4,47 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GitHub Repo Analyzer</title>
+  <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-  <!-- ── Animated splash — shown on every open, auto-dismisses in 2s ───────── -->
-  <div id="welcome-splash">
-    <div class="splash-inner">
-      <div class="splash-glow"></div>
-      <svg class="splash-logo" xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 34 34" aria-hidden="true">
-        <rect width="34" height="34" rx="7" fill="#161b22" stroke="#30363d" stroke-width="1"/>
-        <rect width="34" height="11" rx="7" fill="#21262d"/>
-        <rect y="8" width="34" height="3" fill="#21262d"/>
-        <circle cx="7"  cy="5.5" r="1.9" fill="#f85149"/>
-        <circle cx="13" cy="5.5" r="1.9" fill="#e3b341"/>
-        <circle cx="19" cy="5.5" r="1.9" fill="#3fb950"/>
-        <text x="4" y="26" font-family="'SF Mono','Fira Code',Consolas,monospace" font-size="10.5" font-weight="700" fill="#58a6ff">&lt;/&gt;</text>
-        <rect class="splash-cursor" x="25" y="21.5" width="5" height="2" rx="1" fill="#3fb950"/>
-      </svg>
-      <h1 class="splash-title">GitHub Repo Analyzer</h1>
-      <p class="splash-sub">Your AI co-pilot for open source</p>
-      <div class="splash-bar-track"><div class="splash-bar-fill"></div></div>
-      <p class="splash-hint">click anywhere to skip</p>
-    </div>
-  </div>
+  <!-- Icon sprite — referenced as <svg class="icon"><use href="#i-name"/></svg> -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+    <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></symbol>
+    <symbol id="i-fork" viewBox="0 0 24 24"><circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9M12 12v3"/></symbol>
+    <symbol id="i-scale" viewBox="0 0 24 24"><path d="M12 3v18M7 21h10M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/><path d="M16 16l3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1zM2 16l3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1z"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
+    <symbol id="i-issue" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="1.5"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+    <symbol id="i-pr" viewBox="0 0 24 24"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7M6 9v12"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+    <symbol id="i-comment" viewBox="0 0 24 24"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22z"/></symbol>
+    <symbol id="i-heart" viewBox="0 0 24 24"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7z"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></symbol>
+    <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3zM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8L19 16z"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></symbol>
+    <symbol id="i-merge" viewBox="0 0 24 24"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></symbol>
+    <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
+    <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></symbol>
+  </svg>
 
   <div id="container">
-    <header>
+    <header id="app-header">
       <div id="header-brand">
-        <svg id="ext-logo" xmlns="http://www.w3.org/2000/svg" width="34" height="34" viewBox="0 0 34 34" aria-hidden="true">
-          <rect width="34" height="34" rx="7" fill="#161b22" stroke="#30363d" stroke-width="1"/>
-          <rect width="34" height="11" rx="7" fill="#21262d"/>
+        <svg id="ext-logo" xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 34 34" aria-hidden="true">
+          <rect width="34" height="34" rx="8" fill="#161b22"/>
+          <rect width="34" height="11" rx="8" fill="#21262d"/>
           <rect y="8" width="34" height="3" fill="#21262d"/>
           <circle cx="7"  cy="5.5" r="1.9" fill="#f85149"/>
           <circle cx="13" cy="5.5" r="1.9" fill="#e3b341"/>
@@ -43,24 +53,38 @@
           <rect id="logo-cursor" x="25" y="21.5" width="5" height="2" rx="1" fill="#3fb950"/>
         </svg>
         <div id="header-text">
+          <span class="app-title">GitHub Repo Analyzer</span>
           <h1 id="repo-name">GitHub Repo Analyzer</h1>
           <p id="repo-description"></p>
         </div>
+        <button class="tab-btn icon-btn" data-tab="settings" title="Settings" aria-label="Settings">
+          <svg class="icon"><use href="#i-settings"/></svg>
+        </button>
       </div>
       <div id="repo-meta">
-        <span id="repo-stars" title="Stars">⭐ —</span>
-        <span id="repo-forks" title="Forks">⑂ —</span>
-        <span id="repo-license"></span>
-        <span id="repo-fork-badge" class="repo-fork-badge" style="display:none"></span>
-        <span id="rate-limit-badge" title="GitHub API calls remaining this hour">API: —</span>
+        <span class="meta-item" title="Stars"><svg class="icon icon-sm"><use href="#i-star"/></svg><span id="repo-stars">—</span></span>
+        <span class="meta-item" title="Forks"><svg class="icon icon-sm"><use href="#i-fork"/></svg><span id="repo-forks">—</span></span>
+        <span class="meta-item" id="repo-license-wrap" title="License" hidden><svg class="icon icon-sm"><use href="#i-scale"/></svg><span id="repo-license"></span></span>
+        <span id="repo-fork-badge" class="meta-item repo-fork-badge" style="display:none"></span>
+        <span id="rate-limit-badge" class="meta-item" role="button" tabindex="0" title="GitHub API requests left this hour"><svg class="icon icon-sm"><use href="#i-activity"/></svg><span id="rate-limit-text">—</span></span>
       </div>
     </header>
 
+    <!-- Rate-limit / token banner — filled in by renderRateLimit() -->
+    <div id="rate-banner" class="rate-banner" role="status" hidden>
+      <svg class="icon"><use href="#i-clock"/></svg>
+      <div class="rate-banner-text">
+        <strong id="rate-banner-title"></strong>
+        <span id="rate-banner-sub"></span>
+      </div>
+      <button id="rate-banner-btn" class="btn btn-primary btn-xs" hidden></button>
+    </div>
+
     <div id="not-repo-msg" style="display:none">
       <div class="welcome-screen">
-        <svg class="welcome-logo" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 34 34" aria-hidden="true">
-          <rect width="34" height="34" rx="7" fill="#161b22" stroke="#30363d" stroke-width="1"/>
-          <rect width="34" height="11" rx="7" fill="#21262d"/>
+        <svg class="welcome-logo" xmlns="http://www.w3.org/2000/svg" width="52" height="52" viewBox="0 0 34 34" aria-hidden="true">
+          <rect width="34" height="34" rx="8" fill="#161b22"/>
+          <rect width="34" height="11" rx="8" fill="#21262d"/>
           <rect y="8" width="34" height="3" fill="#21262d"/>
           <circle cx="7"  cy="5.5" r="1.9" fill="#f85149"/>
           <circle cx="13" cy="5.5" r="1.9" fill="#e3b341"/>
@@ -68,160 +92,220 @@
           <text x="4" y="26" font-family="'SF Mono','Fira Code',Consolas,monospace" font-size="10.5" font-weight="700" fill="#58a6ff">&lt;/&gt;</text>
           <rect x="25" y="21.5" width="5" height="2" rx="1" fill="#3fb950"/>
         </svg>
-        <h2 class="welcome-title">GitHub Repo Analyzer</h2>
-        <p class="welcome-sub">Your AI co-pilot for open source</p>
+        <h2 class="welcome-title">Your co-pilot for open source</h2>
+        <p class="welcome-sub">Open any GitHub repository and this panel fills in automatically.</p>
         <div class="feature-grid">
           <div class="feature-card">
-            <span class="feature-icon">🐛</span>
-            <div><strong>Issues</strong><br>Find beginner-friendly issues instantly</div>
+            <span class="feature-icon"><svg class="icon"><use href="#i-issue"/></svg></span>
+            <div><strong>Issues</strong>Beginner-friendly work, filtered</div>
           </div>
           <div class="feature-card">
-            <span class="feature-icon">💬</span>
-            <div><strong>Chat</strong><br>Ask anything about the codebase</div>
+            <span class="feature-icon"><svg class="icon"><use href="#i-chat"/></svg></span>
+            <div><strong>Chat</strong>Ask anything about the repo</div>
           </div>
           <div class="feature-card">
-            <span class="feature-icon">📊</span>
-            <div><strong>Health</strong><br>Know if a repo is worth contributing to</div>
+            <span class="feature-icon"><svg class="icon"><use href="#i-pr"/></svg></span>
+            <div><strong>Health</strong>Is it worth contributing to?</div>
           </div>
           <div class="feature-card">
-            <span class="feature-icon">🗺</span>
-            <div><strong>Stack &amp; People</strong><br>Languages, contributors, open PRs</div>
+            <span class="feature-icon"><svg class="icon"><use href="#i-layers"/></svg></span>
+            <div><strong>Stack &amp; maintainers</strong>Languages, tools &amp; top contributors</div>
           </div>
         </div>
-        <p class="welcome-cta">Navigate to any <strong>GitHub repository</strong> to begin</p>
       </div>
     </div>
 
     <div id="main-content">
-      <div id="tabs">
-        <button class="tab-btn active" data-tab="issues">Issues</button>
-        <button class="tab-btn" data-tab="tech">Stack</button>
-        <button class="tab-btn" data-tab="maintainers">Maintainers</button>
-        <button class="tab-btn" data-tab="contribute">Contribute</button>
-        <button class="tab-btn" data-tab="chat">Chat</button>
-        <button class="tab-btn tab-btn-settings" data-tab="settings" title="Settings">⚙</button>
-      </div>
+      <nav id="tabs" role="tablist">
+        <button class="tab-btn active" data-tab="issues" role="tab"><svg class="icon icon-sm"><use href="#i-issue"/></svg>Issues</button>
+        <button class="tab-btn" data-tab="tech" role="tab"><svg class="icon icon-sm"><use href="#i-layers"/></svg>Stack</button>
+        <button class="tab-btn" data-tab="maintainers" role="tab"><svg class="icon icon-sm"><use href="#i-users"/></svg>Maintainers</button>
+        <button class="tab-btn" data-tab="contribute" role="tab"><svg class="icon icon-sm"><use href="#i-pr"/></svg>Contribute</button>
+        <button class="tab-btn" data-tab="chat" role="tab"><svg class="icon icon-sm"><use href="#i-chat"/></svg>Chat</button>
+        <span id="tab-indicator" aria-hidden="true"></span>
+      </nav>
 
       <main id="tab-content">
         <!-- Issues Tab -->
-        <div id="issues-tab" class="tab-pane active">
-          <p class="tab-subtitle">Open, unassigned issues — filter by beginner-friendly labels</p>
-          <div class="filter-bar">
-            <button class="filter-btn active" data-label="">All</button>
-            <button class="filter-btn" data-label="good-first-issue">Good First</button>
-            <button class="filter-btn" data-label="help-wanted">Help Wanted</button>
+        <section id="issues-tab" class="tab-pane active">
+          <div id="issues-browse">
+          <div class="pane-head">
+            <div class="segmented filter-bar" role="group" aria-label="Filter issues">
+              <button class="filter-btn active" data-label="">All</button>
+              <button class="filter-btn" data-label="good-first-issue">Good first</button>
+              <button class="filter-btn" data-label="help-wanted">Help wanted</button>
+            </div>
+            <div class="issue-controls">
+              <select id="issue-sort" class="select" aria-label="Sort issues">
+                <option value="comments">Most discussed</option>
+                <option value="created">Newest</option>
+                <option value="updated">Recently updated</option>
+              </select>
+              <label class="switch" title="Hide issues that are assigned (and, for label filters, ones with a linked PR)">
+                <input type="checkbox" id="issue-unclaimed" checked><span class="switch-track"></span>Unclaimed
+              </label>
+            </div>
           </div>
-          <ul id="issues-list"></ul>
-        </div>
+          <p id="issues-summary" class="issues-summary"></p>
+          <ul id="issues-list" class="card-list"></ul>
+          <button id="issues-more" class="btn btn-block issues-more" hidden>Load more</button>
+          </div>
+
+          <!-- "Start this issue" brief — filled in by brief.js -->
+          <div id="issue-brief" class="issue-brief" hidden>
+            <div class="brief-topbar">
+              <button id="brief-back" class="btn btn-ghost btn-xs"><svg class="icon icon-sm" style="transform:rotate(180deg)"><use href="#i-arrow-right"/></svg>Issues</button>
+              <div class="brief-actions">
+                <button id="brief-copy" class="btn btn-xs" title="Copy the brief as Markdown"><svg class="icon icon-sm"><use href="#i-copy"/></svg>Copy</button>
+                <button id="brief-ask" class="btn btn-xs" title="Ask a follow-up in Chat"><svg class="icon icon-sm"><use href="#i-chat"/></svg>Ask in chat</button>
+              </div>
+            </div>
+            <div id="brief-body"></div>
+          </div>
+        </section>
 
         <!-- Tech Stack Tab -->
-        <div id="tech-tab" class="tab-pane">
-          <h2>Tech Stack</h2>
-          <p class="tab-subtitle">Languages, tools &amp; services detected in this repo</p>
-          <ul id="tech-list"></ul>
+        <section id="tech-tab" class="tab-pane">
+          <h2 class="section-title">Languages</h2>
+          <ul id="tech-list" class="lang-list"></ul>
           <div id="tools-section" style="display:none">
-            <h3>Tools &amp; Services</h3>
+            <h2 class="section-title">Tools &amp; services</h2>
             <div id="tools-grid" class="tools-grid"></div>
           </div>
-        </div>
+        </section>
 
         <!-- Maintainers Tab -->
-        <div id="maintainers-tab" class="tab-pane">
-          <h2>Top Contributors</h2>
-          <p class="tab-subtitle">Most active contributors — great people to tag in your first PR</p>
-          <ul id="maintainers-list"></ul>
-        </div>
+        <section id="maintainers-tab" class="tab-pane">
+          <h2 class="section-title">Active maintainers</h2>
+          <p class="tab-subtitle">People with maintainer access who replied on issues or PRs in the last 90 days — the best people to ask or tag.</p>
+          <ul id="maintainers-list" class="people-list"></ul>
+          <p id="maintainer-teams" class="teams-line" hidden></p>
+          <h2 class="section-title">Top contributors · all time</h2>
+          <ul id="contributors-list" class="people-list"></ul>
+        </section>
 
         <!-- Contribute Tab -->
-        <div id="contribute-tab" class="tab-pane">
-          <div id="health-card"></div>
+        <section id="contribute-tab" class="tab-pane">
+          <div id="contribute-browse">
+            <div id="health-card" class="card"></div>
 
-          <div id="open-prs-section">
-            <h3>Recent Open PRs</h3>
-            <ul id="prs-list"></ul>
+            <div id="open-prs-section">
+              <div class="pane-head">
+                <h2 class="section-title">Pull requests</h2>
+                <div class="segmented" role="group" aria-label="Pull request state">
+                  <button class="pr-state-btn active" data-state="open">Open</button>
+                  <button class="pr-state-btn" data-state="closed">Closed</button>
+                </div>
+              </div>
+              <form id="pr-find" class="pr-find" autocomplete="off">
+                <input id="pr-find-input" class="input" placeholder="PR number, link or keywords" aria-label="Find a pull request">
+                <button class="btn" type="submit">Find</button>
+              </form>
+              <p id="prs-summary" class="issues-summary"></p>
+              <ul id="prs-list" class="card-list"></ul>
+              <button id="prs-more" class="btn btn-block issues-more" hidden>Load more</button>
+              <p class="brief-note pr-follow-note">Tip: open any pull request on GitHub and its brief opens here automatically.</p>
+            </div>
           </div>
 
-          <div id="quickstart-section">
-            <h3>Getting Started Guide</h3>
-            <button id="gen-quickstart-btn">Generate with AI ✨</button>
-            <div id="quickstart-content"></div>
+          <!-- "Understand this PR" brief — filled in by pr-brief.js -->
+          <div id="pr-brief" class="issue-brief" hidden>
+            <div class="brief-topbar">
+              <button id="pr-brief-back" class="btn btn-ghost btn-xs"><svg class="icon icon-sm" style="transform:rotate(180deg)"><use href="#i-arrow-right"/></svg>Contribute</button>
+              <div class="brief-actions">
+                <button id="pr-brief-copy" class="btn btn-xs" title="Copy the brief as Markdown"><svg class="icon icon-sm"><use href="#i-copy"/></svg>Copy</button>
+                <button id="pr-brief-ask" class="btn btn-xs" title="Ask a follow-up in Chat"><svg class="icon icon-sm"><use href="#i-chat"/></svg>Ask in chat</button>
+              </div>
+            </div>
+            <div id="pr-brief-body"></div>
           </div>
-        </div>
+        </section>
 
         <!-- Chat Tab -->
-        <div id="chat-tab" class="tab-pane">
+        <section id="chat-tab" class="tab-pane">
           <div id="chat-header-bar">
-            <span id="chat-context-label">Grounded in README + configs</span>
-            <button id="clear-chat-btn">Clear</button>
+            <span id="chat-context-label">Reads the repo's source to answer</span>
+            <button id="clear-chat-btn" class="btn btn-ghost btn-xs" title="Clear conversation"><svg class="icon icon-sm"><use href="#i-trash"/></svg>Clear</button>
           </div>
-          <div id="chat-history"></div>
+          <div id="chat-history" aria-live="polite"></div>
           <div id="typing-indicator" style="display:none">
             <div class="typing-dots"><span></span><span></span><span></span></div>
-            <span id="typing-status">Analyzing...</span>
+            <span id="typing-status">Thinking…</span>
           </div>
-          <div id="chat-input-container">
-            <textarea id="chat-input" placeholder="Ask about this repo..."></textarea>
-            <button id="send-btn">Send</button>
+          <div id="chat-composer">
+            <div id="chat-input-container">
+              <textarea id="chat-input" rows="1" placeholder="Ask about this repo…"></textarea>
+              <button id="send-btn" title="Send" aria-label="Send"><svg class="icon"><use href="#i-send"/></svg></button>
+            </div>
+            <p class="composer-hint"><kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line</p>
           </div>
-        </div>
+        </section>
 
         <!-- Settings Tab -->
-        <div id="settings-tab" class="tab-pane">
+        <section id="settings-tab" class="tab-pane">
           <div id="sp-active-badge" class="sp-active-badge"></div>
 
           <!-- Quick Start banner — visible when no provider is configured -->
           <div id="sp-quickstart-banner" class="sp-quickstart-banner" style="display:none">
-            <div class="sp-qb-icon">⚡</div>
+            <div class="sp-qb-icon"><svg class="icon"><use href="#i-bolt"/></svg></div>
             <div class="sp-qb-text">
               <div class="sp-qb-title">New here? Start with Groq — it's free</div>
-              <div class="sp-qb-sub">14,400 requests/day · No credit card needed · ~2 min setup</div>
+              <div class="sp-qb-sub">No credit card · about 2 minutes to set up</div>
             </div>
-            <a href="https://console.groq.com/keys" target="_blank" class="sp-qb-link">Get key →</a>
+            <a href="https://console.groq.com/keys" target="_blank" class="sp-qb-link">Get key<svg class="icon icon-sm"><use href="#i-arrow-right"/></svg></a>
           </div>
 
-          <p class="sp-section-label">AI Provider</p>
-          <div class="sp-pills">
-            <button class="sp-pill sp-pill-recommended" data-provider="groq">⚡ Groq <span class="pill-tag">Free</span></button>
-            <button class="sp-pill" data-provider="gemini">✦ Gemini <span class="pill-tag">Free</span></button>
-            <button class="sp-pill" data-provider="ollama">🦙 Ollama <span class="pill-tag">Local</span></button>
-            <button class="sp-pill" data-provider="openai">🤖 OpenAI</button>
-            <button class="sp-pill" data-provider="anthropic">🧠 Anthropic</button>
+          <div class="card">
+            <p class="sp-section-label">AI provider</p>
+            <div class="sp-pills">
+              <button class="sp-pill sp-pill-recommended" data-provider="groq">Groq <span class="pill-tag tag-free">Free</span></button>
+              <button class="sp-pill" data-provider="gemini">Gemini <span class="pill-tag tag-free">Free</span></button>
+              <button class="sp-pill" data-provider="ollama">Ollama <span class="pill-tag tag-local">Local</span></button>
+              <button class="sp-pill" data-provider="openai">OpenAI <span class="pill-tag">Paid</span></button>
+              <button class="sp-pill" data-provider="anthropic">Anthropic <span class="pill-tag">Paid</span></button>
+            </div>
+
+            <div id="sp-key-section">
+              <label class="sp-section-label" id="sp-key-label" for="sp-api-key">API key</label>
+              <div class="sp-input-row">
+                <input type="password" id="sp-api-key" class="input" autocomplete="off" placeholder="API key">
+                <button class="btn sp-toggle" id="sp-toggle-key">Show</button>
+              </div>
+            </div>
+
+            <div id="sp-ollama-section" style="display:none">
+              <div class="sp-ollama-note">No key needed — run <code>ollama serve</code> locally. Models download automatically on first use.</div>
+              <label class="sp-section-label" for="sp-ollama-model">Model name</label>
+              <input type="text" id="sp-ollama-model" class="input sp-text-input" placeholder="llama3.2" autocomplete="off">
+            </div>
+
+            <button id="sp-save-btn" class="btn btn-primary btn-block">Save</button>
+            <div id="sp-status" class="status-msg"></div>
+            <div class="sp-help-links" id="sp-help-links"></div>
           </div>
 
-          <div id="sp-key-section">
-            <p class="sp-section-label" id="sp-key-label">API Key</p>
+          <div class="card" id="sp-gh-card">
+            <label class="sp-section-label" for="sp-gh-token">GitHub token <span class="sp-optional">optional · raises the limit to 5,000 requests/hour</span></label>
+            <a id="sp-get-token-link" class="btn btn-block sp-get-token" href="https://github.com/settings/tokens" target="_blank"><svg class="icon"><use href="#i-bolt"/></svg>Generate a token on GitHub<svg class="icon icon-sm"><use href="#i-arrow-right"/></svg></a>
             <div class="sp-input-row">
-              <input type="password" id="sp-api-key" autocomplete="off" placeholder="API key">
-              <button class="sp-toggle" id="sp-toggle-key">Show</button>
+              <input type="password" id="sp-gh-token" class="input" placeholder="ghp_..." autocomplete="off">
+              <button class="btn sp-toggle" id="sp-toggle-gh">Show</button>
             </div>
+            <div class="sp-gh-btns">
+              <button id="sp-save-gh-btn" class="btn btn-primary">Save token</button>
+              <button id="sp-clear-gh-btn" class="btn btn-danger">Clear</button>
+            </div>
+            <div id="sp-gh-status" class="status-msg"></div>
+            <p class="sp-help-links">Without a token GitHub allows 60 requests an hour, shared by everything on your network. No scopes are needed for public repos: generate a classic token, leave every box unticked, then paste it above.</p>
           </div>
-
-          <div id="sp-ollama-section" style="display:none">
-            <div class="sp-ollama-note">No key needed — run <code>ollama serve</code> locally. Models pull automatically on first use.</div>
-            <p class="sp-section-label">Model name</p>
-            <input type="text" id="sp-ollama-model" class="sp-text-input" placeholder="llama3.2" autocomplete="off">
-          </div>
-
-          <button id="sp-save-btn" class="sp-save-btn">Save</button>
-          <div id="sp-status" class="sp-status-msg"></div>
-          <div class="sp-help-links" id="sp-help-links"></div>
-
-          <hr class="sp-divider">
-
-          <p class="sp-section-label">GitHub Token <span class="sp-optional">(optional — raises rate limit to 5,000 req/hr)</span></p>
-          <div class="sp-input-row">
-            <input type="password" id="sp-gh-token" placeholder="ghp_..." autocomplete="off">
-            <button class="sp-toggle" id="sp-toggle-gh">Show</button>
-          </div>
-          <div class="sp-gh-btns">
-            <button id="sp-save-gh-btn" class="sp-save-btn">Save Token</button>
-            <button id="sp-clear-gh-btn" class="sp-clear-btn">Clear</button>
-          </div>
-          <div id="sp-gh-status" class="sp-status-msg"></div>
-        </div>
+        </section>
       </main>
     </div>
   </div>
+  <script src="retrieval.js"></script>
+  <script src="insights.js"></script>
+  <script src="brief.js"></script>
+  <script src="pr-brief.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

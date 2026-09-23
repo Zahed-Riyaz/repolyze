@@ -46,20 +46,20 @@ Here is the single most important thing to understand about Chrome extensions:
 
 This isn't a quirk — it's a deliberate security boundary. The browser gives extensions power (access to any tab, any URL, persistent storage), so it enforces strict isolation between the moving parts.
 
-There are four sandboxes:
+There are four kinds of sandbox (this extension uses three of them — see below for why it has no content script):
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                      Chrome Browser                          │
 │                                                              │
 │  ┌──────────────┐   ┌──────────────┐   ┌─────────────────┐  │
-│  │ background.js│   │  content.js  │   │  sidepanel.js   │  │
+│  │ background.js│   │ content      │   │  sidepanel.js   │  │
 │  │              │   │              │   │                 │  │
 │  │ Service      │   │ Runs inside  │   │ Runs in the     │  │
-│  │ worker.      │   │ the GitHub   │   │ side panel      │  │
+│  │ worker.      │   │ the web page │   │ side panel      │  │
 │  │ No DOM.      │   │ tab. Can see │   │ window. Full    │  │
 │  │ Wakes on     │   │ the page.    │   │ DOM. Full       │  │
-│  │ events.      │   │              │   │ chrome.* APIs.  │  │
+│  │ events.      │   │ (not used)   │   │ chrome.* APIs.  │  │
 │  └──────────────┘   └──────────────┘   └─────────────────┘  │
 │                                                              │
 │  ┌─────────────────────────────────────────────────────────┐ │
@@ -71,7 +71,7 @@ There are four sandboxes:
 
 This forces a question you'd never ask in a normal web app: **"Where does this piece of information live?"**
 
-A variable you declare in `sidepanel.js` is completely invisible to `content.js`, and vice versa. The only way to share data between them is:
+A variable you declare in `sidepanel.js` is completely invisible to `background.js` or `options.js`, and vice versa. The only way to share data between them is:
 1. `chrome.runtime.sendMessage` — fire a one-time message
 2. `chrome.storage.local` — write to the shared key-value store, read from the other side
 3. `chrome.tabs.onUpdated` — listen for tab events (URL changes)
@@ -87,15 +87,9 @@ chrome.sidePanel
 
 That's it. One line of real logic. Everything else happens in `sidepanel.js`.
 
-`content.js` is also tiny — its only job is to be inside the GitHub tab (so it can access the URL) and broadcast that URL:
+An earlier version also shipped a `content.js` that ran inside every GitHub tab and broadcast the URL with `chrome.runtime.sendMessage`. Nothing ever listened for that message — the side panel already gets the URL from the `chrome.tabs` API (thanks to the `tabs` permission). So it was deleted, along with the `scripting` and `activeTab` permissions it implied.
 
-```javascript
-// content.js — sending repo info to the side panel
-chrome.runtime.sendMessage({
-  type: "REPO_INFO",
-  data: getRepoInfo()
-});
-```
+**The lesson:** a content script is only worth its cost (it runs on every page load, and needs broad host permissions) when you need the page's *DOM*. If all you need is the URL, the tabs API is enough.
 
 All the real complexity lives in `sidepanel.js` because the side panel is where the user interacts. It has access to both the DOM (to render things) and the Chrome APIs (to talk to storage, tabs, etc.).
 
@@ -105,16 +99,28 @@ All the real complexity lives in `sidepanel.js` because the side panel is where 
 
 ## 3. How the Pieces Talk to Each Other
 
-The side panel needs to know when the user navigates to a different repo. It can't watch the URL directly — it's not running inside the GitHub tab. So it listens for tab update events:
+The side panel needs to know when the user navigates to a different repo. It can't watch the URL directly — it's not running inside the GitHub tab. So it listens for tab events — both URL changes *and* switching tabs — but only for the active tab in its own window:
 
 ```javascript
-// sidepanel.js — listening for URL changes
+// sidepanel.js — following the active tab
+panelWindowId = (await chrome.windows.getCurrent()).id;
+
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.url && changeInfo.url.includes("github.com")) {
+  if (changeInfo.url && tab.active && tab.windowId === panelWindowId) {
     handleRepoRefresh(changeInfo.url);
   }
 });
+
+chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
+  if (windowId !== panelWindowId) return;
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (tab?.url) handleRepoRefresh(tab.url);
+});
 ```
+
+Without the `tab.active` / `windowId` checks, a GitHub page loading in a *background* tab would silently swap the panel to a repo you aren't looking at.
+
+**Async + navigation = races.** Every fetch captures the repo it started for (`const cacheKey = repoKey()`) and checks `isCurrentRepo(cacheKey)` before rendering. If you navigated away while it was in flight, the result still goes into the cache — it's valid data — but it is not drawn into the new repo's view.
 
 `handleRepoRefresh` parses the URL, extracts owner and repo name, checks if it's actually a repo page (not `/explore` or `/login`), and fires off all the data fetches:
 
@@ -346,7 +352,7 @@ async function getDeepRepoContext() {
   const results = await Promise.allSettled(
     fileTargets.map(f =>
       fetchGitHub(f.endpoint)
-        .then(d => atob(d.content.replace(/\n/g, "")))  // GitHub returns files as base64
+        .then(d => decodeGitHubContent(d))  // base64 → bytes → UTF-8 text
         .then(text => ({ label: f.label, text }))
     )
   );
@@ -366,9 +372,19 @@ This project is a React component library...
   "dependencies": { "react": "^18.0.0" }
 }
 
-=== Root Files ===
-README.md, package.json, rollup.config.js, jest.config.js, .eslintrc
+=== File Tree ===
+README.md
+package.json
+rollup.config.js
+src/
+src/index.js
+src/components/Button.jsx
 ```
+
+Two details worth knowing:
+
+- **Decoding.** GitHub returns file contents as base64. `atob()` turns base64 into a string where each character is one *byte* (Latin-1), so any UTF-8 text — emoji, accents, CJK — comes out garbled. `decodeGitHubContent()` turns that string into a `Uint8Array` and decodes it with `TextDecoder("utf-8")`.
+- **The file tree** comes from one call to `git/trees/HEAD?recursive=1`, filtered (no `node_modules`, `dist`, …) and capped at ~5,000 characters. It's what lets the model answer "walk me through the structure" without having read the code.
 
 Then before sending to the AI:
 

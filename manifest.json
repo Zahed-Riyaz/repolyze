@@ -1,18 +1,15 @@
 {
   "manifest_version": 3,
   "name": "GitHub Repo Analyzer & RAG Chat",
-  "version": "1.1",
-  "description": "Analyze GitHub repos: issues, tech stack, maintainers, contributor health, and RAG-powered Chat.",
+  "version": "1.2",
+  "description": "Analyze GitHub repos: issues, tech stack, maintainers, contributor health, and chat grounded in the repo's files.",
   "permissions": [
     "sidePanel",
     "storage",
-    "activeTab",
-    "scripting",
     "tabs"
   ],
   "host_permissions": [
     "https://api.github.com/*",
-    "https://github.com/*",
     "https://generativelanguage.googleapis.com/*",
     "https://api.groq.com/*",
     "https://api.openai.com/*",
@@ -28,11 +25,5 @@
   "options_page": "options.html",
   "background": {
     "service_worker": "background.js"
-  },
-  "content_scripts": [
-    {
-      "matches": ["https://github.com/*"],
-      "js": ["content.js"]
-    }
-  ]
+  }
 }
