@@ -238,6 +238,7 @@ function hideNotRepoMessage() {
   onRepoPage = true;
   applyView();
   moveTabIndicator(); // tabs were display:none, so their geometry was unknown
+  if (reloadPending) reloadCurrentRepo();
 }
 
 // ── Core update ───────────────────────────────────────────────────────────────
@@ -275,14 +276,24 @@ let loadedTabs = new Set();
 
 function loadTabData(name) {
   if (!currentRepo || !onRepoPage || !TAB_LOADERS[name] || loadedTabs.has(name)) return;
+  const key = repoKey();
   loadedTabs.add(name);
-  TAB_LOADERS[name]();
+  Promise.resolve(TAB_LOADERS[name]()).then(ok => {
+    // A failed load (rate limit, network) isn't "loaded": retry the next time
+    // the tab is shown rather than leaving its error on screen for good.
+    if (!ok && isCurrentRepo(key)) loadedTabs.delete(name);
+  });
 }
 
 // After a rate-limit reset or a token change: re-run what's visible. Anything
 // that loaded fine is served from cache; only failed requests hit GitHub.
+let reloadPending = false;
+
 function reloadCurrentRepo() {
-  if (!currentRepo || !onRepoPage) return;
+  if (!currentRepo) return;
+  // Off the repo page (e.g. on GitHub's token page) — run it when we're back
+  if (!onRepoPage) { reloadPending = true; return; }
+  reloadPending = false;
   loadedTabs = new Set();
   fetchRepoData();
   loadTabData(lastContentTab);
@@ -608,15 +619,17 @@ async function fetchIssues() {
 
   if (repoCache[cacheKey]?.issues) {
     renderIssues("");
-    return;
+    return true;
   }
 
   try {
     const issues = await fetchGitHub("/issues?state=open&assignee=none&sort=comments&direction=desc&per_page=100");
     cacheFor(cacheKey).issues = issues.filter(i => !i.pull_request);
     if (isCurrentRepo(cacheKey)) renderIssues(activeIssueFilter());
+    return true;
   } catch (err) {
     if (isCurrentRepo(cacheKey)) list.innerHTML = errorState(err);
+    return false;
   }
 }
 
@@ -688,7 +701,7 @@ async function fetchTechStack() {
   const cacheKey = repoKey();
   if (repoCache[cacheKey]?.languages && repoCache[cacheKey]?.tools !== undefined) {
     renderTechStack(repoCache[cacheKey].languages, repoCache[cacheKey].tools);
-    return;
+    return true;
   }
 
   try {
@@ -699,8 +712,10 @@ async function fetchTechStack() {
       detectTools(),
     ]);
     if (isCurrentRepo(cacheKey)) renderTechStack(languages, tools);
+    return true;
   } catch (err) {
     if (isCurrentRepo(cacheKey)) list.innerHTML = errorState(err);
+    return false;
   }
 }
 
@@ -974,15 +989,17 @@ async function fetchMaintainers() {
   const cacheKey = repoKey();
   if (repoCache[cacheKey]?.contributors) {
     renderMaintainers(repoCache[cacheKey].contributors);
-    return;
+    return true;
   }
 
   try {
     const contributors = await fetchGitHub("/contributors?per_page=10");
     cacheFor(cacheKey).contributors = contributors;
     if (isCurrentRepo(cacheKey)) renderMaintainers(contributors);
+    return true;
   } catch (err) {
     if (isCurrentRepo(cacheKey)) list.innerHTML = errorState(err);
+    return false;
   }
 }
 
@@ -1024,16 +1041,19 @@ async function fetchContributeTab() {
     qsBtn.innerHTML = `${icon("sparkles")}Generate with AI`;
   }
 
+  let health = Promise.resolve(true);
   if (repoCache[cacheKey]?.health) {
     renderHealthCard(repoCache[cacheKey].health);
   } else {
-    fetchRepoHealth();
+    health = fetchRepoHealth();
   }
+  let prs = Promise.resolve(true);
   if (repoCache[cacheKey]?.prs) {
     renderOpenPRs(repoCache[cacheKey].prs);
   } else {
-    fetchOpenPRs();
+    prs = fetchOpenPRs();
   }
+  return (await Promise.all([health, prs])).every(Boolean);
 }
 
 async function fetchRepoHealth() {
@@ -1093,10 +1113,12 @@ async function fetchRepoHealth() {
 
     cacheFor(cacheKey).health = health;
     if (isCurrentRepo(cacheKey)) renderHealthCard(health);
+    return true;
   } catch (err) {
     if (isCurrentRepo(cacheKey)) {
       document.getElementById("health-card").innerHTML = errorState(err, "div");
     }
+    return false;
   }
 }
 
@@ -1203,8 +1225,10 @@ async function fetchOpenPRs() {
     const prs = await fetchGitHub("/pulls?state=open&sort=created&direction=desc&per_page=8");
     cacheFor(cacheKey).prs = prs;
     if (isCurrentRepo(cacheKey)) renderOpenPRs(prs);
+    return true;
   } catch (err) {
     if (isCurrentRepo(cacheKey)) list.innerHTML = errorState(err);
+    return false;
   }
 }
 
