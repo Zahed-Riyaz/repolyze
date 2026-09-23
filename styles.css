@@ -163,7 +163,7 @@ body.no-repo #tabs { display: none; }
 #tabs .tab-btn.active .icon { color: var(--accent); }
 
 /* Narrow panels: drop tab icons so all five labels fit without scrolling */
-@container panel (max-width: 400px) {
+@container panel (max-width: 480px) {
   #tabs { gap: 0; padding: 0 6px; }
   #tabs .tab-btn { padding-left: 8px; padding-right: 8px; }
   #tabs .tab-btn .icon { display: none; }

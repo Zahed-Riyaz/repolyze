@@ -32,7 +32,7 @@ A Chrome extension that gives you an AI-powered side panel for any GitHub reposi
 |---|---|
 | **Issues** | Lists open, unassigned issues. Filter by `good first issue` or `help wanted` — label spelling variants (`good-first-issue`, `first-timers-only`, `beginner`, …) are matched too. |
 | **Stack** | Shows languages used (from GitHub's language breakdown) with percentage bars. |
-| **People** | Top contributors by commit count, with each one's share of commits. |
+| **Maintainers** | Top contributors by commit count, with each one's share of commits. |
 | **Contribute** | Repo health card (has README? CONTRIBUTING? license? recent activity?), open PRs, and an AI-generated "Getting Started as a Contributor" guide. |
 | **Chat** | Multi-turn chat grounded in the repo's key files (README, CONTRIBUTING, package.json, etc.) and its file tree. |
 | **Settings** (gear icon in the header) | Switch AI provider, enter/rotate API keys, configure Ollama model, and set a GitHub token — all without leaving the panel. |
