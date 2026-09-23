@@ -1,4 +1,4 @@
-// Loads the side panel scripts (retrieval.js, insights.js, sidepanel.js — in the
+// Loads the side panel scripts (retrieval.js, insights.js, brief.js, sidepanel.js — in the
 // same order as sidepanel.html) into this Node process with in-memory stand-ins
 // for the DOM, chrome.* and fetch, so tests exercise the real code.
 //
@@ -13,7 +13,7 @@ const fs = require("fs");
 const path = require("path");
 
 const ROOT = path.join(__dirname, "..", "..");
-const SCRIPTS = ["retrieval.js", "insights.js", "sidepanel.js"];
+const SCRIPTS = ["retrieval.js", "insights.js", "brief.js", "sidepanel.js"];
 const SOURCE = SCRIPTS.map(f => fs.readFileSync(path.join(ROOT, f), "utf8")).join("\n;\n");
 
 // ── Minimal DOM ──────────────────────────────────────────────────────────────
