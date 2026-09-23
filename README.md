@@ -316,6 +316,19 @@ repoCache["owner/repo"] = {
 
 ---
 
+## GitHub Rate Limits
+
+Without a token GitHub allows **60 API requests an hour per IP address**, shared by everything on your network. The extension is built to fit inside that:
+
+- **Tabs load lazily** — opening a repo costs 2 requests (metadata + issues); other tabs fetch the first time you open them.
+- **Responses are cached for the browser session** in `chrome.storage.session` (404s included), so closing and reopening the panel costs nothing. After 10 minutes entries are revalidated with `If-None-Match`; GitHub doesn't count `304 Not Modified` replies.
+- **The real quota is read from `/rate_limit`**, which is free, and shown in the header badge.
+- **When the quota runs out**, requests stop until the reset time. A banner shows when it resumes and offers to add a token, tabs show "Paused until …" rather than an error, and everything reloads automatically once the window resets.
+
+A token (no scopes needed for public repos) raises the limit to 5,000/hour. It's checked against GitHub before it's saved.
+
+---
+
 ## Installation
 
 1. Clone or download this repository.
@@ -334,7 +347,7 @@ repoCache["owner/repo"] = {
 2. Click the extension icon — the side panel opens on the right.
 3. **Settings** (the gear icon, top right) opens automatically on first launch.
 4. Choose an AI provider, enter your key, and click **Save**.
-5. Optionally add a **GitHub Token** to raise the API rate limit from 60 to 5,000 requests/hour.
+5. Optionally add a **GitHub Token** (no scopes needed) to raise the API rate limit from 60 to 5,000 requests/hour — recommended if you browse many repos.
 
 ---
 

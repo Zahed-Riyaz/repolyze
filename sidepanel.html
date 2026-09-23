@@ -66,9 +66,19 @@
         <span class="meta-item" title="Forks"><svg class="icon icon-sm"><use href="#i-fork"/></svg><span id="repo-forks">—</span></span>
         <span class="meta-item" id="repo-license-wrap" title="License" hidden><svg class="icon icon-sm"><use href="#i-scale"/></svg><span id="repo-license"></span></span>
         <span id="repo-fork-badge" class="meta-item repo-fork-badge" style="display:none"></span>
-        <span id="rate-limit-badge" class="meta-item" title="GitHub API calls remaining this hour"><svg class="icon icon-sm"><use href="#i-activity"/></svg><span id="rate-limit-text">—</span></span>
+        <span id="rate-limit-badge" class="meta-item" role="button" tabindex="0" title="GitHub API requests left this hour"><svg class="icon icon-sm"><use href="#i-activity"/></svg><span id="rate-limit-text">—</span></span>
       </div>
     </header>
+
+    <!-- Rate-limit / token banner — filled in by renderRateLimit() -->
+    <div id="rate-banner" class="rate-banner" role="status" hidden>
+      <svg class="icon"><use href="#i-clock"/></svg>
+      <div class="rate-banner-text">
+        <strong id="rate-banner-title"></strong>
+        <span id="rate-banner-sub"></span>
+      </div>
+      <button id="rate-banner-btn" class="btn btn-primary btn-xs" hidden></button>
+    </div>
 
     <div id="not-repo-msg" style="display:none">
       <div class="welcome-screen">
@@ -239,6 +249,7 @@
               <button id="sp-clear-gh-btn" class="btn btn-danger">Clear</button>
             </div>
             <div id="sp-gh-status" class="status-msg"></div>
+            <p class="sp-help-links">Without a token GitHub allows 60 requests an hour, shared by everything on your network. No scopes are needed for public repos — <a href="https://github.com/settings/tokens/new?description=GitHub%20Repo%20Analyzer" target="_blank">create a token</a>.</p>
           </div>
         </section>
       </main>

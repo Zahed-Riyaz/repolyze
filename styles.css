@@ -132,6 +132,31 @@ body.no-repo #tabs { display: none; }
 }
 #rate-limit-badge.rate-limit-low { background: var(--danger-subtle); color: var(--danger); }
 
+/* ── Rate-limit banner ───────────────────────────────────────────────────── */
+.rate-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 14px 10px;
+  padding: 9px 10px 9px 12px;
+  border-radius: var(--r-lg);
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+  background: var(--danger-subtle);
+  font-size: 12px;
+  animation: pane-in 200ms var(--ease);
+}
+.rate-banner[hidden] { display: none; }
+.rate-banner > .icon { color: var(--danger); }
+.rate-banner.is-warn { border-color: color-mix(in srgb, var(--warning) 40%, transparent); background: var(--warning-subtle); }
+.rate-banner.is-warn > .icon { color: var(--warning); }
+.rate-banner-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.rate-banner-text strong { font-size: 12.5px; color: var(--fg); }
+.rate-banner-text span { color: var(--fg-muted); }
+.rate-banner .btn[hidden] { display: none; }
+
+#rate-limit-badge { cursor: pointer; }
+#rate-limit-badge:hover { color: var(--fg); }
+
 /* ── Tabs ────────────────────────────────────────────────────────────────── */
 #tabs {
   position: relative;

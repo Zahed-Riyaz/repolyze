@@ -80,6 +80,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   initSettingsTab();
 
+  document.getElementById("rate-banner-btn").addEventListener("click", openTokenSettings);
+  const rateBadge = document.getElementById("rate-limit-badge");
+  rateBadge.addEventListener("click", openTokenSettings);
+  rateBadge.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openTokenSettings(); }
+  });
+  refreshRateLimit();
+
   if (aiProvider !== "ollama" && !aiApiKey) {
     document.querySelector('.tab-btn[data-tab="settings"]')?.click();
   }
@@ -118,6 +126,7 @@ function switchTab(name) {
   document.querySelectorAll(".tab-pane").forEach(p => p.classList.toggle("active", p.id === `${name}-tab`));
   if (name !== "settings") lastContentTab = name;
   applyView();
+  loadTabData(name);
   moveTabIndicator();
   if (name === "chat") autosizeChatInput();
 }
@@ -160,6 +169,15 @@ function skeletonList(count, kind = "row") {
     bar:    `<span class="sk-lines"><span class="sk sk-line short"></span></span>`,
   }[kind];
   return Array.from({ length: count }, () => `<li class="skeleton-item" aria-hidden="true">${row}</li>`).join("");
+}
+
+// Error row for a failed load. Rate limits get a calm "paused" message (the
+// banner explains the fix); anything else shows the error itself.
+function errorState(err, tag = "li") {
+  if (err?.rateLimited) {
+    return stateItem(`Paused until <strong>${formatTime(err.resetAt)}</strong> — GitHub's hourly limit is used up.`, { iconName: "clock", tag });
+  }
+  return stateItem(escapeHtml(err?.message || "Something went wrong."), { error: true, tag });
 }
 
 // Ask GitHub for an appropriately sized avatar instead of the full-size image
@@ -234,50 +252,286 @@ async function updateRepoInfo() {
   document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
   document.querySelector('.filter-btn[data-label=""]').classList.add("active");
 
-  // Fire all data fetches in parallel
+  // Header + the visible tab now; other tabs load the first time they're opened,
+  // which keeps a repo visit to 2 requests instead of ~13.
+  loadedTabs = new Set();
   fetchRepoData();
-  fetchIssues();
-  fetchTechStack();
-  fetchMaintainers();
-  fetchContributeTab();
   loadChatHistory();
+  loadTabData(lastContentTab);
 }
 
-// ── GitHub API helper ─────────────────────────────────────────────────────────
-// `repo` defaults to the current repo; callers that have already awaited
-// something must pass the repo they captured, since currentRepo may have moved on.
-async function fetchGitHub(endpoint, rawResponse = false, repo = currentRepo) {
-  const url = endpoint.startsWith("http")
+// ── Lazy tab loading ──────────────────────────────────────────────────────────
+const TAB_LOADERS = {
+  issues: () => fetchIssues(),
+  tech: () => fetchTechStack(),
+  maintainers: () => fetchMaintainers(),
+  contribute: () => fetchContributeTab(),
+};
+let loadedTabs = new Set();
+
+function loadTabData(name) {
+  if (!currentRepo || !onRepoPage || !TAB_LOADERS[name] || loadedTabs.has(name)) return;
+  loadedTabs.add(name);
+  TAB_LOADERS[name]();
+}
+
+// After a rate-limit reset or a token change: re-run what's visible. Anything
+// that loaded fine is served from cache; only failed requests hit GitHub.
+function reloadCurrentRepo() {
+  if (!currentRepo || !onRepoPage) return;
+  loadedTabs = new Set();
+  fetchRepoData();
+  loadTabData(lastContentTab);
+}
+
+// ── GitHub API layer ──────────────────────────────────────────────────────────
+// Without a token GitHub allows 60 requests an hour per IP, so every request
+// counts:
+//  • responses (404s included — most probed files don't exist) are cached for
+//    the browser session in chrome.storage.session, so reopening the panel is free
+//  • while fresh they're served without touching the network; after that they're
+//    revalidated with If-None-Match, and GitHub doesn't count 304 replies
+//  • once the quota is spent, requests stop until the reset time instead of
+//    each tab collecting its own 403
+const GH_FRESH_MS = 10 * 60 * 1000;
+const GH_MAX_CACHED_CHARS = 400_000; // skip persisting huge bodies (e.g. file trees)
+const ghMemCache = new Map();        // cache key → { status, body, etag, link, time }
+const ghInflight = new Map();        // cache key → Promise of the same
+const ghState = { remaining: null, limit: null, resetAt: 0, badToken: false };
+
+class GitHubError extends Error {
+  constructor(message, status, { rateLimited = false, resetAt = 0 } = {}) {
+    super(message);
+    this.status = status;
+    this.rateLimited = rateLimited;
+    this.resetAt = resetAt;
+  }
+}
+
+function isRateLimited() {
+  return ghState.remaining === 0 && Date.now() < ghState.resetAt;
+}
+
+function rateLimitError() {
+  return new GitHubError(
+    `GitHub's hourly request limit is used up — it resets at ${formatTime(ghState.resetAt)}.`,
+    403, { rateLimited: true, resetAt: ghState.resetAt });
+}
+
+function repoApiUrl(endpoint, repo) {
+  return endpoint.startsWith("http")
     ? endpoint
     : `https://api.github.com/repos/${repo.owner}/${repo.repo}${endpoint}`;
+}
 
+function githubHeaders(url, token = githubToken) {
   const headers = { "Accept": "application/vnd.github+json" };
   // Send the token only to GitHub's own API host — endpoint may be a full URL
   // that came from response data, and the token must not follow it elsewhere.
-  let apiHost = "";
-  try { apiHost = new URL(url).host; } catch { throw new Error(`Invalid GitHub API URL: ${url}`); }
-  if (githubToken && apiHost === "api.github.com") headers["Authorization"] = `Bearer ${githubToken}`;
-
-  const response = await fetch(url, { headers });
-
-  // Track rate limit from every response
-  const remaining = response.headers.get("X-RateLimit-Remaining");
-  const limit = response.headers.get("X-RateLimit-Limit");
-  if (remaining !== null) updateRateLimitBadge(remaining, limit);
-
-  if (rawResponse) return response;
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(`GitHub API ${response.status}: ${err.message || response.statusText}`);
-  }
-  return response.json();
+  let host = "";
+  try { host = new URL(url).host; } catch { throw new GitHubError(`Invalid GitHub API URL: ${url}`, 0); }
+  if (token && host === "api.github.com") headers["Authorization"] = `Bearer ${token}`;
+  return headers;
 }
 
-function updateRateLimitBadge(remaining, limit) {
+// Cache keys include whether a token was used: a private repo that 404s
+// anonymously must not stay "missing" once a token is added.
+function ghCacheKey(url) { return `gh:${githubToken ? "auth" : "anon"}:${url}`; }
+
+async function ghCacheGet(key) {
+  if (ghMemCache.has(key)) return ghMemCache.get(key);
+  try {
+    const stored = (await chrome.storage.session?.get(key))?.[key];
+    if (stored) ghMemCache.set(key, stored);
+    return stored || null;
+  } catch { return null; }
+}
+
+function ghCacheSet(key, entry) {
+  ghMemCache.set(key, entry);
+  if (JSON.stringify(entry).length > GH_MAX_CACHED_CHARS) return;
+  chrome.storage.session?.set({ [key]: entry }).catch(() => {}); // quota full → memory only
+}
+
+function noteRateLimitHeaders(res) {
+  const remaining = res.headers.get("X-RateLimit-Remaining");
+  if (remaining === null) return;
+  ghState.remaining = Number(remaining);
+  ghState.limit = Number(res.headers.get("X-RateLimit-Limit"));
+  ghState.resetAt = Number(res.headers.get("X-RateLimit-Reset")) * 1000;
+  renderRateLimit();
+}
+
+function isRateLimitResponse(res, body) {
+  if (res.status !== 403 && res.status !== 429) return false;
+  const quotaGone = res.headers.get("X-RateLimit-Remaining") === "0";
+  const retryAfter = Number(res.headers.get("Retry-After")) || 0;
+  if (!quotaGone && !retryAfter && res.status !== 429 && !/rate limit/i.test(body?.message || "")) return false;
+  // Secondary limits don't zero the quota — pause for Retry-After (or a minute)
+  if (!quotaGone) {
+    ghState.remaining = 0;
+    ghState.resetAt = Math.max(ghState.resetAt, Date.now() + (retryAfter || 60) * 1000);
+    renderRateLimit();
+  }
+  return true;
+}
+
+// GET a GitHub API URL → { status, body, link }. Cached, de-duplicated and
+// rate-limit aware; a stale cached copy is preferred over failing.
+async function githubRequest(url) {
+  const key = ghCacheKey(url);
+  const cached = await ghCacheGet(key);
+  if (cached && Date.now() - cached.time < GH_FRESH_MS) return cached;
+  if (ghInflight.has(key)) return ghInflight.get(key);
+
+  const request = (async () => {
+    if (isRateLimited()) {
+      if (cached) return cached;
+      throw rateLimitError();
+    }
+    const headers = githubHeaders(url);
+    if (cached?.etag) headers["If-None-Match"] = cached.etag;
+
+    let res;
+    try {
+      // no-store: we do our own conditional requests, so skip the HTTP cache
+      res = await fetch(url, { headers, cache: "no-store" });
+    } catch {
+      if (cached) return cached;
+      throw new GitHubError("Couldn't reach GitHub — check your connection.", 0);
+    }
+    noteRateLimitHeaders(res);
+
+    if (res.status === 304 && cached) {
+      const refreshed = { ...cached, time: Date.now() };
+      ghCacheSet(key, refreshed);
+      return refreshed;
+    }
+
+    const body = await res.json().catch(() => null);
+    if (isRateLimitResponse(res, body)) {
+      if (cached) return cached;
+      throw rateLimitError();
+    }
+    if (res.status === 401 && githubToken) {
+      ghState.badToken = true;
+      renderRateLimit();
+      throw new GitHubError("GitHub rejected your token — update or clear it in Settings.", 401);
+    }
+
+    const entry = { status: res.status, body, etag: res.headers.get("ETag"), link: res.headers.get("Link"), time: Date.now() };
+    if (res.ok || res.status === 404) ghCacheSet(key, entry);
+    return entry;
+  })().finally(() => ghInflight.delete(key));
+
+  ghInflight.set(key, request);
+  return request;
+}
+
+// `repo` defaults to the current repo; callers that have already awaited
+// something must pass the repo they captured, since currentRepo may have moved on.
+async function fetchGitHub(endpoint, repo = currentRepo) {
+  return (await fetchGitHubPage(endpoint, repo)).data;
+}
+
+// Like fetchGitHub, but also returns the Link header (for page counts)
+async function fetchGitHubPage(endpoint, repo = currentRepo) {
+  const { status, body, link } = await githubRequest(repoApiUrl(endpoint, repo));
+  if (status < 200 || status >= 300) {
+    throw new GitHubError(`GitHub API ${status}: ${body?.message || "request failed"}`, status);
+  }
+  return { data: body, link };
+}
+
+// Does this path exist? 404 → false; rate limits and other errors propagate.
+function githubExists(endpoint, repo) {
+  return fetchGitHub(endpoint, repo).then(() => true, err => {
+    if (err.status === 404) return false;
+    throw err;
+  });
+}
+
+// GET /rate_limit doesn't count against the limit, so it's a free way to show
+// the real quota on open and to validate a token before saving it.
+async function checkRateLimit(token = githubToken) {
+  const url = "https://api.github.com/rate_limit";
+  const res = await fetch(url, { headers: githubHeaders(url, token), cache: "no-store" });
+  if (res.status === 401) return { valid: false };
+  const core = (await res.json().catch(() => null))?.resources?.core;
+  return { valid: true, core };
+}
+
+async function refreshRateLimit() {
+  try {
+    const { valid, core } = await checkRateLimit();
+    ghState.badToken = !valid && !!githubToken;
+    if (core) {
+      ghState.remaining = core.remaining;
+      ghState.limit = core.limit;
+      ghState.resetAt = core.reset * 1000;
+    }
+    renderRateLimit();
+  } catch { /* offline — the next real request will report */ }
+}
+
+// ── Rate-limit UI: header badge + banner ──────────────────────────────────────
+let rateTimer = null;
+let wasRateLimited = false;
+
+function renderRateLimit() {
+  const { remaining, limit, badToken } = ghState;
   const badge = document.getElementById("rate-limit-badge");
-  document.getElementById("rate-limit-text").textContent = `${remaining}/${limit}`;
-  badge.classList.toggle("rate-limit-low", parseInt(remaining) < 100);
+  if (remaining !== null) {
+    document.getElementById("rate-limit-text").textContent = `${remaining}/${limit}`;
+  }
+  const limited = isRateLimited();
+  const low = !limited && remaining !== null && remaining <= Math.max(10, limit * 0.05);
+  badge.classList.toggle("rate-limit-low", limited || low);
+  badge.title = githubToken
+    ? "GitHub API requests left this hour"
+    : "GitHub API requests left this hour — click to add a token for 5,000/hour";
+
+  const banner = document.getElementById("rate-banner");
+  let title = "", sub = "", action = "";
+  if (badToken) {
+    title = "GitHub rejected your token";
+    sub = "It may have expired or been revoked. Update or clear it in Settings.";
+    action = "Fix token";
+  } else if (limited) {
+    const mins = Math.max(1, Math.ceil((ghState.resetAt - Date.now()) / 60000));
+    title = "GitHub's hourly limit is used up";
+    sub = `Resumes at ${formatTime(ghState.resetAt)} (in ${mins} min).` +
+      (githubToken ? " Anything already loaded still works." : " A free token raises the limit to 5,000/hour.");
+    action = githubToken ? "" : "Add token";
+  } else if (low && !githubToken) {
+    title = `${remaining} GitHub request${remaining === 1 ? "" : "s"} left this hour`;
+    sub = "A free token raises the limit to 5,000/hour.";
+    action = "Add token";
+  }
+  banner.hidden = !title;
+  banner.classList.toggle("is-warn", !!title && !badToken && !limited);
+  document.getElementById("rate-banner-title").textContent = title;
+  document.getElementById("rate-banner-sub").textContent = sub;
+  const btn = document.getElementById("rate-banner-btn");
+  btn.hidden = !action;
+  btn.textContent = action;
+
+  // Tick the countdown while limited; when the window resets, reload what failed
+  if (limited && !rateTimer) {
+    rateTimer = setInterval(renderRateLimit, 15000);
+  } else if (!limited && rateTimer) {
+    clearInterval(rateTimer);
+    rateTimer = null;
+  }
+  if (wasRateLimited && !limited && !badToken) reloadCurrentRepo();
+  wasRateLimited = limited;
+}
+
+function openTokenSettings() {
+  switchTab("settings");
+  const input = document.getElementById("sp-gh-token");
+  input.scrollIntoView({ block: "center", behavior: "smooth" });
+  input.focus();
 }
 
 // ── Repo metadata ─────────────────────────────────────────────────────────────
@@ -286,7 +540,7 @@ function updateRateLimitBadge(remaining, limit) {
 function loadRepoData(repo = currentRepo) {
   const cache = cacheFor(repoKey(repo));
   if (cache.repoData) return Promise.resolve(cache.repoData);
-  cache.repoDataPromise ??= fetchGitHub("", false, repo)
+  cache.repoDataPromise ??= fetchGitHub("", repo)
     .then(data => (cache.repoData = data))
     .finally(() => { delete cache.repoDataPromise; });
   return cache.repoDataPromise;
@@ -342,7 +596,7 @@ async function fetchIssues() {
     cacheFor(cacheKey).issues = issues.filter(i => !i.pull_request);
     if (isCurrentRepo(cacheKey)) renderIssues(activeIssueFilter());
   } catch (err) {
-    if (isCurrentRepo(cacheKey)) list.innerHTML = stateItem(escapeHtml(err.message), { error: true });
+    if (isCurrentRepo(cacheKey)) list.innerHTML = errorState(err);
   }
 }
 
@@ -426,7 +680,7 @@ async function fetchTechStack() {
     ]);
     if (isCurrentRepo(cacheKey)) renderTechStack(languages, tools);
   } catch (err) {
-    if (isCurrentRepo(cacheKey)) list.innerHTML = stateItem(escapeHtml(err.message), { error: true });
+    if (isCurrentRepo(cacheKey)) list.innerHTML = errorState(err);
   }
 }
 
@@ -572,7 +826,7 @@ async function detectTools() {
     // .github/workflows → GitHub Actions (one extra call)
     if (byName[".github"]?.type === "dir") {
       try {
-        const ghContents = await fetchGitHub("/contents/.github", false, repo);
+        const ghContents = await fetchGitHub("/contents/.github", repo);
         if (Array.isArray(ghContents) && ghContents.some(f => f.name === "workflows")) {
           add("GitHub Actions");
         }
@@ -708,7 +962,7 @@ async function fetchMaintainers() {
     cacheFor(cacheKey).contributors = contributors;
     if (isCurrentRepo(cacheKey)) renderMaintainers(contributors);
   } catch (err) {
-    if (isCurrentRepo(cacheKey)) list.innerHTML = stateItem(escapeHtml(err.message), { error: true });
+    if (isCurrentRepo(cacheKey)) list.innerHTML = errorState(err);
   }
 }
 
@@ -768,22 +1022,19 @@ async function fetchRepoHealth() {
 
   const repo = currentRepo;
   const cacheKey = repoKey(repo);
-  const exists = (path) => fetchGitHub(path, true, repo).then(r => r.ok);
-  const anyExists = async (paths) => (await Promise.all(paths.map(exists))).some(Boolean);
+  const anyExists = async (paths) => (await Promise.all(paths.map(p => githubExists(p, repo)))).some(Boolean);
 
   try {
     const [profileResult, openPRsResult, closedPRsResult, repoDataResult] = await Promise.allSettled([
       // The community profile finds CONTRIBUTING / issue templates wherever GitHub
       // recognises them (root, .github/, docs/) in a single request.
-      fetchGitHub("/community/profile", false, repo),
-      fetchGitHub("/pulls?state=open&per_page=1", true, repo).then(async r => {
-        const linkHeader = r.headers.get("Link") || "";
-        const match = linkHeader.match(/page=(\d+)>; rel="last"/);
-        if (match) return parseInt(match[1]);
-        const data = await r.json().catch(() => []);
-        return data.length;
+      fetchGitHub("/community/profile", repo),
+      // With per_page=1 the "last" page number in the Link header is the PR count
+      fetchGitHubPage("/pulls?state=open&per_page=1", repo).then(({ data, link }) => {
+        const match = (link || "").match(/page=(\d+)>; rel="last"/);
+        return match ? parseInt(match[1]) : data.length;
       }),
-      fetchGitHub("/pulls?state=closed&sort=updated&per_page=10", false, repo).then(prs => {
+      fetchGitHub("/pulls?state=closed&sort=updated&direction=desc&per_page=10", repo).then(prs => {
         const merged = prs.filter(p => p.merged_at);
         if (merged.length === 0) return null;
         const avgMs = merged.reduce((sum, p) => {
@@ -795,6 +1046,11 @@ async function fetchRepoHealth() {
       // otherwise the activity score silently drops to 0 when this wins the race.
       loadRepoData(repo),
     ]);
+
+    // A score built from rate-limited gaps would be wrong and then cached — bail instead
+    const limited = [profileResult, openPRsResult, closedPRsResult, repoDataResult]
+      .find(r => r.status === "rejected" && r.reason?.rateLimited);
+    if (limited) throw limited.reason;
 
     const files = profileResult.status === "fulfilled" ? profileResult.value.files || {} : null;
     const [hasContributing, hasIssueTemplates] = await Promise.all([
@@ -819,7 +1075,7 @@ async function fetchRepoHealth() {
     if (isCurrentRepo(cacheKey)) renderHealthCard(health);
   } catch (err) {
     if (isCurrentRepo(cacheKey)) {
-      document.getElementById("health-card").innerHTML = stateItem(`Couldn't load repo health — ${escapeHtml(err.message)}`, { error: true, tag: "div" });
+      document.getElementById("health-card").innerHTML = errorState(err, "div");
     }
   }
 }
@@ -923,11 +1179,12 @@ async function fetchOpenPRs() {
   const cacheKey = repoKey();
 
   try {
-    const prs = await fetchGitHub("/pulls?state=open&per_page=8&sort=updated");
+    // GitHub sorts ascending unless told otherwise, so always pass direction=desc
+    const prs = await fetchGitHub("/pulls?state=open&sort=created&direction=desc&per_page=8");
     cacheFor(cacheKey).prs = prs;
     if (isCurrentRepo(cacheKey)) renderOpenPRs(prs);
   } catch (err) {
-    if (isCurrentRepo(cacheKey)) list.innerHTML = stateItem(escapeHtml(err.message), { error: true });
+    if (isCurrentRepo(cacheKey)) list.innerHTML = errorState(err);
   }
 }
 
@@ -1117,7 +1374,7 @@ async function handleChat() {
       if (!isStale()) botBubble.classList.remove("streaming");
     } else {
       // Error before first token — show error bubble
-      const errText = `Error: ${err.message}`;
+      const errText = err.rateLimited ? err.message : `Error: ${err.message}`;
       messages.push({ role: "bot", text: errText, error: true });
       saveChatHistory(repo, messages);
       if (!isStale()) appendChatMessage("bot", errText, false);
@@ -1487,11 +1744,23 @@ function initSettingsTab() {
   document.getElementById("sp-save-gh-btn").addEventListener("click", async () => {
     const token = document.getElementById("sp-gh-token").value.trim();
     if (!token) { showSpStatus("sp-gh-status", "Enter a token.", true); return; }
-    await chrome.storage.local.set({ githubToken: token });
-    githubToken = token;
-    document.getElementById("sp-gh-token").value       = "";
-    document.getElementById("sp-gh-token").placeholder = maskApiKey(token);
-    showSpStatus("sp-gh-status", "Token saved!");
+    const saveBtn = document.getElementById("sp-save-gh-btn");
+    saveBtn.disabled = true;
+    try {
+      // /rate_limit is free, so check the token before trusting it
+      const { valid, core } = await checkRateLimit(token);
+      if (!valid) { showSpStatus("sp-gh-status", "GitHub rejected this token — check you copied all of it.", true); return; }
+      await chrome.storage.local.set({ githubToken: token });
+      githubToken = token;
+      document.getElementById("sp-gh-token").value       = "";
+      document.getElementById("sp-gh-token").placeholder = maskApiKey(token);
+      showSpStatus("sp-gh-status", `Token saved — ${(core?.limit ?? 5000).toLocaleString()} requests/hour.`);
+      onGitHubTokenChanged();
+    } catch {
+      showSpStatus("sp-gh-status", "Couldn't reach GitHub to check the token. Try again.", true);
+    } finally {
+      saveBtn.disabled = false;
+    }
   });
 
   // Clear GitHub token
@@ -1501,6 +1770,7 @@ function initSettingsTab() {
     document.getElementById("sp-gh-token").value       = "";
     document.getElementById("sp-gh-token").placeholder = "ghp_...";
     showSpStatus("sp-gh-status", "Token cleared.");
+    onGitHubTokenChanged();
   });
 
   // Settings saved from the standalone options page must reach an open panel
@@ -1509,9 +1779,10 @@ function initSettingsTab() {
     if (changes.aiProvider)  aiProvider  = changes.aiProvider.newValue  || "groq";
     if (changes.aiApiKey)    aiApiKey    = changes.aiApiKey.newValue    || "";
     if (changes.ollamaModel) ollamaModel = changes.ollamaModel.newValue || "llama3.2";
-    if (changes.githubToken) {
+    if (changes.githubToken && (changes.githubToken.newValue || "") !== githubToken) {
       githubToken = changes.githubToken.newValue || "";
       document.getElementById("sp-gh-token").placeholder = githubToken ? maskApiKey(githubToken) : "ghp_...";
+      onGitHubTokenChanged();
     }
     if (changes.aiProvider || changes.aiApiKey || changes.ollamaModel) {
       settingsProvider = aiProvider;
@@ -1522,6 +1793,15 @@ function initSettingsTab() {
       refreshBadge();
     }
   });
+}
+
+// New quota, new cache namespace: re-read the limit and reload what's on screen
+async function onGitHubTokenChanged() {
+  ghState.badToken = false;
+  ghState.remaining = null;
+  ghState.resetAt = 0;
+  await refreshRateLimit();
+  reloadCurrentRepo();
 }
 
 function maskApiKey(key) {
@@ -1839,11 +2119,15 @@ async function buildRepoContext(repo) {
   ];
 
   const [tree, ...results] = await Promise.allSettled([
-    fetchGitHub("/git/trees/HEAD?recursive=1", false, repo).then(formatFileTree),
+    fetchGitHub("/git/trees/HEAD?recursive=1", repo).then(formatFileTree),
     ...fileTargets.map(f =>
-      fetchGitHub(f.endpoint, false, repo).then(d => `=== ${f.label} ===\n${decodeGitHubContent(d).substring(0, f.limit)}`)
+      fetchGitHub(f.endpoint, repo).then(d => `=== ${f.label} ===\n${decodeGitHubContent(d).substring(0, f.limit)}`)
     ),
   ]);
+
+  // Don't let the model answer from a context that's silently missing files
+  const limited = [tree, ...results].find(r => r.status === "rejected" && r.reason?.rateLimited);
+  if (limited) throw limited.reason;
 
   const parts = results.filter(r => r.status === "fulfilled").map(r => r.value);
   if (tree.status === "fulfilled" && tree.value) parts.push(`=== File Tree ===\n${tree.value}`);
