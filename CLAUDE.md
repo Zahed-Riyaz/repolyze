@@ -91,7 +91,7 @@ All API paths below are relative to `https://api.github.com/repos/{owner}/{repo}
 | Every path in the repo (one call, shared by Stack, Maintainers, Chat, briefs) | `GET /git/trees/HEAD?recursive=1` |
 | File contents — public repos (no API quota) | `GET https://raw.githubusercontent.com/{owner}/{repo}/{default_branch}/{path}` |
 | File contents — private repos (needs the token) | `GET /contents/{path}?ref={default_branch}` (base64, decoded as UTF-8) |
-| What gets read | CODEOWNERS (`CODEOWNERS`, `.github/`, `docs/`), README, CONTRIBUTING, manifests (`package.json`, `pyproject.toml`, `go.mod`, …), one CI workflow (`.github/workflows/*.yml`), and the source files chosen per question. |
+| What gets read | CODEOWNERS (`CODEOWNERS`, `.github/`, `docs/`), README, CONTRIBUTING, dev docs (`docs/development.md`, `docs/testing.md`, …), manifests (`package.json`, `pyproject.toml`, `go.mod`, …), one CI workflow (`.github/workflows/*.yml`), and the source files chosen per question. |
 
 **Links out (opened in the browser, not fetched)**
 - Code citations → `https://github.com/{owner}/{repo}/blob/{ref}/{path}#L{start}-L{end}` (the default branch for chat and issue briefs; the PR's head SHA, in the author's fork if it is one, for PR briefs).
@@ -107,6 +107,7 @@ The extension uses **retrieval-augmented generation**: before the AI answers, it
 | Shortlist | Rank every path against the question: identifiers split (`handleRepoRefresh` → handle, repo, refresh), file-name hits beat directory hits, tests/vendor/lockfiles demoted or skipped | `queryTerms`, `rankCodeFiles` |
 | Select | Files named in the question are read directly; otherwise the AI picks ≤5 from the shortlist (60/120/250 paths by model size), falling back to the best path matches or the previous answer's files | `mentionedFiles`, `buildChatContext` |
 | Chunk | Query-time chunking: small files whole; large files keep their head plus the best-matching 40-line windows (definitions weigh extra), with line numbers | `extractSnippets` |
+| Pick doc sections | README, CONTRIBUTING and dev docs are split by heading once per repo; per question keep the intro + best-matching sections (heading hits weigh most) in order, and name the rest; `package.json` sent as a summary (scripts in full) | `splitMarkdownSections`, `selectSections`, `summarizePackageJson`, `contextPartsForQuestion` |
 | Pack | Code first, then README, file tree, CONTRIBUTING/configs/CI, within a per-provider character budget | `packContext`, `CONTEXT_BUDGET` |
 | Generate | System prompt with grounding rules; context in `<repository_context>`; question last; answer streams | `buildChatPrompt`, `callAIStreaming` |
 | Verify | Citations to files that were read become links; a "Read N files" row lists the excerpts | `linkifyCitations`, `sourcesHtml` |
@@ -132,7 +133,7 @@ Where it's used:
 | **Performance** | Local ranking of 100k paths ≈ 150 ms; file reads in parallel; skeletons instead of layout jumps; streaming AI output. |
 | **Accessibility** | Keyboard-reachable controls with visible focus rings, ARIA roles on tabs/status, `prefers-reduced-motion` respected, theme-aware label contrast. |
 | **Compatibility** | Chrome with the Side Panel API (MV3); works at narrow panel widths (tab icons hide below 480px via a container query); light and dark themes follow the OS. |
-| **Maintainability** | Plain JS, no build step; pure logic separated from rendering and unit-tested; 133 tests (`npm test`, ~3s) run in CI on every push. |
+| **Maintainability** | Plain JS, no build step; pure logic separated from rendering and unit-tested; 142 tests (`npm test`, ~3s) run in CI on every push. |
 | **Cost** | Zero infrastructure cost; users bring their own AI key (free tiers on Groq/Gemini, free local Ollama). |
 
 ---
@@ -252,4 +253,4 @@ Where it's used:
 
 ## 8. Summary
 
-GitHub Repo Analyzer is a backend-free Chrome side panel that turns "a repo I've never seen" into "a contribution I can start today". It finds issues that are genuinely available across the whole repo, briefs each one (is it free, where to start, who to ask, what CI will run), explains pull requests including their full conversation and status, surfaces the people who actually maintain the project, scores contributor-friendliness from measured signals, and answers questions from the repo's real source code with line-level citations. Everything is computed client-side from the GitHub API — carefully budgeted, cached and rate-limit-aware — with the user's own AI provider adding summaries on top of deterministic, verifiable data. It's plain JavaScript with no build step, a token-based light/dark design built for a narrow panel, and 133 tests running in CI.
+GitHub Repo Analyzer is a backend-free Chrome side panel that turns "a repo I've never seen" into "a contribution I can start today". It finds issues that are genuinely available across the whole repo, briefs each one (is it free, where to start, who to ask, what CI will run), explains pull requests including their full conversation and status, surfaces the people who actually maintain the project, scores contributor-friendliness from measured signals, and answers questions from the repo's real source code with line-level citations. Everything is computed client-side from the GitHub API — carefully budgeted, cached and rate-limit-aware — with the user's own AI provider adding summaries on top of deterministic, verifiable data. It's plain JavaScript with no build step, a token-based light/dark design built for a narrow panel, and 142 tests running in CI.
