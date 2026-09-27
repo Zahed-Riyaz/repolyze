@@ -57,19 +57,143 @@ function sourceUrl(repo, ref, path, start, end) {
   return `https://github.com/${repo.owner}/${repo.repo}/blob/${encodePath(ref || "HEAD")}/${encodePath(path)}${lines}`;
 }
 
-// ── Repo-wide context (README, configs, CI, tree) ────────────────────────────
+// ── Repo-wide context (README, docs, configs, CI, tree) ──────────────────────
 // Found via the tree, so nothing is guessed: no 404 probes, and CONTRIBUTING in
-// .github/ or docs/ is picked up too.
+// .github/ or docs/ is picked up too. Documents are split into sections once per
+// repo; each question then keeps the sections that match it (contextPartsForQuestion)
+// instead of whatever happens to fit at the top of the file.
 const CONTEXT_FILES = [
-  { label: "README",       limit: 3000, find: (p) => /^readme(\.(md|markdown|rst|txt))?$/i.test(p) },
-  { label: "CONTRIBUTING", limit: 2000, find: (p) => /^(\.github\/|docs\/)?contributing(\.(md|rst|txt))?$/i.test(p) },
+  { label: "README",       limit: 3000, doc: true, find: (p) => /^readme(\.(md|markdown|rst|txt))?$/i.test(p) },
+  { label: "CONTRIBUTING", limit: 2000, doc: true, find: (p) => /^(\.github\/|docs\/)?contributing(\.(md|rst|txt))?$/i.test(p) },
+  { label: null,           limit: 1500, doc: true, find: (p) => /^(docs\/)?(development|developing|hacking|setup|install(ation)?|testing|architecture)\.(md|markdown)$/i.test(p) },
   { label: null,           limit: 1500, find: (p) => /^(package\.json|requirements\.txt|pyproject\.toml|Cargo\.toml|go\.mod|Gemfile|pom\.xml|build\.gradle(\.kts)?|composer\.json|Makefile|docker-compose\.ya?ml|\.nvmrc|\.tool-versions|\.python-version)$/.test(p) },
 ];
+const NESTED_MANIFEST = /^(?!\.)(.+\/)(package\.json|pyproject\.toml|Cargo\.toml|go\.mod)$/;
 
 // Most informative CI workflow: one that runs tests, else the first
 function pickWorkflow(entries) {
   const flows = entries.filter(e => e.type === "blob" && /^\.github\/workflows\/[^/]+\.ya?ml$/.test(e.path));
   return flows.find(e => /test|ci|build|check/i.test(e.path)) || flows[0];
+}
+
+// Markdown → sections: [{ level, heading, path: [..ancestor headings, heading], body }].
+// The text before the first heading is the intro (level 0). Handles "#" headings,
+// underlined (===/---) headings and single-line HTML <h1>–<h6>; "#" lines inside
+// code fences are code, not headings.
+function splitMarkdownSections(text) {
+  const lines = (text || "").split("\n");
+  const sections = [{ level: 0, heading: "", path: [], lines: [] }];
+  const stack = [];
+  let fence = false;
+  const open = (level, heading) => {
+    while (stack.length && stack[stack.length - 1].level >= level) stack.pop();
+    stack.push({ level, heading });
+    sections.push({ level, heading, path: stack.map(h => h.heading), lines: [] });
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const cur = sections[sections.length - 1];
+    if (/^\s*(```|~~~)/.test(line)) { fence = !fence; cur.lines.push(line); continue; }
+    if (!fence) {
+      const atx = line.match(/^(#{1,6})\s+(.+?)\s*#*\s*$/);
+      if (atx) { open(atx[1].length, atx[2].trim()); continue; }
+      const html = line.match(/^\s*<h([1-6])[^>]*>(.*?)<\/h\1>\s*$/i);
+      if (html) { open(Number(html[1]), html[2].replace(/<[^>]+>/g, "").trim() || "Section"); continue; }
+      const next = lines[i + 1];
+      if (line.trim() && next !== undefined && /^(=+|-+)\s*$/.test(next) && next.trim().length >= 3 && !/^\s*[-*+>|]/.test(line)) {
+        open(next.trim()[0] === "=" ? 1 : 2, line.trim());
+        i++;
+        continue;
+      }
+    }
+    cur.lines.push(line);
+  }
+  return sections
+    .map(({ lines: ls, ...sec }) => ({ ...sec, body: ls.join("\n").trim() }))
+    .filter((sec, idx) => idx === 0 || sec.body || sec.heading);
+}
+
+// How well a section matches the question: heading hits count most
+function scoreSection(section, terms) {
+  const head = section.path.join(" ").toLowerCase();
+  const body = section.body.toLowerCase();
+  let score = 0;
+  for (const t of terms) {
+    if (head.includes(t)) score += 3;
+    const n = body.split(t).length - 1;
+    if (n) score += 1 + Math.min(n, 5) * 0.5;
+  }
+  return score;
+}
+
+const renderSection = (s) => (s.level ? `${"#".repeat(s.level)} ${s.heading}\n${s.body}` : s.body).trim();
+
+// Keep the intro plus the best-matching sections within `limit`, in document
+// order, and name the sections left out so the model knows they exist. With no
+// terms (or no matches) it keeps the top of the document, as before.
+function selectSections(sections, terms, limit) {
+  if (!sections.length) return "";
+  const [intro, ...rest] = sections;
+  const scored = rest.map((s, i) => ({ s, i, score: terms.length ? scoreSection(s, terms) : 0 }));
+  const matches = scored.filter(x => x.score > 0).sort((a, b) => b.score - a.score || a.i - b.i);
+
+  const chosen = new Set();
+  // Room held back for the "Other sections" note, so the result never exceeds `limit`
+  const reserve = rest.length ? Math.min(250, Math.floor(limit * 0.1)) : 0;
+  const budget = limit - reserve;
+  let used = 0;
+  const take = (text, room) => (text.length <= room ? text : `${text.slice(0, Math.max(0, room - 2))}\n…`);
+  const pieces = new Map(); // section index (-1 = intro) → text
+
+  // Intro first — capped so matching sections still get room
+  const introText = renderSection(intro);
+  if (introText) {
+    const cap = matches.length ? Math.floor(budget * 0.35) : budget;
+    const t = take(introText, Math.min(cap, budget));
+    pieces.set(-1, t);
+    used += t.length + 2;
+  }
+  // Then matching sections, best first; then (if room) the rest in order
+  for (const { s, i } of [...matches, ...scored.filter(x => x.score === 0)]) {
+    const room = budget - used;
+    if (room < 200) break;
+    const text = renderSection(s);
+    if (!text) continue;
+    if (text.length > room && matches.length && !matches.some(m => m.i === i)) continue; // don't cut unrelated sections in
+    const t = take(text, room);
+    pieces.set(i, t);
+    chosen.add(i);
+    used += t.length + 2;
+  }
+
+  const body = [...pieces.entries()].sort((a, b) => a[0] - b[0]).map(([, t]) => t).join("\n\n");
+  const omitted = [...new Set(rest.filter((s, i) => !chosen.has(i) && s.level && s.level <= 3).map(s => s.heading))];
+  const room = limit - body.length - 2;
+  if (!omitted.length || room < 40) return body.slice(0, limit);
+  let toc = `(Other sections not shown: ${omitted.join(", ")})`;
+  if (toc.length > room) toc = `${toc.slice(0, room - 2)}…)`;
+  return `${body}\n\n${toc}`;
+}
+
+// package.json → the parts that matter for working on the repo, in full:
+// scripts are never lost behind a long dependency list.
+function summarizePackageJson(text) {
+  let pkg;
+  try { pkg = JSON.parse(text); } catch { return null; }
+  const lines = [];
+  if (pkg.name) lines.push(`name: ${pkg.name}${pkg.description ? ` — ${pkg.description}` : ""}`);
+  if (pkg.packageManager) lines.push(`packageManager: ${pkg.packageManager}`);
+  if (pkg.engines) lines.push(`engines: ${Object.entries(pkg.engines).map(([k, v]) => `${k} ${v}`).join(", ")}`);
+  if (pkg.workspaces) lines.push(`workspaces: ${[].concat(pkg.workspaces.packages || pkg.workspaces).join(", ")}`);
+  if (pkg.type) lines.push(`type: ${pkg.type}`);
+  if (pkg.scripts && Object.keys(pkg.scripts).length) {
+    lines.push("scripts:", ...Object.entries(pkg.scripts).map(([k, v]) => `  ${k}: ${v}`));
+  }
+  for (const field of ["dependencies", "devDependencies", "peerDependencies"]) {
+    const names = Object.keys(pkg[field] || {});
+    if (names.length) lines.push(`${field}: ${names.join(", ")}`);
+  }
+  return lines.join("\n");
 }
 
 function getRepoContextParts(repo = currentRepo) {
@@ -78,24 +202,45 @@ function getRepoContextParts(repo = currentRepo) {
   return cache.contextParts;
 }
 
+// → [{ label, text, priority, limit, sections? }] — `text` is the default
+// (top-of-document) excerpt; documents also carry their sections so each
+// question can choose its own (contextPartsForQuestion).
 async function buildRepoContextParts(repo) {
   const tree = await getRepoTree(repo);
   const blobs = tree.entries.filter(e => e.type === "blob");
   const wanted = [];
   for (const spec of CONTEXT_FILES) {
-    for (const e of blobs) if (spec.find(e.path)) wanted.push({ path: e.path, label: spec.label || e.path, limit: spec.limit });
+    for (const e of blobs) if (spec.find(e.path)) wanted.push({ path: e.path, label: spec.label || e.path, limit: spec.limit, doc: spec.doc });
   }
   const workflow = pickWorkflow(tree.entries);
   if (workflow) wanted.push({ path: workflow.path, label: `CI workflow (${workflow.path})`, limit: 1500 });
 
   const files = await Promise.all(wanted.map(async (w) => {
     const text = await readRepoFile(w.path, repo).catch(() => null);
-    return text ? { label: w.label, text: text.substring(0, w.limit), priority: w.label === "README" ? 1 : 3 } : null;
+    if (!text) return null;
+    const priority = w.label === "README" ? 1 : 3;
+    if (w.doc && /\.(md|markdown)$|^readme$/i.test(w.path.split("/").pop())) {
+      const sections = splitMarkdownSections(text);
+      return { label: w.label, priority, limit: w.limit, sections, text: selectSections(sections, [], w.limit) };
+    }
+    const summary = w.path === "package.json" ? summarizePackageJson(text) : null;
+    return { label: w.label, priority, limit: w.limit, text: (summary ?? text).substring(0, summary ? 3000 : w.limit) };
   }));
   const parts = files.filter(Boolean);
+
+  // Monorepos: say where the other packages are, so the model can point at them
+  const nested = blobs.filter(e => NESTED_MANIFEST.test(e.path) && !NOISE_PATH.test(e.path)).map(e => e.path);
+  if (nested.length) {
+    parts.push({ label: "Nested packages", priority: 3, text: nested.slice(0, 40).join("\n") + (nested.length > 40 ? `\n… and ${nested.length - 40} more` : "") });
+  }
   const treeText = formatFileTree(tree);
   if (treeText) parts.push({ label: "File tree", text: treeText, priority: 2 });
   return parts;
+}
+
+// Re-selects each document's sections for this question's terms
+function contextPartsForQuestion(parts, terms) {
+  return parts.map(p => (p.sections && terms.length ? { ...p, text: selectSections(p.sections, terms, p.limit) } : p));
 }
 
 // Turns the tree into a compact path listing the model can use to answer
@@ -359,9 +504,10 @@ async function buildChatContext(repo, question, previousQuestion, onStatus = () 
     }
   });
 
-  // 4. Pack: code first, then README, tree, configs
+  // 4. Pack: code first, then README, tree, configs — documents trimmed to the
+  //    sections that match this question
   onStatus("Thinking…");
-  const context = packContext([...codeParts, ...baseParts], budget);
+  const context = packContext([...codeParts, ...contextPartsForQuestion(baseParts, terms)], budget);
   return { context, sources, ref };
 }
 
