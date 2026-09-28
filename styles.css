@@ -1260,3 +1260,15 @@ a.cite:hover code { background: var(--accent-subtle); }
 }
 .chat-focus-clear:hover { background: var(--bg-hover); color: var(--fg); }
 .msg-focus { margin-bottom: 3px; font-size: 11px; color: var(--accent); }
+
+/* ── Repo tab: whose project this is ────────────────────────────────────── */
+.repo-identity-main { display: flex; align-items: center; gap: 12px; }
+.repo-avatar { width: 44px; height: 44px; flex-shrink: 0; border-radius: 50%; border: 1px solid var(--border); background: var(--bg-subtle); }
+.repo-avatar.is-org { border-radius: var(--r-md); }
+.repo-identity-text { min-width: 0; }
+.repo-identity-name { display: block; color: var(--fg); font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.repo-identity-name:hover { color: var(--accent); text-decoration: none; }
+.repo-identity-owner { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 2px; font-size: 12.5px; color: var(--fg-muted); }
+.repo-identity-owner a { color: var(--fg); font-weight: 500; }
+.repo-homepage { display: inline-flex; align-items: center; gap: 4px; margin-top: 10px; font-size: 12.5px; overflow-wrap: anywhere; }
+.repo-identity .issue-labels { margin-top: 10px; }

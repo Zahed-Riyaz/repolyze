@@ -25,6 +25,7 @@ Three tabs: **Repo** · **Contribute** · **Ask**. A repo opens on Contribute �
 - FR-13a Each brief has an **Ask about this issue / PR** row: suggestions (issue: *Summary & plan*, *Where do I start?*, *How do I test this?*; PR: *Summarise the PR*, *What's still open?*, *How could I help?*) are sent to Ask as visible questions; *Your own question* focuses Ask without sending.
 
 **Repo tab** — context about the project
+- FR-10a Top card: the owner's avatar (square for organisations, round for users), `owner/repo`, "by {owner}" with Organization/User, Archived when it is, the website (http(s) only) and up to 8 topics — all from the repo response, no extra request.
 - FR-11 Contributor-friendliness health score (0–100) from measured signals — maintainer response, outside PRs merged, merge speed, activity, onboarding docs — each shown with its evidence; unmeasured signals are n/a and excluded, not zero.
 - FR-8 Language breakdown (GitHub linguist colours) and detected tools/services (containers, CI, cloud, databases, testing…).
 - FR-9 Active maintainers: users with OWNER/MEMBER/COLLABORATOR association who replied on issues/PRs in the last 90 days, merged with CODEOWNERS (users and teams); flag repos where nobody with access replies.
@@ -61,7 +62,7 @@ All API paths below are relative to `https://api.github.com/repos/{owner}/{repo}
 **Repo-level data**
 | Purpose | Request |
 |---|---|
-| Header (stars, forks, license, default branch, `pushed_at`, private?) | `GET ""` (the repo itself) |
+| Header and Repo tab card (stars, forks, license, default branch, `pushed_at`, private?, owner avatar/type, homepage, topics) | `GET ""` (the repo itself) |
 | Languages | `GET /languages` |
 | All-time contributors | `GET /contributors?per_page=10` |
 | CONTRIBUTING / templates / code of conduct | `GET /community/profile` |
@@ -142,7 +143,7 @@ Where it's used:
 | **Performance** | Local ranking of 100k paths ≈ 150 ms; file reads in parallel; skeletons instead of layout jumps; streaming AI output. |
 | **Accessibility** | Keyboard-reachable controls with visible focus rings, ARIA roles on tabs/status, `prefers-reduced-motion` respected, theme-aware label contrast. |
 | **Compatibility** | Chrome with the Side Panel API (MV3); works at narrow panel widths (three tabs; icons hide below 480px via a container query); light and dark themes follow the OS. |
-| **Maintainability** | Plain JS, no build step; pure logic separated from rendering and unit-tested; 168 tests (`npm test`, ~3s) run in CI on every push. |
+| **Maintainability** | Plain JS, no build step; pure logic separated from rendering and unit-tested; 169 tests (`npm test`, ~3s) run in CI on every push. |
 | **Cost** | Zero infrastructure cost; users bring their own AI key (free tiers on Groq/Gemini, free local Ollama). |
 
 ---
@@ -266,4 +267,4 @@ Where it's used:
 
 ## 8. Summary
 
-GitHub Repo Analyzer is a backend-free Chrome side panel that turns "a repo I've never seen" into "a contribution I can start today". It finds issues that are genuinely available across the whole repo, briefs each one (is it free, where to start, who to ask, what CI will run), explains pull requests including their full conversation and status, surfaces the people who actually maintain the project, scores contributor-friendliness from measured signals, and answers questions from the repo's real source code with line-level citations. Everything is computed client-side from the GitHub API — carefully budgeted, cached and rate-limit-aware — with the user's own AI provider adding summaries on top of deterministic, verifiable data. It's plain JavaScript with no build step, a token-based light/dark design built for a narrow panel, and 168 tests running in CI.
+GitHub Repo Analyzer is a backend-free Chrome side panel that turns "a repo I've never seen" into "a contribution I can start today". It finds issues that are genuinely available across the whole repo, briefs each one (is it free, where to start, who to ask, what CI will run), explains pull requests including their full conversation and status, surfaces the people who actually maintain the project, scores contributor-friendliness from measured signals, and answers questions from the repo's real source code with line-level citations. Everything is computed client-side from the GitHub API — carefully budgeted, cached and rate-limit-aware — with the user's own AI provider adding summaries on top of deterministic, verifiable data. It's plain JavaScript with no build step, a token-based light/dark design built for a narrow panel, and 169 tests running in CI.

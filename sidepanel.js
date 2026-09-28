@@ -329,6 +329,8 @@ async function updateRepoInfo() {
   document.getElementById("repo-forks").textContent = "—";
   document.getElementById("repo-license-wrap").hidden = true;
   document.getElementById("repo-fork-badge").style.display = "none";
+  document.getElementById("repo-identity").innerHTML =
+    `<div class="repo-identity-main"><span class="sk repo-avatar"></span><span class="sk-lines" style="flex:1;display:flex;flex-direction:column;gap:8px"><span class="sk sk-line short"></span><span class="sk sk-line"></span></span></div>`;
 
   // A brief belongs to the repo it was opened on
   closeIssueBrief();
@@ -702,6 +704,31 @@ function applyRepoData(data) {
   } else {
     forkBadge.style.display = "none";
   }
+  document.getElementById("repo-identity").innerHTML = repoIdentityHtml(data);
+}
+
+// Top of the Repo tab: whose project this is. The owner's avatar stands in for
+// a repo icon (square for organisations, round for people, as on GitHub); the
+// website and topics show when the repo has them. All from the repo response.
+function repoIdentityHtml(data) {
+  const owner = data.owner || {};
+  const isOrg = owner.type === "Organization";
+  const homepage = /^https?:\/\//i.test(data.homepage || "") ? data.homepage : null;
+  const topics = (data.topics || []).slice(0, 8);
+  return `
+    <div class="repo-identity-main">
+      ${owner.avatar_url ? `<img src="${avatarUrl(owner.avatar_url, 96)}" class="repo-avatar${isOrg ? " is-org" : ""}" alt="">` : ""}
+      <div class="repo-identity-text">
+        <a href="${data.html_url}" target="_blank" class="repo-identity-name">${escapeHtml(data.full_name || "")}</a>
+        <div class="repo-identity-owner">
+          by <a href="${owner.html_url}" target="_blank">${escapeHtml(owner.login || "")}</a>
+          <span class="chip">${isOrg ? "Organization" : "User"}</span>
+          ${data.archived ? `<span class="chip chip-closed">Archived</span>` : ""}
+        </div>
+      </div>
+    </div>
+    ${homepage ? `<a class="repo-homepage" href="${escapeHtml(homepage)}" target="_blank">${icon("arrow-right", "icon-sm")}${escapeHtml(homepage.replace(/^https?:\/\/(www\.)?/i, "").replace(/\/$/, ""))}</a>` : ""}
+    ${topics.length ? `<div class="issue-labels">${topics.map(t => `<span class="chip">${escapeHtml(t)}</span>`).join("")}</div>` : ""}`;
 }
 
 function formatNumber(n) {

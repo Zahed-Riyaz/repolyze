@@ -280,3 +280,22 @@ test("Get token opens GitHub's token page and waits on the token field", async (
   assert.equal(panel.run("lastContentTab"), "contribute");
   assert.match(panel.el("sp-gh-status").textContent, /Paste your new token/);
 });
+
+// ── Repo tab identity ────────────────────────────────────────────────────────
+test("the Repo tab opens with the owner's avatar, the repo, its owner, website and topics", () => {
+  const { panel } = openRepo();
+  const html = panel.fn.repoIdentityHtml({
+    full_name: "acme/rocket", html_url: "https://github.com/acme/rocket", homepage: "https://rocket.dev/",
+    topics: ["space", "timers"], archived: true,
+    owner: { login: "acme", type: "Organization", html_url: "https://github.com/acme", avatar_url: "https://avatars.githubusercontent.com/u/9?v=4" },
+  });
+  assert.match(html, /<img src="https:\/\/avatars\.githubusercontent\.com\/u\/9\?v=4&s=96"/, "the owner's avatar, sized for the card");
+  assert.match(html, /class="repo-avatar is-org"/, "organisations get a square avatar");
+  assert.match(html, />acme\/rocket<\/a>[\s\S]*by <a href="https:\/\/github\.com\/acme"[^>]*>acme<\/a>[\s\S]*Organization[\s\S]*Archived/);
+  assert.match(html, /href="https:\/\/rocket\.dev\/"[^>]*>[\s\S]*rocket\.dev<\/a>/);
+  assert.match(html, /<span class="chip">space<\/span><span class="chip">timers<\/span>/);
+
+  const person = panel.fn.repoIdentityHtml({ full_name: "ada/tool", html_url: "x", homepage: "javascript:alert(1)", owner: { login: "ada", type: "User", avatar_url: "https://avatars.githubusercontent.com/u/1" } });
+  assert.match(person, /class="repo-avatar"/);
+  assert.doesNotMatch(person, /javascript:|repo-homepage/, "only http(s) websites are linked");
+});
