@@ -256,6 +256,7 @@ Each question is answered from the repo's real code, not just its README. Everyt
 2. **Pick** — the AI is shown the top 250 paths and chooses up to 5 to read (or none, for "what is this project?"-type questions). If that fails, the best path matches are used.
 3. **Read** — files come from `raw.githubusercontent.com`, which **doesn't count against the GitHub API limit**. Small files are read whole; for big ones the file head plus the line windows that best match the question are kept.
 4. **Pack** — code excerpts (with line numbers), README, file tree, CONTRIBUTING, build configs and a CI workflow are packed in priority order into a per-provider budget (smaller for Groq's free tier and local Ollama models).
+5. **Pick document sections** — README, CONTRIBUTING and dev docs (`docs/development.md`, `docs/testing.md`, …) are split into sections by heading once per repo; each question keeps the intro plus the sections that match it (heading hits count most), in document order, and names the sections left out. `package.json` is sent as a summary (engines, package manager, workspaces, every script, dependency names) so scripts are never cut off, and nested packages in monorepos are listed.
 
 **How the prompt is built** (applies to every provider):
 
@@ -341,7 +342,7 @@ A token (no scopes needed for public repos) raises the limit to 5,000/hour. It's
 ## Running Tests
 
 ```bash
-npm test          # 133 unit + flow tests, ~3s, no dependencies (Node 22+)
+npm test          # 142 unit + flow tests, ~3s, no dependencies (Node 22+)
 npm run check     # syntax-check every script
 ```
 
@@ -356,6 +357,7 @@ The tests use Node's built-in runner. `test/helpers/panel.js` loads the real `re
 | `brief.test.js` | Code-owner matching, claim detection, availability verdicts, CI/package.json commands, the brief end-to-end (with and without AI), caching, stale-repo guards |
 | `pr-brief.test.js` | Review states, PR status verdicts, check summaries, diff line numbering, the full activity log (nothing dropped under tight budgets), PR brief end-to-end incl. forks and pagination |
 | `pr-browse.test.js` | Open/closed PR lists and paging, keyword search, the Find box (numbers, links, other repos, non-PR numbers), merged/closed verdicts, following the PR page you're on |
+| `sections.test.js` | Splitting Markdown by heading (incl. underlined/HTML headings, code fences), section selection per question and its size limit, the `package.json` summary, nested packages, end-to-end chat context |
 | `ai-requests.test.js` | System prompts per provider, prompt order, history budget, Ollama context window, named files, follow-up context, shortlist sizes |
 | `panel-flows.test.js` | API request budgets, lazy tabs and retries, token recovery, stale-response guards, issue search, rendering, chat saving, token validation |
 
