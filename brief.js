@@ -98,6 +98,15 @@ function issueAvailability(issue, comments, timeline, now) {
   if (!maintainerReplied) {
     reasons.push({ tone: "info", text: comments.length ? "No maintainer has replied in the thread yet" : "No comments yet — no maintainer has weighed in" });
   }
+  // A closed issue (e.g. found with Find) isn't available, whatever else is true
+  if (issue.state === "closed") {
+    const how = issue.state_reason === "not_planned" ? " as not planned" : issue.state_reason === "completed" ? " as completed" : "";
+    reasons.unshift({ tone: "bad", text: `Closed${how} ${daysAgo(issue.closed_at || issue.updated_at)}` });
+    return {
+      status: "taken", verdict: "Closed", reasons,
+      advice: "Read the thread for why it was closed before working on anything similar; reopening it is a maintainer's call.",
+    };
+  }
   if (status === "free") reasons.unshift({ tone: "good", text: "No assignee, linked PR or recent claim" });
 
   const verdict = { free: "Looks free", maybe: "Possibly taken", taken: "Already taken" }[status];

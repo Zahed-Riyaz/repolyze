@@ -30,14 +30,15 @@ function panelWith(routes = {}, { repo = true } = {}) {
 }
 
 // ── Parsing ──────────────────────────────────────────────────────────────────
-test("parsePrQuery understands numbers, PR links and keywords", () => {
+test("parseFindQuery understands numbers, issue and PR links, and keywords", () => {
   const repo = { owner: "Acme", repo: "Rocket" };
-  assert.deepEqual(plain(pure.parsePrQuery("123", repo)), { number: 123, sameRepo: true });
-  assert.deepEqual(plain(pure.parsePrQuery(" #123 ", repo)), { number: 123, sameRepo: true });
-  assert.deepEqual(plain(pure.parsePrQuery("https://github.com/acme/rocket/pull/77/files#diff-1", repo)), { number: 77, sameRepo: true, owner: "acme", repo: "rocket" });
-  assert.equal(pure.parsePrQuery("github.com/other/thing/pull/5", repo).sameRepo, false);
-  assert.deepEqual(plain(pure.parsePrQuery("flaky timer test", repo)), { terms: "flaky timer test" });
-  assert.equal(pure.parsePrQuery("   ", repo), null);
+  assert.deepEqual(plain(pure.parseFindQuery("123", repo)), { number: 123, sameRepo: true });
+  assert.deepEqual(plain(pure.parseFindQuery(" #123 ", repo)), { number: 123, sameRepo: true });
+  assert.deepEqual(plain(pure.parseFindQuery("https://github.com/acme/rocket/pull/77/files#diff-1", repo)), { number: 77, sameRepo: true, owner: "acme", repo: "rocket", kind: "pr" });
+  assert.deepEqual(plain(pure.parseFindQuery("https://github.com/acme/rocket/issues/12#issuecomment-1", repo)), { number: 12, sameRepo: true, owner: "acme", repo: "rocket", kind: "issue" });
+  assert.equal(pure.parseFindQuery("github.com/other/thing/pull/5", repo).sameRepo, false);
+  assert.deepEqual(plain(pure.parseFindQuery("flaky timer test", repo)), { terms: "flaky timer test" });
+  assert.equal(pure.parseFindQuery("   ", repo), null);
 });
 
 test("briefPageFromPath matches PR and issue pages only", () => {
@@ -226,4 +227,60 @@ test("the same PR number in a different repo still opens", async () => {
   await tick(10);
   assert.equal(panel.run("activePrBrief.key"), "x/y");
   assert.equal(panel.el("pr-brief").hidden, false);
+});
+
+// ── Finding issues ───────────────────────────────────────────────────────────
+test("issue keywords search every issue (open and closed), best match first, and Clear goes back", async () => {
+  const { gh, panel } = panelWith({ "/search/issues": json({ total_count: 2, items: [issue(31, { title: "Timer drifts" }), issue(12, { state: "closed", title: "Old timer bug" })] }) });
+  panel.fn.findIssue("timer drift");
+  await tick(5);
+  const search = decodeURIComponent(gh.apiCalls.find(u => u.startsWith("/search/issues")));
+  assert.match(search, /q=repo:o\/r is:issue timer drift&per_page=30&page=1$/);
+  assert.match(panel.el("issues-summary").innerHTML, /<strong>2<\/strong> issues matching “timer drift” · open and closed, best match first/);
+  const list = panel.el("issues-list").innerHTML;
+  assert.match(list, /#31[\s\S]*#12[\s\S]*chip-closed">Closed/);
+  assert.match(list, /data-issue="12"/, "closed issues can still be opened");
+
+  panel.fn.clearIssueSearch();
+  assert.equal(panel.run("issueView.query"), "");
+  assert.equal(panel.el("issue-find-input").value, "");
+});
+
+test("a label filter or the Unclaimed toggle ends a search", async () => {
+  const { panel } = panelWith({ "/search/issues": json({ total_count: 0, items: [] }) });
+  panel.fn.findIssue("anything");
+  await tick(5);
+  assert.match(panel.el("issues-list").innerHTML, /No issues match that search/);
+  panel.fn.setIssueFilter("good-first-issue");
+  assert.equal(panel.run("issueView.query"), "");
+  panel.fn.findIssue("anything");
+  panel.fn.setUnclaimed(false);
+  assert.equal(panel.run("issueView.query"), "");
+});
+
+test("an issue number or link opens its brief; a PR link opens the PR's; another repo's gets a note", async () => {
+  const { gh, panel } = panelWith(issueRoutes(7));
+  panel.fn.findIssue("#7");
+  await tick(10);
+  assert.equal(panel.el("issue-brief").hidden, false);
+  assert.ok(gh.apiCalls.includes("/issues/7"));
+
+  panel.fn.findIssue("https://github.com/o/r/pull/42");
+  await tick(10);
+  assert.equal(panel.el("pr-brief").hidden, false);
+  assert.equal(panel.run("activePrBrief.number"), 42);
+
+  panel.fn.findPr("https://github.com/o/r/issues/7");
+  await tick(10);
+  assert.equal(panel.run("activeBrief.number"), 7, "the PR box opens issue links too");
+
+  panel.fn.findIssue("https://github.com/someone/else/issues/9");
+  assert.match(panel.el("issues-summary").innerHTML, /That issue is in <strong>someone\/else<\/strong>/);
+});
+
+test("a closed issue's brief says it's closed, not free", () => {
+  const a = pure.issueAvailability(issue(5, { state: "closed", state_reason: "not_planned", closed_at: iso(3) }), [], [], Date.now());
+  assert.equal(a.verdict, "Closed");
+  assert.equal(a.status, "taken");
+  assert.equal(a.reasons[0].text, "Closed as not planned 3 days ago");
 });

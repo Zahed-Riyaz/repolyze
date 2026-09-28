@@ -421,14 +421,17 @@ const prView = { state: "open", query: "", expanded: false }; // previewed like 
 const PR_PAGE = 15;
 const prViewKey = (v) => `${v.state}|${v.query}`;
 
-// "123" / "#123" / a PR URL → { number, sameRepo }; anything else → { terms }
-function parsePrQuery(text, repo) {
+// What was typed into a Find box (PRs or issues):
+//   "123" / "#123"            → { number, sameRepo: true }
+//   an issue or PR link       → { number, sameRepo, owner, repo, kind: "issue" | "pr" }
+//   anything else             → { terms }
+function parseFindQuery(text, repo) {
   const t = (text || "").trim();
   if (!t) return null;
-  const url = t.match(/github\.com\/([^/\s]+)\/([^/\s#?]+)\/pull\/(\d+)/i);
+  const url = t.match(/github\.com\/([^/\s]+)\/([^/\s#?]+)\/(pull|issues)\/(\d+)/i);
   if (url) {
     const sameRepo = url[1].toLowerCase() === repo.owner.toLowerCase() && url[2].toLowerCase() === repo.repo.toLowerCase();
-    return { number: Number(url[3]), sameRepo, owner: url[1], repo: url[2] };
+    return { number: Number(url[4]), sameRepo, owner: url[1], repo: url[2], kind: url[3].toLowerCase() === "pull" ? "pr" : "issue" };
   }
   const num = t.match(/^#?(\d+)$/);
   if (num) return { number: Number(num[1]), sameRepo: true };
@@ -535,15 +538,17 @@ function setPrState(state) {
   fetchPrList();
 }
 
-// Find box: a number or PR link opens the brief; words search every PR
+// Find box: a number or PR link opens the brief (an issue link opens the
+// issue's); words search every PR
 function findPr(text) {
-  const q = parsePrQuery(text, currentRepo);
+  const q = parseFindQuery(text, currentRepo);
   const note = document.getElementById("prs-summary");
   if (!q) { prView.query = ""; fetchPrList(); return; }
   if (q.number && !q.sameRepo) {
-    note.innerHTML = `That PR is in <strong>${escapeHtml(q.owner)}/${escapeHtml(q.repo)}</strong> — open it on GitHub and the panel will follow.`;
+    note.innerHTML = `That ${q.kind === "issue" ? "issue" : "PR"} is in <strong>${escapeHtml(q.owner)}/${escapeHtml(q.repo)}</strong> — open it on GitHub and the panel will follow.`;
     return;
   }
+  if (q.kind === "issue") { showIssueBrief(q.number); return; }
   if (q.number) { showPrBrief(q.number); return; }
   prView.query = q.terms;
   fetchPrList();

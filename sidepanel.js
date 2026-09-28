@@ -49,6 +49,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("issue-sort").addEventListener("change", (e) => { issueView.sort = e.target.value; fetchIssues(); });
   document.getElementById("issue-unclaimed").addEventListener("change", (e) => setUnclaimed(e.target.checked));
   document.getElementById("issues-more").addEventListener("click", () => showMoreIssues());
+  document.getElementById("issue-find").addEventListener("submit", (e) => {
+    e.preventDefault();
+    findIssue(document.getElementById("issue-find-input").value);
+  });
+  document.getElementById("issues-summary").addEventListener("click", (e) => {
+    if (e.target.closest?.(".issue-clear-search")) clearIssueSearch();
+  });
 
   // "Start this issue" brief
   document.getElementById("issues-list").addEventListener("click", (e) => {
@@ -333,7 +340,9 @@ async function updateRepoInfo() {
   // New repo starts on "All" (sort and unclaimed preferences carry over), with
   // both lists back to their short previews
   issueView.filter = "";
+  issueView.query = "";
   issueView.expanded = false;
+  document.getElementById("issue-find-input").value = "";
   prView.expanded = false;
   document.querySelectorAll(".filter-btn").forEach(b => b.classList.toggle("active", b.dataset.label === ""));
 
@@ -703,15 +712,17 @@ function formatNumber(n) {
 // ── Issues ────────────────────────────────────────────────────────────────────
 // "All" pages through the issues API. Label filters use the search API across
 // every open issue (not just one page), matched against the repo's real label
-// names; "Unclaimed only" there also drops issues with a linked PR.
+// names; "Unclaimed only" there also drops issues with a linked PR. The Find box
+// takes a number or link (opens the brief) or keywords (searches every issue,
+// open and closed, best match first — filters don't apply to a search).
 // The list opens as a short preview next to the PRs; "Show all" expands it
 // (from what's already loaded), after which the button pages with "Load more".
-const issueView = { filter: "", sort: "comments", unclaimed: true, expanded: false };
+const issueView = { filter: "", sort: "comments", unclaimed: true, query: "", expanded: false };
 const ISSUE_PAGE = 30;
 const LIST_PREVIEW = 5;
 const SORT_WORDS = { comments: "most discussed first", created: "newest first", updated: "recently updated first" };
 
-const issueViewKey = (v) => `${v.filter}|${v.sort}|${v.unclaimed}`;
+const issueViewKey = (v) => (v.query ? `q|${v.query}` : `${v.filter}|${v.sort}|${v.unclaimed}`);
 
 async function fetchIssues({ append = false } = {}) {
   const repo = currentRepo;
@@ -729,7 +740,9 @@ async function fetchIssues({ append = false } = {}) {
 
   try {
     const page = append ? views[key].page + 1 : 1;
-    const result = view.filter ? await searchLabelIssues(repo, view, page) : await listOpenIssues(repo, view, page);
+    const result = view.query ? await searchIssues(repo, view, page)
+      : view.filter ? await searchLabelIssues(repo, view, page)
+      : await listOpenIssues(repo, view, page);
     views[key] = append ? { ...result, items: [...views[key].items, ...result.items] } : result;
     if (current()) renderIssueList(views[key], view);
     return true;
@@ -750,6 +763,14 @@ async function listOpenIssues(repo, view, page) {
   const { data, link } = await fetchGitHubPage(
     `/issues?state=open${view.unclaimed ? "&assignee=none" : ""}&sort=${view.sort}&direction=desc&per_page=${ISSUE_PAGE}&page=${page}`, repo);
   return { items: data.filter(i => !i.pull_request), page, total: null, hasMore: /rel="next"/.test(link || "") };
+}
+
+// Keywords → every issue in the repo that matches (open and closed), best match first
+async function searchIssues(repo, view, page) {
+  const q = `repo:${repo.owner}/${repo.repo} is:issue ${view.query}`;
+  const res = await fetchGitHub(`https://api.github.com/search/issues?q=${encodeURIComponent(q)}&per_page=${ISSUE_PAGE}&page=${page}`, repo);
+  const total = res.total_count ?? 0;
+  return { items: res.items || [], page, total, hasMore: page * ISSUE_PAGE < Math.min(total, 1000) };
 }
 
 async function searchLabelIssues(repo, view, page) {
@@ -774,7 +795,10 @@ function renderIssueList(state, view) {
   const summary = document.getElementById("issues-summary");
   const filterName = { "good-first-issue": "good first", "help-wanted": "help wanted" }[view.filter];
 
-  if (view.filter) {
+  if (view.query) {
+    summary.innerHTML = `<strong>${state.total.toLocaleString()}</strong> issue${state.total === 1 ? "" : "s"} matching “${escapeHtml(view.query)}” · open and closed, best match first ` +
+      `<button class="btn btn-ghost btn-xs issue-clear-search">Clear</button>`;
+  } else if (view.filter) {
     summary.innerHTML = state.noLabel ? "" :
       `<strong>${state.total.toLocaleString()}</strong> ${filterName} issue${state.total === 1 ? "" : "s"}` +
       `${view.unclaimed ? " · unassigned, no linked PR" : ""} · ${SORT_WORDS[view.sort]}` +
@@ -785,7 +809,9 @@ function renderIssueList(state, view) {
 
   if (!state.items.length) {
     more.hidden = true;
-    if (state.noLabel) {
+    if (view.query) {
+      list.innerHTML = stateItem("No issues match that search.");
+    } else if (state.noLabel) {
       list.innerHTML = stateItem(`This repo doesn't use a <strong>${filterName}</strong> label. Browse <strong>All</strong> and look for small, clearly described issues.`);
     } else if (state.claimedTotal) {
       list.innerHTML = stateItem(`All <strong>${state.claimedTotal}</strong> ${filterName} issues are already assigned or have a linked PR.` +
@@ -800,7 +826,8 @@ function renderIssueList(state, view) {
   }
 
   state.items.forEach(i => issueIndex.set(i.number, i));
-  const preview = listPreview(state, issueView.expanded);
+  // A search is something the user asked for, so show all its results
+  const preview = listPreview(state, issueView.expanded || !!view.query);
   list.innerHTML = preview.items.map(issueCard).join("");
   more.hidden = !preview.button;
   more.disabled = false;
@@ -817,7 +844,7 @@ function listPreview(state, expanded) {
 }
 
 function showMoreIssues() {
-  if (issueView.expanded) { fetchIssues({ append: true }); return; }
+  if (issueView.expanded || issueView.query) { fetchIssues({ append: true }); return; }
   issueView.expanded = true;
   fetchIssues(); // served from cache
 }
@@ -834,6 +861,7 @@ function issueCard(issue) {
       <div class="issue-meta">
         <span title="Comments">${icon("comment", "icon-sm")}${issue.comments}</span>
         ${reactions ? `<span title="Reactions">${icon("heart", "icon-sm")}${reactions}</span>` : ""}
+        ${issue.state === "closed" ? `<span class="chip chip-closed">Closed</span>` : ""}
         ${assignee ? `<span title="Assigned to ${escapeHtml(assignee.login)}"><img src="${avatarUrl(assignee.avatar_url, 32)}" class="avatar-sm" alt="">assigned</span>` : ""}
         <span class="issue-age">${daysAgo(issue.created_at)}</span>
       </div>
@@ -843,14 +871,42 @@ function issueCard(issue) {
 }
 
 function setIssueFilter(filter) {
+  resetIssueSearch();
   issueView.filter = filter;
   document.querySelectorAll(".filter-btn").forEach(b => b.classList.toggle("active", b.dataset.label === filter));
   fetchIssues();
 }
 
 function setUnclaimed(on) {
+  resetIssueSearch();
   issueView.unclaimed = on;
   document.getElementById("issue-unclaimed").checked = on;
+  fetchIssues();
+}
+
+// Find box: a number or issue link opens the brief (a PR link opens the PR's);
+// words search every issue in the repo
+function findIssue(text) {
+  const q = parseFindQuery(text, currentRepo);
+  if (!q) { clearIssueSearch(); return; }
+  if (q.number && !q.sameRepo) {
+    document.getElementById("issues-summary").innerHTML =
+      `That ${q.kind === "pr" ? "PR" : "issue"} is in <strong>${escapeHtml(q.owner)}/${escapeHtml(q.repo)}</strong> — open it on GitHub and the panel will follow.`;
+    return;
+  }
+  if (q.kind === "pr") { showPrBrief(q.number); return; }
+  if (q.number) { showIssueBrief(q.number); return; }
+  issueView.query = q.terms;
+  fetchIssues();
+}
+
+function resetIssueSearch() {
+  issueView.query = "";
+  document.getElementById("issue-find-input").value = "";
+}
+
+function clearIssueSearch() {
+  resetIssueSearch();
   fetchIssues();
 }
 

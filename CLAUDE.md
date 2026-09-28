@@ -17,9 +17,10 @@ Three tabs: **Repo** · **Contribute** · **Ask**. A repo opens on Contribute �
 **Contribute tab** — issues and PRs on one page; a brief replaces the lists (one at a time), and Back restores their scroll position
 - FR-4 List open issues (unassigned by default), sortable by most discussed / newest / recently updated. Shows a 5-item preview; "Show all" expands from what's loaded, then "Load more" pages.
 - FR-5 "Good first" and "Help wanted" filters search *all* open issues via the search API, matched against the repo's real label names (spelling variants included), showing the total.
+- FR-5a Issue **Find** box: a number or an issue link opens its brief (a PR link opens the PR's), keywords search every issue in the repo — open and closed, best match first, closed ones marked; a filter or the Unclaimed toggle ends the search. A closed issue's brief says **Closed** (and why), not "Looks free".
 - FR-6 "Unclaimed" toggle hides assigned issues and, for label filters, issues with a linked PR; when that hides everything, say so and offer to show them.
 - FR-7 **Start this issue** brief per issue: availability verdict (assignees, PRs referencing it, "I'll take this" comments, maintainer replies), likely files (path ranking), who to ask (CODEOWNERS + maintainers in the thread), and **Run before opening a PR** (commands from CI and `package.json`). No AI.
-- FR-12 Pull request list below the issues: open/closed toggle, a 5-item preview then paging, hints from the list data (draft, review requested, idle ≥21 days), and a Find box accepting a PR number, a PR link, or keywords (searches every PR).
+- FR-12 Pull request list below the issues: open/closed toggle, a 5-item preview then paging, hints from the list data (draft, review requested, idle ≥21 days), and a Find box accepting a PR number, a PR link (an issue link opens the issue's brief), or keywords (searches every PR).
 - FR-13 **Understand this PR** brief: status verdict (approved / waiting for review / changes requested / updated after review / checks failing / conflicts / draft / merged / closed), activity, files changed with code owners, and people. No AI.
 - FR-13a Each brief has an **Ask about this issue / PR** row: suggestions (issue: *Summary & plan*, *Where do I start?*, *How do I test this?*; PR: *Summarise the PR*, *What's still open?*, *How could I help?*) are sent to Ask as visible questions; *Your own question* focuses Ask without sending.
 
@@ -72,6 +73,7 @@ All API paths below are relative to `https://api.github.com/repos/{owner}/{repo}
 |---|---|
 | Issues list ("All") | `GET /issues?state=open[&assignee=none]&sort={comments\|created\|updated}&direction=desc&per_page=30&page={n}` — PRs are filtered out (`pull_request` field); paging follows the `Link: rel="next"` header. |
 | "Good first" / "Help wanted" (whole repo) | `GET https://api.github.com/search/issues?q=repo:{o}/{r} is:issue is:open label:"good first issue","E-easy" [no:assignee -linked:pr]&sort=…&order=desc` — labels come from `/labels`, OR-ed; search has its own quota (10/min anonymous). |
+| Issue keyword search (Find box) | `GET https://api.github.com/search/issues?q=repo:{o}/{r} is:issue {words}` (best match, open and closed) |
 | Unclaimed beginner-issue count (health score) | Same search with `per_page=1`, reading `total_count`. |
 | Issue brief: discussion + claims | `GET /issues/{n}/comments?per_page=100` |
 | Issue brief: linked/referencing PRs, assignment history | `GET /issues/{n}/timeline?per_page=100` (`cross-referenced` events whose source has `pull_request`) |
@@ -140,7 +142,7 @@ Where it's used:
 | **Performance** | Local ranking of 100k paths ≈ 150 ms; file reads in parallel; skeletons instead of layout jumps; streaming AI output. |
 | **Accessibility** | Keyboard-reachable controls with visible focus rings, ARIA roles on tabs/status, `prefers-reduced-motion` respected, theme-aware label contrast. |
 | **Compatibility** | Chrome with the Side Panel API (MV3); works at narrow panel widths (three tabs; icons hide below 480px via a container query); light and dark themes follow the OS. |
-| **Maintainability** | Plain JS, no build step; pure logic separated from rendering and unit-tested; 164 tests (`npm test`, ~3s) run in CI on every push. |
+| **Maintainability** | Plain JS, no build step; pure logic separated from rendering and unit-tested; 168 tests (`npm test`, ~3s) run in CI on every push. |
 | **Cost** | Zero infrastructure cost; users bring their own AI key (free tiers on Groq/Gemini, free local Ollama). |
 
 ---
@@ -264,4 +266,4 @@ Where it's used:
 
 ## 8. Summary
 
-GitHub Repo Analyzer is a backend-free Chrome side panel that turns "a repo I've never seen" into "a contribution I can start today". It finds issues that are genuinely available across the whole repo, briefs each one (is it free, where to start, who to ask, what CI will run), explains pull requests including their full conversation and status, surfaces the people who actually maintain the project, scores contributor-friendliness from measured signals, and answers questions from the repo's real source code with line-level citations. Everything is computed client-side from the GitHub API — carefully budgeted, cached and rate-limit-aware — with the user's own AI provider adding summaries on top of deterministic, verifiable data. It's plain JavaScript with no build step, a token-based light/dark design built for a narrow panel, and 164 tests running in CI.
+GitHub Repo Analyzer is a backend-free Chrome side panel that turns "a repo I've never seen" into "a contribution I can start today". It finds issues that are genuinely available across the whole repo, briefs each one (is it free, where to start, who to ask, what CI will run), explains pull requests including their full conversation and status, surfaces the people who actually maintain the project, scores contributor-friendliness from measured signals, and answers questions from the repo's real source code with line-level citations. Everything is computed client-side from the GitHub API — carefully budgeted, cached and rate-limit-aware — with the user's own AI provider adding summaries on top of deterministic, verifiable data. It's plain JavaScript with no build step, a token-based light/dark design built for a narrow panel, and 168 tests running in CI.
