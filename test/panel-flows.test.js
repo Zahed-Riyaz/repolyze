@@ -45,15 +45,17 @@ function openRepo({ routes, raw = { "README.md": "# Rockets", ".github/CODEOWNER
 
 async function visitAllTabs(panel) {
   await panel.fn.updateRepoInfo(); await tick(5);
-  for (const tab of ["tech", "maintainers", "contribute"]) { panel.fn.switchTab(tab); await tick(5); }
+  for (const tab of ["repo", "chat"]) { panel.fn.switchTab(tab); await tick(5); }
   await panel.fn.getRepoContextParts();
 }
 
 // ── Request budget ───────────────────────────────────────────────────────────
-test("opening a repo costs 2 API requests; other tabs load only when opened", async () => {
+test("opening a repo costs 3 API requests (header, issues, PRs); the Repo tab loads only when opened", async () => {
   const { gh, panel } = openRepo();
   await panel.fn.updateRepoInfo(); await tick(5);
-  assert.deepEqual(gh.apiCalls, ["", "/issues?state=open&assignee=none&sort=comments&direction=desc&per_page=30&page=1"]);
+  assert.equal(panel.run("lastContentTab"), "contribute", "a repo opens on what's available to work on");
+  assert.deepEqual(gh.apiCalls.slice().sort(), ["", "/issues?state=open&assignee=none&sort=comments&direction=desc&per_page=30&page=1",
+    "/pulls?state=open&sort=created&direction=desc&per_page=15&page=1"]);
 });
 
 test("a full visit stays within budget, chat costs no API requests, and reopening the panel costs none", async () => {
@@ -92,7 +94,7 @@ test("rate-limited → token added off-repo → back on the repo, tabs reload in
   panel.setToken("ghp_good");
   await panel.fn.onGitHubTokenChanged(); await tick(5);
   panel.fn.hideNotRepoMessage();          // back to the repo tab
-  panel.fn.switchTab("issues"); await tick(5);
+  panel.fn.switchTab("contribute"); await tick(5);
   assert.doesNotMatch(panel.el("issues-list").innerHTML, /Paused/);
   assert.match(panel.el("issues-list").innerHTML, /Issue 1/);
 });
@@ -102,12 +104,12 @@ test("a tab that failed to load retries the next time it's opened", async () => 
   const { gh, panel } = openRepo({ routes: {
     "/languages": () => (down ? json({ message: "Server Error" }, { status: 502 }) : json({ Go: 1 })),
   } });
-  panel.fn.switchTab("tech"); await tick(5);
+  panel.fn.switchTab("repo"); await tick(5);
   assert.match(panel.el("tech-list").innerHTML, /502/);
 
   down = false;
-  panel.fn.switchTab("issues"); await tick(5);
-  panel.fn.switchTab("tech"); await tick(5);
+  panel.fn.switchTab("contribute"); await tick(5);
+  panel.fn.switchTab("repo"); await tick(5);
   assert.equal(gh.apiCalls.filter(u => u === "/languages").length, 2, "the failed load was retried");
   assert.match(panel.el("tech-list").innerHTML, /Go/);
 });
@@ -180,6 +182,26 @@ test("Load more appends the next page", async () => {
   await panel.fn.fetchIssues({ append: true });
   assert.match(panel.el("issues-list").innerHTML, /Issue 1[\s\S]*Issue 2/);
   assert.equal(panel.el("issues-more").hidden, true);
+});
+
+test("issues open as a short preview; Show all expands from cache, then Load more pages", async () => {
+  const many = Array.from({ length: 8 }, (_, i) => issue(i + 1));
+  const { gh, panel } = openRepo({ routes: {
+    "/issues": (url) => (new URL(url).searchParams.get("page") === "1"
+      ? json(many, { headers: { Link: '<https://api.github.com/repos/o/r/issues?page=2>; rel="next"' } })
+      : json([issue(99)])),
+  } });
+  await panel.fn.fetchIssues();
+  const shown = () => (panel.el("issues-list").innerHTML.match(/class="list-card"/g) || []).length;
+  assert.equal(shown(), 5);
+  assert.equal(panel.el("issues-more").textContent, "Show all issues");
+  const calls = gh.apiCalls.length;
+  panel.fn.showMoreIssues(); await tick(5);
+  assert.equal(shown(), 8);
+  assert.equal(gh.apiCalls.length, calls, "expanding reuses the page already loaded");
+  assert.equal(panel.el("issues-more").textContent, "Load more");
+  panel.fn.showMoreIssues(); await tick(5);
+  assert.match(panel.el("issues-list").innerHTML, /Issue 99/);
 });
 
 // ── Maintainers & health ─────────────────────────────────────────────────────
@@ -255,6 +277,6 @@ test("Get token opens GitHub's token page and waits on the token field", async (
   const { panel } = openRepo();
   panel.fn.getGitHubToken();
   assert.deepEqual(panel.chrome.openedTabs, ["https://github.com/settings/tokens"]);
-  assert.equal(panel.run("lastContentTab"), "issues");
+  assert.equal(panel.run("lastContentTab"), "contribute");
   assert.match(panel.el("sp-gh-status").textContent, /Paste your new token/);
 });

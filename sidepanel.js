@@ -48,7 +48,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   document.getElementById("issue-sort").addEventListener("change", (e) => { issueView.sort = e.target.value; fetchIssues(); });
   document.getElementById("issue-unclaimed").addEventListener("change", (e) => setUnclaimed(e.target.checked));
-  document.getElementById("issues-more").addEventListener("click", () => fetchIssues({ append: true }));
+  document.getElementById("issues-more").addEventListener("click", () => showMoreIssues());
 
   // "Start this issue" brief
   document.getElementById("issues-list").addEventListener("click", (e) => {
@@ -57,7 +57,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   document.getElementById("brief-back").addEventListener("click", closeIssueBrief);
   document.getElementById("brief-copy").addEventListener("click", copyBrief);
-  document.getElementById("brief-ask").addEventListener("click", askAboutIssue);
   document.getElementById("brief-body").addEventListener("click", handleBriefClick);
 
   // "Understand this PR" brief
@@ -67,14 +66,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   document.getElementById("pr-brief-back").addEventListener("click", closePrBrief);
   document.getElementById("pr-brief-copy").addEventListener("click", copyPrBrief);
-  document.getElementById("pr-brief-ask").addEventListener("click", askAboutPr);
   document.getElementById("pr-brief-body").addEventListener("click", handlePrBriefClick);
+
   document.querySelectorAll(".pr-state-btn").forEach(btn => btn.addEventListener("click", () => setPrState(btn.dataset.state)));
   document.getElementById("pr-find").addEventListener("submit", (e) => {
     e.preventDefault();
     findPr(document.getElementById("pr-find-input").value);
   });
-  document.getElementById("prs-more").addEventListener("click", () => fetchPrList({ append: true }));
+  document.getElementById("prs-more").addEventListener("click", () => showMorePrs());
   document.getElementById("prs-summary").addEventListener("click", (e) => {
     if (e.target.closest?.(".pr-clear-search")) setPrState(prView.state);
   });
@@ -87,6 +86,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   chatInput.addEventListener("input", autosizeChatInput);
   document.getElementById("clear-chat-btn").addEventListener("click", clearChat);
+  document.getElementById("chat-focus").addEventListener("click", (e) => {
+    if (e.target.closest?.(".chat-focus-clear")) setChatFocus(null);
+  });
 
   // Load saved settings — also migrate legacy geminiApiKey → aiApiKey
   const stored = await chrome.storage.local.get(["githubToken", "aiProvider", "aiApiKey", "ollamaModel", "geminiApiKey"]);
@@ -144,7 +146,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 // ── View & tab state ──────────────────────────────────────────────────────────
 let onRepoPage = false;
-let lastContentTab = "issues";
+let lastContentTab = "contribute"; // a repo opens on what's available to work on
 
 function switchTab(name) {
   document.querySelectorAll(".tab-btn").forEach(t => {
@@ -259,9 +261,9 @@ function handleRepoRefresh(url) {
 }
 
 // ── Following the issue / PR page the user is on ─────────────────────────────
-// Opening github.com/o/r/issues/12 opens that issue's brief on the Issues tab;
-// github.com/o/r/pull/123 (or its Files/Commits tabs) opens the PR's brief on
-// Contribute. Only the deterministic parts load — the AI waits for Generate.
+// Opening github.com/o/r/issues/12 or github.com/o/r/pull/123 (or its
+// Files/Commits tabs) opens that item's brief on Contribute. Only the
+// deterministic parts load; AI questions go through Ask.
 // Moving between the same PR's tabs doesn't reopen or reload it (so closing it
 // sticks), and leaving the page closes a brief that was opened this way.
 let pageBrief = null; // "pr:owner/repo#123" / "issue:owner/repo#12" of the active tab
@@ -277,12 +279,10 @@ function syncBriefWithPage(page) {
   if (pageKey === pageBrief) return;
   const leaving = pageBrief;
   pageBrief = pageKey;
-  if (page?.kind === "pr") {
+  if (page) {
     switchTab("contribute");
-    showPrBrief(page.number, { auto: true });
-  } else if (page?.kind === "issue") {
-    switchTab("issues");
-    showIssueBrief(page.number, { auto: true });
+    if (page.kind === "pr") showPrBrief(page.number, { auto: true });
+    else showIssueBrief(page.number, { auto: true });
   }
   if (!leaving) return;
   if (activePrBrief?.auto && `pr:${activePrBrief.key}#${activePrBrief.number}` === leaving) closePrBrief();
@@ -318,13 +318,17 @@ async function updateRepoInfo() {
   issueIndex.clear();
   closePrBrief();
   prIndex.clear();
+  setChatFocus(null);
 
-  // New repo starts on "All" (sort and unclaimed preferences carry over)
+  // New repo starts on "All" (sort and unclaimed preferences carry over), with
+  // both lists back to their short previews
   issueView.filter = "";
+  issueView.expanded = false;
+  prView.expanded = false;
   document.querySelectorAll(".filter-btn").forEach(b => b.classList.toggle("active", b.dataset.label === ""));
 
   // Header + the visible tab now; other tabs load the first time they're opened,
-  // which keeps a repo visit to 2 requests instead of ~13.
+  // which keeps a repo visit to 3 requests (header, issues, PRs) instead of ~13.
   loadedTabs = new Set();
   fetchRepoData();
   loadChatHistory();
@@ -333,9 +337,7 @@ async function updateRepoInfo() {
 
 // ── Lazy tab loading ──────────────────────────────────────────────────────────
 const TAB_LOADERS = {
-  issues: () => fetchIssues(),
-  tech: () => fetchTechStack(),
-  maintainers: () => fetchMaintainers(),
+  repo: () => fetchRepoTab(),
   contribute: () => fetchContributeTab(),
 };
 let loadedTabs = new Set();
@@ -692,8 +694,11 @@ function formatNumber(n) {
 // "All" pages through the issues API. Label filters use the search API across
 // every open issue (not just one page), matched against the repo's real label
 // names; "Unclaimed only" there also drops issues with a linked PR.
-const issueView = { filter: "", sort: "comments", unclaimed: true };
+// The list opens as a short preview next to the PRs; "Show all" expands it
+// (from what's already loaded), after which the button pages with "Load more".
+const issueView = { filter: "", sort: "comments", unclaimed: true, expanded: false };
 const ISSUE_PAGE = 30;
+const LIST_PREVIEW = 5;
 const SORT_WORDS = { comments: "most discussed first", created: "newest first", updated: "recently updated first" };
 
 const issueViewKey = (v) => `${v.filter}|${v.sort}|${v.unclaimed}`;
@@ -779,16 +784,32 @@ function renderIssueList(state, view) {
     } else {
       list.innerHTML = stateItem(view.filter
         ? `No open <strong>${filterName}</strong> issues right now.`
-        : `No open${view.unclaimed ? ", unassigned" : ""} issues. The <strong>Contribute</strong> tab has other ways to help.`);
+        : `No open${view.unclaimed ? ", unassigned" : ""} issues. The pull requests below are another way to help.`);
     }
     return;
   }
 
   state.items.forEach(i => issueIndex.set(i.number, i));
-  list.innerHTML = state.items.map(issueCard).join("");
-  more.hidden = !state.hasMore;
+  const preview = listPreview(state, issueView.expanded);
+  list.innerHTML = preview.items.map(issueCard).join("");
+  more.hidden = !preview.button;
   more.disabled = false;
-  more.textContent = "Load more";
+  more.textContent = preview.button === "all" ? `Show all${state.total ? ` ${state.total.toLocaleString()}` : ""} issues` : "Load more";
+}
+
+// Collapsed lists show the first few; the button either expands ("all") or pages ("more")
+function listPreview(state, expanded) {
+  const collapsed = !expanded && (state.items.length > LIST_PREVIEW || state.hasMore);
+  return {
+    items: collapsed ? state.items.slice(0, LIST_PREVIEW) : state.items,
+    button: collapsed ? "all" : state.hasMore ? "more" : null,
+  };
+}
+
+function showMoreIssues() {
+  if (issueView.expanded) { fetchIssues({ append: true }); return; }
+  issueView.expanded = true;
+  fetchIssues(); // served from cache
 }
 
 function issueCard(issue) {
@@ -1217,18 +1238,19 @@ function renderPeople({ maintainers, partialSample, contributors }) {
     </li>`).join("");
 }
 
-// ── Contribute Tab ────────────────────────────────────────────────────────────
+// ── Contribute & Repo tabs ────────────────────────────────────────────────────
+// Contribute: issues and PRs side by side (each serves from cache when it can).
 async function fetchContributeTab() {
-  const cacheKey = repoKey();
+  return (await Promise.all([fetchIssues(), fetchPrList()])).every(Boolean);
+}
 
-  let health = Promise.resolve(true);
-  if (repoCache[cacheKey]?.health) {
-    renderHealthCard(repoCache[cacheKey].health);
-  } else {
-    health = fetchRepoHealth();
-  }
-  const prs = fetchPrList(); // serves the current view from cache when it can
-  return (await Promise.all([health, prs])).every(Boolean);
+// Repo: health score, stack and maintainers — context about the project
+async function fetchRepoTab() {
+  const cacheKey = repoKey();
+  const health = repoCache[cacheKey]?.health
+    ? (renderHealthCard(repoCache[cacheKey].health), true)
+    : fetchRepoHealth();
+  return (await Promise.all([health, fetchTechStack(), fetchMaintainers()])).every(Boolean);
 }
 
 async function fetchRepoHealth() {
@@ -1323,11 +1345,14 @@ async function handleChat() {
   const repo = currentRepo;
   const messages = chatMessages;
   const isStale = () => currentRepo !== repo;
+  // Focused on an issue/PR from its brief? Answers are grounded in it (ask-focus.js)
+  const item = focusedItem();
+  const tag = item ? { kind: item.kind, number: item.number } : null;
 
   document.getElementById("chat-starters")?.remove();
   const userTime = Date.now();
-  messages.push({ role: "user", text: query, time: userTime });
-  appendChatMessage("user", query, false, true, userTime);
+  messages.push({ role: "user", text: query, time: userTime, ...(tag ? { focus: tag } : {}) });
+  appendChatMessage("user", query, false, true, userTime, null, { focus: tag });
   input.value = "";
   autosizeChatInput();
 
@@ -1360,10 +1385,15 @@ async function handleChat() {
     const previousQuestion = messages.slice(0, -1).reverse().find(m => m.role === "user")?.text;
     const setStatus = (t) => { if (!isStale()) document.getElementById("typing-status").textContent = t; };
     // Files behind the previous answer stay in play for follow-up questions
-    const previousFiles = [...new Set((messages.slice(0, -1).reverse().find(m => m.role === "bot" && m.sources)?.sources || []).map(s => s.path))];
-    const { context, sources, ref } = await buildChatContext(repo, query, previousQuestion, setStatus, { previousFiles });
+    // about the same thing (not a PR's files, which may not exist on the default branch)
+    const lastBot = messages.slice(0, -1).reverse().find(m => m.role === "bot" && m.sources);
+    const sameFocus = lastBot && !lastBot.cite && lastBot.focus?.kind === tag?.kind && lastBot.focus?.number === tag?.number;
+    const previousFiles = sameFocus ? [...new Set(lastBot.sources.map(s => s.path))] : [];
+    const { context, sources, ref, cite = null, focus = "" } = item
+      ? await buildFocusedContext(repo, item, query, previousQuestion, setStatus, previousFiles)
+      : await buildChatContext(repo, query, previousQuestion, setStatus, { previousFiles });
     const { system, contents } = buildChatPrompt({
-      repo, context, question: query,
+      repo, context, question: query, focus,
       history: messages.slice(0, -1),
       historyBudget: Math.floor((CONTEXT_BUDGET[aiProvider] || 20000) * 0.25),
     });
@@ -1384,15 +1414,16 @@ async function handleChat() {
     }, { system });
 
     const botTime = Date.now();
-    messages.push({ role: "bot", text: fullReply, time: botTime, sources, ref });
+    const meta = { sources, ref, ...(cite ? { cite } : {}), ...(tag ? { focus: tag } : {}) };
+    messages.push({ role: "bot", text: fullReply, time: botTime, ...meta });
     saveChatHistory(repo, messages);
     if (isStale()) return;
 
     // Streaming done — remove glow, stamp time, render final content
     botBubble.classList.remove("streaming");
-    botBubble.innerHTML = linkifyCitations(renderMarkdown(fullReply), repo, ref, sources);
+    botBubble.innerHTML = linkifyCitations(renderMarkdown(fullReply), cite || repo, ref, sources);
     if (!streamStarted) chatHistEl.appendChild(botWrap); // empty reply: no chunk ever arrived
-    appendBotFooter(botWrap, botTime, query, { sources, ref });
+    appendBotFooter(botWrap, botTime, query, meta);
     if (isNearBottom(chatHistEl)) chatHistEl.scrollTop = chatHistEl.scrollHeight;
   } catch (err) {
     const ollamaErr = err.message === "OLLAMA_NOT_RUNNING" || err.message === "OLLAMA_CORS";
@@ -1464,11 +1495,19 @@ function appendChatMessage(role, text, save = true, animate = true, time = null,
     wrap.appendChild(label);
   }
 
+  // Questions asked about an issue/PR carry its number
+  if (role === "user" && meta.focus) {
+    const tag = document.createElement("span");
+    tag.className = "msg-focus";
+    tag.textContent = `About ${focusLabel(meta.focus)}`;
+    wrap.appendChild(tag);
+  }
+
   const msg = document.createElement("div");
   msg.className = `chat-msg chat-msg-${role}${animate ? " msg-entering" : ""}`;
   if (role === "bot") {
     msg.innerHTML = currentRepo && meta.sources?.length
-      ? linkifyCitations(renderMarkdown(text), currentRepo, meta.ref, meta.sources)
+      ? linkifyCitations(renderMarkdown(text), meta.cite || currentRepo, meta.ref, meta.sources)
       : renderMarkdown(text);
   } else {
     msg.textContent = text;
@@ -1522,7 +1561,7 @@ function linkifyCitations(html, repo, ref, sources) {
 
 // Timestamp + (hover-revealed) regenerate action under a bot reply
 function appendBotFooter(wrap, time, query, meta = {}) {
-  if (meta.sources?.length) wrap.insertAdjacentHTML("beforeend", sourcesHtml(meta.sources, meta.ref));
+  if (meta.sources?.length && !meta.cite) wrap.insertAdjacentHTML("beforeend", sourcesHtml(meta.sources, meta.ref));
   if (!time && !query) return;
   const actions = document.createElement("div");
   actions.className = "msg-actions";
@@ -1670,7 +1709,7 @@ async function loadChatHistory() {
         if (chatMessages[j].role === "user") { query = chatMessages[j].text; break; }
       }
     }
-    appendChatMessage(m.role, m.text, false, false, m.time || null, query, { sources: m.sources, ref: m.ref });
+    appendChatMessage(m.role, m.text, false, false, m.time || null, query, { sources: m.sources, ref: m.ref, cite: m.cite, focus: m.focus });
   });
   renderChatStarters(); // shows only if chatMessages is empty
   historyEl.scrollTop = historyEl.scrollHeight;

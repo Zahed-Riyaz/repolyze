@@ -174,13 +174,13 @@ const issueRoutes = (n, extra) => ({
   [`/issues/${n}/timeline?per_page=100`]: [],
 });
 
-test("opening an issue page opens its brief on the Issues tab, fetching the issue once", async () => {
+test("opening an issue page opens its brief on Contribute, fetching the issue once", async () => {
   const { gh, panel } = panelWith(issueRoutes(7), { repo: false });
   panel.fn.handleRepoRefresh("https://github.com/o/r/pull/42");
   await tick(10);
   panel.fn.handleRepoRefresh("https://github.com/o/r/issues/7");
   await tick(10);
-  assert.equal(panel.run("lastContentTab"), "issues");
+  assert.equal(panel.run("lastContentTab"), "contribute");
   assert.equal(panel.el("issue-brief").hidden, false);
   assert.equal(panel.run("activeBrief.number"), 7);
   assert.equal(panel.run("activeBrief.auto"), true);
@@ -201,7 +201,7 @@ test("an issue page that turns out to be a PR, or a missing issue, gets a clear 
   assert.match(panel.el("brief-body").innerHTML, /There's no issue #999 in o\/r/);
 });
 
-test("auto-opened briefs never call the AI — they offer a Generate button", async () => {
+test("auto-opened briefs never call the AI — they offer to ask in Ask", async () => {
   let aiCalls = 0;
   const gh = githubMock({ "": { default_branch: "main" }, "/git/trees/HEAD?recursive=1": { tree: [] }, ...detailRoutes(42), ...issueRoutes(7) },
     { ai: async () => { aiCalls++; throw new Error("AI must not be called"); } });
@@ -209,10 +209,10 @@ test("auto-opened briefs never call the AI — they offer a Generate button", as
   panel.run(`aiProvider = "groq"; aiApiKey = "gsk_test"`);
   panel.fn.handleRepoRefresh("https://github.com/o/r/issues/7");
   await tick(20);
-  assert.match(panel.el("brief-ai").innerHTML, /class="btn btn-primary btn-xs brief-generate-btn">Generate/);
+  assert.match(panel.el("brief-body").innerHTML, /class="ask-chip" data-kind="issue"/);
   panel.fn.handleRepoRefresh("https://github.com/o/r/pull/42");
   await tick(20);
-  assert.match(panel.el("pr-ai").innerHTML, /class="btn btn-primary btn-xs pr-generate-btn">Generate/);
+  assert.match(panel.el("pr-brief-body").innerHTML, /class="ask-chip" data-kind="pr"/);
   assert.equal(aiCalls, 0);
 });
 

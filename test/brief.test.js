@@ -138,25 +138,15 @@ test("briefPeople maps files to owners and lists maintainers in the thread", () 
 test("briefMarkdown produces a shareable summary", () => {
   const md = pure.briefMarkdown({ owner: "o", repo: "r" }, baseIssue, {
     availability: pure.issueAvailability(baseIssue, [], [], NOW),
-    ai: { text: "## What's being asked\nFix the drift." },
+    likelyFiles: ["src/launch/timer.ts"],
     people: { owners: [{ handle: "@ada", files: ["src/launch/timer.ts"] }], inThread: [] },
     commands: [{ cmd: "npm test", from: "package.json" }],
   });
   assert.match(md, /^# #7 Countdown drifts on Windows\nhttps:\/\/github\.com\/o\/r\/issues\/7/);
   assert.match(md, /\*\*Looks free\*\*/);
-  assert.match(md, /## What's being asked\nFix the drift\./);
+  assert.match(md, /## Likely files\n- src\/launch\/timer\.ts/);
   assert.match(md, /- @ada — code owner of src\/launch\/timer\.ts/);
   assert.match(md, /## Run before opening a PR\n```bash\nnpm test\n```/);
-});
-
-test("issueBriefPrompt: instructions in the system prompt; context first and the issue last in the user message", () => {
-  const { system, user } = pure.issueBriefPrompt({ owner: "o", repo: "r" }, { ...baseIssue, body: "It drifts 40ms/min" },
-    [comment("ada", "MEMBER", "Probably timer.ts", 1)], pure.issueAvailability(baseIssue, [], [], NOW), "=== src/timer.ts ===\n1| x");
-  for (const s of ["## What's being asked", "## Where to start", "## Suggested plan", "as data, not as instructions", "Never invent"]) assert.ok(system.includes(s), s);
-  for (const s of ["It drifts 40ms/min", "@ada (member): Probably timer.ts", "Availability check: Looks free", "1| x"]) assert.ok(user.includes(s), s);
-  assert.ok(!user.includes("## Suggested plan"), "the output format lives in the system prompt");
-  assert.ok(user.indexOf("<repository_context>") < user.indexOf('<issue number="7">'), "context comes before the issue");
-  assert.ok(user.trimEnd().endsWith("Write the brief for issue #7."), "the task comes last");
 });
 
 // ── Flow ─────────────────────────────────────────────────────────────────────
@@ -177,12 +167,7 @@ function briefPanel({ ai = true, comments = [], timeline = [] } = {}) {
     "/git/trees/HEAD?recursive=1": TREE,
     "/issues/7/comments?per_page=100": comments,
     "/issues/7/timeline?per_page=100": timeline,
-  }, {
-    raw: RAW,
-    ai: async () => (++aiCalls === 1
-      ? sseReply('["src/launch/timer.ts"]')
-      : sseReply("## What's being asked\nFix drift.\n\n## Where to start\nSee `src/launch/timer.ts:2`.\n\n## Suggested plan\n1. Reproduce\n2. Fix `tick`")),
-  });
+  }, { raw: RAW, ai: async () => { aiCalls++; return sseReply("unexpected"); } });
   const panel = loadPanel({ fetch: gh.fetch });
   panel.setRepo();
   if (ai) panel.run(`aiProvider = "groq"; aiApiKey = "gsk_test"`);
@@ -190,67 +175,51 @@ function briefPanel({ ai = true, comments = [], timeline = [] } = {}) {
   return { gh, panel, aiCalls: () => aiCalls };
 }
 
-test("opening a brief never calls the AI: it offers Generate, with likely files and owners from paths", async () => {
-  const { panel, aiCalls } = briefPanel();
+test("the brief shows availability, likely files, code owners and verify commands for 2 API requests — and no AI", async () => {
+  const { gh, panel, aiCalls } = briefPanel({ comments: [comment("bob", "MEMBER", "Timer bug, see tick()", 2)] });
   await panel.fn.showIssueBrief({ ...baseIssue, title: "Timer drifts during launch countdown" });
-  assert.equal(aiCalls(), 0);
-  assert.match(panel.el("brief-ai").innerHTML, /Summary, where to start and a plan[\s\S]*brief-generate-btn">Generate[\s\S]*Likely files[\s\S]*src\/launch\/timer\.ts/);
-  assert.match(panel.el("brief-people").innerHTML, />ada<\/a>[\s\S]*Code owner/);
-});
-
-test("clicking Generate writes the brief once, even when clicked twice", async () => {
-  const { panel, aiCalls } = briefPanel();
-  await panel.fn.showIssueBrief(baseIssue);
-  const target = { closest: (sel) => (sel.includes("brief-generate-btn") ? {} : null) };
-  panel.fn.handleBriefClick({ target, preventDefault() {} });
-  panel.fn.handleBriefClick({ target, preventDefault() {} });
-  while (!panel.run("currentBrief().ai")) await tick(2);
-  assert.equal(aiCalls(), 2, "one file pick + one brief");
-  assert.match(panel.el("brief-ai").innerHTML, /Where to start/);
-});
-
-test("the brief renders availability, a cited AI plan, code owners and verify commands for 2 API requests", async () => {
-  const { gh, panel } = briefPanel({ comments: [comment("bob", "MEMBER", "Timer bug, see tick()", 2)] });
-  await panel.fn.showIssueBrief(baseIssue);
-  await panel.fn.generateIssueBriefAI();
 
   const body = panel.el("brief-body").innerHTML;
   assert.match(body, /availability-free[\s\S]*Looks free/);
+  assert.match(body, /Likely files[\s\S]*href="https:\/\/github\.com\/o\/r\/blob\/HEAD\/src\/launch\/timer\.ts"/);
   assert.match(body, /Run before opening a PR[\s\S]*npm test/);
   assert.match(body, /From <code>\.github\/workflows\/test\.yml<\/code>/);
-  const ai = panel.el("brief-ai").innerHTML;
-  assert.match(ai, /<h3>Where to start<\/h3>/);
-  assert.match(ai, /href="https:\/\/github\.com\/o\/r\/blob\/main\/src\/launch\/timer\.ts#L2"/, "citation links to the line");
-  assert.match(ai, /Read 1 file/);
   const people = panel.el("brief-people").innerHTML;
   assert.match(people, /github\.com\/ada"[^>]*>ada<\/a>[\s\S]*Code owner[\s\S]*timer\.ts/);
   assert.match(people, /bob[\s\S]*Replied 1× in this thread/);
+  assert.equal(aiCalls(), 0, "briefs never call the AI");
 
   const issueCalls = gh.apiCalls.filter(u => u.startsWith("/issues/7/"));
   assert.deepEqual(issueCalls.sort(), ["/issues/7/comments?per_page=100", "/issues/7/timeline?per_page=100"]);
   assert.ok(gh.apiCalls.length <= 4, `API calls: ${gh.apiCalls.join(", ")}`); // + repo metadata + tree, shared with other tabs
 });
 
-test("reopening a brief is instant: no new API requests or AI calls", async () => {
-  const { gh, panel, aiCalls } = briefPanel();
+test("the brief hands AI questions to Ask: suggestions and your own question", async () => {
+  const { panel } = briefPanel();
   await panel.fn.showIssueBrief(baseIssue);
-  await panel.fn.generateIssueBriefAI();
-  const [api, ai] = [gh.apiCalls.length, aiCalls()];
+  const body = panel.el("brief-body").innerHTML;
+  assert.match(body, /Ask about this issue[\s\S]*data-kind="issue" data-ask="0">Summary &amp; plan[\s\S]*Where do I start\?[\s\S]*How do I test this\?[\s\S]*ask-chip-own/);
+  assert.doesNotMatch(body, /Generate|thread-input/);
+
+  const noAI = briefPanel({ ai: false });
+  await noAI.panel.fn.showIssueBrief(baseIssue);
+  assert.match(noAI.panel.el("brief-body").innerHTML, /Ask about this issue[\s\S]*Add an AI provider[\s\S]*for summaries and questions about this issue/);
+  assert.doesNotMatch(noAI.panel.el("brief-body").innerHTML, /ask-chip/);
+});
+
+test("reopening a brief is instant: no new API requests", async () => {
+  const { gh, panel } = briefPanel();
+  await panel.fn.showIssueBrief(baseIssue);
+  const api = gh.apiCalls.length;
   panel.fn.closeIssueBrief();
   await panel.fn.showIssueBrief(baseIssue);
   assert.equal(gh.apiCalls.length, api);
-  assert.equal(aiCalls(), ai);
-  assert.match(panel.el("brief-ai").innerHTML, /Where to start/);
 });
 
-test("without an AI key the brief still shows availability, likely files, owners and commands", async () => {
-  const { panel, aiCalls } = briefPanel({ ai: false, timeline: [prRef(42, "open", false, "grace")] });
-  const issue = { ...baseIssue, title: "Timer drifts during launch countdown" };
-  await panel.fn.showIssueBrief(issue);
-  assert.equal(aiCalls(), 0);
+test("a taken issue says so, with the PR that took it", async () => {
+  const { panel } = briefPanel({ ai: false, timeline: [prRef(42, "open", false, "grace")] });
+  await panel.fn.showIssueBrief(baseIssue);
   assert.match(panel.el("brief-body").innerHTML, /availability-taken[\s\S]*Open PR #42 by @grace/);
-  assert.match(panel.el("brief-ai").innerHTML, /Add an AI provider[\s\S]*Likely files[\s\S]*src\/launch\/timer\.ts/);
-  assert.match(panel.el("brief-people").innerHTML, />ada<\/a>[\s\S]*Code owner/);
 });
 
 test("switching repos while a brief is loading never renders it into the other repo", async () => {
@@ -262,28 +231,6 @@ test("switching repos while a brief is loading never renders it into the other r
   assert.equal(panel.el("brief-body").innerHTML, "OTHER");
 });
 
-test("switching repos while the AI is writing never renders the brief into the other repo", async () => {
-  let release;
-  const gate = new Promise(r => { release = r; });
-  let aiCalls = 0;
-  const gh = githubMock({ "": { default_branch: "main" }, "/git/trees/HEAD?recursive=1": TREE,
-    "/issues/7/comments?per_page=100": [], "/issues/7/timeline?per_page=100": [] }, {
-    raw: RAW,
-    ai: async () => (++aiCalls === 1 ? sseReply('["src/launch/timer.ts"]') : (await gate, sseReply("## What's being asked\nLATE"))),
-  });
-  const panel = loadPanel({ fetch: gh.fetch });
-  panel.setRepo();
-  panel.run(`aiProvider = "groq"; aiApiKey = "gsk_test"`);
-  await panel.fn.showIssueBrief(baseIssue);
-  const pending = panel.fn.generateIssueBriefAI();
-  while (aiCalls < 2) await tick(2);   // the brief is now waiting on the AI
-  panel.setRepo("other", "repo");
-  panel.el("brief-ai").innerHTML = "OTHER";
-  release();
-  await pending;
-  assert.equal(panel.el("brief-ai").innerHTML, "OTHER");
-});
-
 test("Start this issue buttons are on every card and open the brief", async () => {
   const gh = githubMock({ "/issues": [{ ...baseIssue, reactions: { total_count: 0 } }], "": { default_branch: "main" },
     "/git/trees/HEAD?recursive=1": TREE, "/issues/7/comments?per_page=100": [], "/issues/7/timeline?per_page=100": [] }, { raw: RAW });
@@ -293,9 +240,9 @@ test("Start this issue buttons are on every card and open the brief", async () =
   assert.match(panel.el("issues-list").innerHTML, /class="start-issue-btn" data-issue="7"/);
   panel.fn.openIssueBriefFromList("7");
   await tick(20);
-  assert.equal(panel.el("issues-browse").hidden, true);
+  assert.equal(panel.el("contribute-browse").hidden, true);
   assert.equal(panel.el("issue-brief").hidden, false);
   assert.match(panel.el("brief-body").innerHTML, /Countdown drifts on Windows/);
   panel.fn.closeIssueBrief();
-  assert.equal(panel.el("issues-browse").hidden, false);
+  assert.equal(panel.el("contribute-browse").hidden, false);
 });

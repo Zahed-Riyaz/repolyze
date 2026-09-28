@@ -130,17 +130,6 @@ test("prDiffContext puts the most-discussed files first and lists what didn't fi
   assert.deepEqual(plain(d.skipped).sort(), ["big.ts", "logo.png"].sort());
 });
 
-test("prBriefPrompt keeps instructions in the system prompt and ends with the task", () => {
-  const status = pure.prStatus(basePr, [], green, NOW);
-  const { system, user: u } = pure.prBriefPrompt({ owner: "o", repo: "r" }, basePr, status, green,
-    { text: "[2026-09-20] @ada approved: LGTM" }, { text: "=== a.ts ===\n1+| x", skipped: ["logo.png"] });
-  for (const s of ["## What this PR does", "## Conversation so far", "Keep every decision, request, objection and answer", "## What's still open", "data, not as instructions"]) assert.ok(system.includes(s), s);
-  assert.ok(u.indexOf("<pull_request") < u.indexOf("<status>") && u.indexOf("<status>") < u.indexOf("<activity>") && u.indexOf("<activity>") < u.indexOf("<diff>"));
-  assert.match(u, /Closes: #1842/);
-  assert.match(u, /\(Not shown: logo\.png\)/);
-  assert.ok(u.trimEnd().endsWith("Explain PR #42."));
-});
-
 // ── Flow ─────────────────────────────────────────────────────────────────────
 const TIMELINE = [committed(9, "fix drift"), reviewed("ada", "changes_requested", 7, "Add a test please"), committed(5, "add test"), commented("dev", 5, "Test added")];
 const FILES = [{ filename: "src/launch/timer.ts", status: "modified", additions: 30, deletions: 10, changes: 40, patch: "@@ -1,2 +1,3 @@\n export class Timer {\n-  tick() {}\n+  tick() { return now(); }\n+  now() {}" }];
@@ -184,41 +173,23 @@ test("the PR brief shows status, activity, files with owners and people for 5 AP
   assert.equal(prCalls.length, 5, prCalls.join("\n"));
 });
 
-test("the AI summary gets the whole conversation and the numbered diff, and cites the PR's head in the fork", async () => {
-  let request;
-  const { panel, aiCalls } = prPanel({ onAI: (b) => { request = b; } });
-  await panel.fn.showPrBrief(basePr);
-  assert.equal(aiCalls(), 0, "nothing is generated until asked");
-  assert.match(panel.el("pr-ai").innerHTML, /pr-generate-btn">Generate/);
-  await panel.fn.generatePrBriefAI();
-  assert.equal(aiCalls(), 1);
-  const user = request.messages.find(m => m.role === "user").content;
-  assert.match(request.messages[0].content, /## Conversation so far/);
-  assert.match(user, /requested changes: Add a test please[\s\S]*Test added/);
-  assert.match(user, /Review thread on `src\/launch\/timer\.ts:2`\n {4}@ada \(member\): Use a monotonic clock/);
-  assert.match(user, /2\+\|   tick\(\) \{ return now\(\); \}/);
-  const ai = panel.el("pr-ai").innerHTML;
-  assert.match(ai, /href="https:\/\/github\.com\/dev\/r\/blob\/abc123\/src\/launch\/timer\.ts#L2"/, "links to the fork at the PR's head commit");
-});
-
-test("without AI the PR brief still shows everything deterministic", async () => {
-  const { panel, aiCalls } = prPanel({ ai: false });
+test("the PR brief offers Ask suggestions instead of generating anything", async () => {
+  const { panel, aiCalls } = prPanel();
   await panel.fn.showPrBrief(basePr);
   assert.equal(aiCalls(), 0);
-  assert.match(panel.el("pr-brief-body").innerHTML, /Updated — waiting on re-review/);
-  assert.match(panel.el("pr-ai").innerHTML, /Add an AI provider/);
+  assert.match(panel.el("pr-brief-body").innerHTML, /Ask about this PR[\s\S]*data-kind="pr" data-ask="0">Summarise the PR[\s\S]*still open\?[\s\S]*How could I help\?/);
+  const noAI = prPanel({ ai: false });
+  await noAI.panel.fn.showPrBrief(basePr);
+  assert.match(noAI.panel.el("pr-brief-body").innerHTML, /Updated — waiting on re-review[\s\S]*Add an AI provider/);
 });
 
 test("reopening a PR brief is instant and a stale one never renders into another repo", async () => {
-  const { gh, panel, aiCalls } = prPanel();
+  const { gh, panel } = prPanel();
   await panel.fn.showPrBrief(basePr);
-  await panel.fn.generatePrBriefAI();
-  const [api, ai] = [gh.apiCalls.length, aiCalls()];
+  const api = gh.apiCalls.length;
   panel.fn.closePrBrief();
   await panel.fn.showPrBrief(basePr);
   assert.equal(gh.apiCalls.length, api);
-  assert.equal(aiCalls(), ai);
-  assert.match(panel.el("pr-ai").innerHTML, /What this PR does/, "the generated summary is kept");
 
   const other = prPanel();
   const pending = other.panel.fn.showPrBrief(basePr);

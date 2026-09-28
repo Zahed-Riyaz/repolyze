@@ -97,19 +97,19 @@
         <div class="feature-grid">
           <div class="feature-card">
             <span class="feature-icon"><svg class="icon"><use href="#i-issue"/></svg></span>
-            <div><strong>Issues</strong>Beginner-friendly work, filtered</div>
+            <div><strong>Contribute</strong>Issues and PRs you can pick up</div>
           </div>
           <div class="feature-card">
             <span class="feature-icon"><svg class="icon"><use href="#i-chat"/></svg></span>
-            <div><strong>Chat</strong>Ask anything about the repo</div>
+            <div><strong>Ask</strong>Questions answered from the code</div>
           </div>
           <div class="feature-card">
             <span class="feature-icon"><svg class="icon"><use href="#i-pr"/></svg></span>
-            <div><strong>Health</strong>Is it worth contributing to?</div>
+            <div><strong>Briefs</strong>Is it free, where to start, who to ask</div>
           </div>
           <div class="feature-card">
             <span class="feature-icon"><svg class="icon"><use href="#i-layers"/></svg></span>
-            <div><strong>Stack &amp; maintainers</strong>Languages, tools &amp; top contributors</div>
+            <div><strong>Repo</strong>Health, stack &amp; maintainers</div>
           </div>
         </div>
       </div>
@@ -117,67 +117,25 @@
 
     <div id="main-content">
       <nav id="tabs" role="tablist">
-        <button class="tab-btn active" data-tab="issues" role="tab"><svg class="icon icon-sm"><use href="#i-issue"/></svg>Issues</button>
-        <button class="tab-btn" data-tab="tech" role="tab"><svg class="icon icon-sm"><use href="#i-layers"/></svg>Stack</button>
-        <button class="tab-btn" data-tab="maintainers" role="tab"><svg class="icon icon-sm"><use href="#i-users"/></svg>Maintainers</button>
-        <button class="tab-btn" data-tab="contribute" role="tab"><svg class="icon icon-sm"><use href="#i-pr"/></svg>Contribute</button>
-        <button class="tab-btn" data-tab="chat" role="tab"><svg class="icon icon-sm"><use href="#i-chat"/></svg>Chat</button>
+        <button class="tab-btn" data-tab="repo" role="tab"><svg class="icon icon-sm"><use href="#i-layers"/></svg>Repo</button>
+        <button class="tab-btn active" data-tab="contribute" role="tab"><svg class="icon icon-sm"><use href="#i-issue"/></svg>Contribute</button>
+        <button class="tab-btn" data-tab="chat" role="tab"><svg class="icon icon-sm"><use href="#i-chat"/></svg>Ask</button>
         <span id="tab-indicator" aria-hidden="true"></span>
       </nav>
 
       <main id="tab-content">
-        <!-- Issues Tab -->
-        <section id="issues-tab" class="tab-pane active">
-          <div id="issues-browse">
-          <div class="pane-head">
-            <div class="segmented filter-bar" role="group" aria-label="Filter issues">
-              <button class="filter-btn active" data-label="">All</button>
-              <button class="filter-btn" data-label="good-first-issue">Good first</button>
-              <button class="filter-btn" data-label="help-wanted">Help wanted</button>
-            </div>
-            <div class="issue-controls">
-              <select id="issue-sort" class="select" aria-label="Sort issues">
-                <option value="comments">Most discussed</option>
-                <option value="created">Newest</option>
-                <option value="updated">Recently updated</option>
-              </select>
-              <label class="switch" title="Hide issues that are assigned (and, for label filters, ones with a linked PR)">
-                <input type="checkbox" id="issue-unclaimed" checked><span class="switch-track"></span>Unclaimed
-              </label>
-            </div>
-          </div>
-          <p id="issues-summary" class="issues-summary"></p>
-          <ul id="issues-list" class="card-list"></ul>
-          <button id="issues-more" class="btn btn-block issues-more" hidden>Load more</button>
-          <p class="brief-note pr-follow-note">Tip: open any issue on GitHub and its brief opens here automatically.</p>
-          </div>
+        <!-- Repo Tab: is it worth contributing to, what's it built with, who runs it -->
+        <section id="repo-tab" class="tab-pane">
+          <div id="health-card" class="card"></div>
 
-          <!-- "Start this issue" brief — filled in by brief.js -->
-          <div id="issue-brief" class="issue-brief" hidden>
-            <div class="brief-topbar">
-              <button id="brief-back" class="btn btn-ghost btn-xs"><svg class="icon icon-sm" style="transform:rotate(180deg)"><use href="#i-arrow-right"/></svg>Issues</button>
-              <div class="brief-actions">
-                <button id="brief-copy" class="btn btn-xs" title="Copy the brief as Markdown"><svg class="icon icon-sm"><use href="#i-copy"/></svg>Copy</button>
-                <button id="brief-ask" class="btn btn-xs" title="Ask a follow-up in Chat"><svg class="icon icon-sm"><use href="#i-chat"/></svg>Ask in chat</button>
-              </div>
-            </div>
-            <div id="brief-body"></div>
-          </div>
-        </section>
-
-        <!-- Tech Stack Tab -->
-        <section id="tech-tab" class="tab-pane">
           <h2 class="section-title">Languages</h2>
           <ul id="tech-list" class="lang-list"></ul>
           <div id="tools-section" style="display:none">
             <h2 class="section-title">Tools &amp; services</h2>
             <div id="tools-grid" class="tools-grid"></div>
           </div>
-        </section>
 
-        <!-- Maintainers Tab -->
-        <section id="maintainers-tab" class="tab-pane">
-          <h2 class="section-title">Active maintainers</h2>
+          <h2 class="section-title repo-people-title">Active maintainers</h2>
           <p class="tab-subtitle">People with maintainer access who replied on issues or PRs in the last 90 days — the best people to ask or tag.</p>
           <ul id="maintainers-list" class="people-list"></ul>
           <p id="maintainer-teams" class="teams-line" hidden></p>
@@ -185,12 +143,34 @@
           <ul id="contributors-list" class="people-list"></ul>
         </section>
 
-        <!-- Contribute Tab -->
-        <section id="contribute-tab" class="tab-pane">
+        <!-- Contribute Tab: what's available to work on; a brief replaces the lists -->
+        <section id="contribute-tab" class="tab-pane active">
           <div id="contribute-browse">
-            <div id="health-card" class="card"></div>
+            <section id="issues-section" class="work-section">
+              <div class="pane-head">
+                <h2 class="section-title">Issues you can pick up</h2>
+                <div class="segmented filter-bar" role="group" aria-label="Filter issues">
+                  <button class="filter-btn active" data-label="">All</button>
+                  <button class="filter-btn" data-label="good-first-issue">Good first</button>
+                  <button class="filter-btn" data-label="help-wanted">Help wanted</button>
+                </div>
+              </div>
+              <div class="issue-controls">
+                <select id="issue-sort" class="select" aria-label="Sort issues">
+                  <option value="comments">Most discussed</option>
+                  <option value="created">Newest</option>
+                  <option value="updated">Recently updated</option>
+                </select>
+                <label class="switch" title="Hide issues that are assigned (and, for label filters, ones with a linked PR)">
+                  <input type="checkbox" id="issue-unclaimed" checked><span class="switch-track"></span>Unclaimed
+                </label>
+              </div>
+              <p id="issues-summary" class="issues-summary"></p>
+              <ul id="issues-list" class="card-list"></ul>
+              <button id="issues-more" class="btn btn-block issues-more" hidden>Load more</button>
+            </section>
 
-            <div id="open-prs-section">
+            <section id="open-prs-section" class="work-section">
               <div class="pane-head">
                 <h2 class="section-title">Pull requests</h2>
                 <div class="segmented" role="group" aria-label="Pull request state">
@@ -205,24 +185,34 @@
               <p id="prs-summary" class="issues-summary"></p>
               <ul id="prs-list" class="card-list"></ul>
               <button id="prs-more" class="btn btn-block issues-more" hidden>Load more</button>
-              <p class="brief-note pr-follow-note">Tip: open any pull request on GitHub and its brief opens here automatically.</p>
+            </section>
+            <p class="brief-note pr-follow-note">Tip: open any issue or pull request on GitHub and its brief opens here.</p>
+          </div>
+
+          <!-- "Start this issue" brief — filled in by brief.js -->
+          <div id="issue-brief" class="issue-brief" hidden>
+            <div class="brief-topbar">
+              <button id="brief-back" class="btn btn-ghost btn-xs"><svg class="icon icon-sm" style="transform:rotate(180deg)"><use href="#i-arrow-right"/></svg>Back</button>
+              <div class="brief-actions">
+                <button id="brief-copy" class="btn btn-xs" title="Copy the brief as Markdown"><svg class="icon icon-sm"><use href="#i-copy"/></svg>Copy</button>
+              </div>
             </div>
+            <div id="brief-body"></div>
           </div>
 
           <!-- "Understand this PR" brief — filled in by pr-brief.js -->
           <div id="pr-brief" class="issue-brief" hidden>
             <div class="brief-topbar">
-              <button id="pr-brief-back" class="btn btn-ghost btn-xs"><svg class="icon icon-sm" style="transform:rotate(180deg)"><use href="#i-arrow-right"/></svg>Contribute</button>
+              <button id="pr-brief-back" class="btn btn-ghost btn-xs"><svg class="icon icon-sm" style="transform:rotate(180deg)"><use href="#i-arrow-right"/></svg>Back</button>
               <div class="brief-actions">
                 <button id="pr-brief-copy" class="btn btn-xs" title="Copy the brief as Markdown"><svg class="icon icon-sm"><use href="#i-copy"/></svg>Copy</button>
-                <button id="pr-brief-ask" class="btn btn-xs" title="Ask a follow-up in Chat"><svg class="icon icon-sm"><use href="#i-chat"/></svg>Ask in chat</button>
               </div>
             </div>
             <div id="pr-brief-body"></div>
           </div>
         </section>
 
-        <!-- Chat Tab -->
+        <!-- Ask Tab (repo-wide chat) -->
         <section id="chat-tab" class="tab-pane">
           <div id="chat-header-bar">
             <span id="chat-context-label">Reads the repo's source to answer</span>
@@ -234,6 +224,8 @@
             <span id="typing-status">Thinking…</span>
           </div>
           <div id="chat-composer">
+            <!-- "About #123" — set from a brief; answers are grounded in that item (ask-focus.js) -->
+            <div id="chat-focus" class="chat-focus" hidden></div>
             <div id="chat-input-container">
               <textarea id="chat-input" rows="1" placeholder="Ask about this repo…"></textarea>
               <button id="send-btn" title="Send" aria-label="Send"><svg class="icon"><use href="#i-send"/></svg></button>
@@ -307,6 +299,7 @@
   <script src="insights.js"></script>
   <script src="brief.js"></script>
   <script src="pr-brief.js"></script>
+  <script src="ask-focus.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

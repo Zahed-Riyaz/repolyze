@@ -9,29 +9,29 @@ A Chrome (Manifest V3) side-panel extension that helps someone contribute to a G
 **Repo detection & navigation**
 - FR-1 Detect the repository in the active tab of the panel's window (URL changes and tab switches); ignore background tabs and other windows.
 - FR-2 Show a welcome screen on non-repo pages; keep Settings reachable there.
-- FR-3 When the active tab is a pull request page (`/pull/123`, incl. Files/Commits tabs), open that PR's brief on the Contribute tab; on an issue page (`/issues/12`), open that issue's brief on the Issues tab. Close it when leaving the page if it was opened that way.
-- FR-3a AI sections of briefs (issue and PR) never run on open — they spend the user's AI credits, so the brief shows a **Generate** button and only the deterministic parts until it's clicked; a generated summary is cached for the session.
+- FR-3 When the active tab is an issue page (`/issues/12`) or a pull request page (`/pull/123`, incl. Files/Commits tabs), open that item's brief on the Contribute tab. Close it when leaving the page if it was opened that way.
+- FR-3a All AI work happens in **Ask**. Contribute and its briefs never call the AI; a brief's **Ask about this issue / PR** row (suggested questions or your own) opens Ask focused on that item.
 
-**Issues tab**
-- FR-4 List open issues (unassigned by default), sortable by most discussed / newest / recently updated, paged with "Load more".
+Three tabs: **Repo** · **Contribute** · **Ask**. A repo opens on Contribute — what's available to work on.
+
+**Contribute tab** — issues and PRs on one page; a brief replaces the lists (one at a time), and Back restores their scroll position
+- FR-4 List open issues (unassigned by default), sortable by most discussed / newest / recently updated. Shows a 5-item preview; "Show all" expands from what's loaded, then "Load more" pages.
 - FR-5 "Good first" and "Help wanted" filters search *all* open issues via the search API, matched against the repo's real label names (spelling variants included), showing the total.
 - FR-6 "Unclaimed" toggle hides assigned issues and, for label filters, issues with a linked PR; when that hides everything, say so and offer to show them.
-- FR-7 **Start this issue** brief per issue: availability verdict (assignees, PRs referencing it, "I'll take this" comments, maintainer replies), AI summary / where to start / plan / questions (cited `path:line`), who to ask (CODEOWNERS + maintainers in the thread), and **Run before opening a PR** (commands from CI and `package.json`). Works without AI except the summary.
+- FR-7 **Start this issue** brief per issue: availability verdict (assignees, PRs referencing it, "I'll take this" comments, maintainer replies), likely files (path ranking), who to ask (CODEOWNERS + maintainers in the thread), and **Run before opening a PR** (commands from CI and `package.json`). No AI.
+- FR-12 Pull request list below the issues: open/closed toggle, a 5-item preview then paging, hints from the list data (draft, review requested, idle ≥21 days), and a Find box accepting a PR number, a PR link, or keywords (searches every PR).
+- FR-13 **Understand this PR** brief: status verdict (approved / waiting for review / changes requested / updated after review / checks failing / conflicts / draft / merged / closed), activity, files changed with code owners, and people. No AI.
+- FR-13a Each brief has an **Ask about this issue / PR** row: suggestions (issue: *Summary & plan*, *Where do I start?*, *How do I test this?*; PR: *Summarise the PR*, *What's still open?*, *How could I help?*) are sent to Ask as visible questions; *Your own question* focuses Ask without sending.
 
-**Stack tab**
+**Repo tab** — context about the project
+- FR-11 Contributor-friendliness health score (0–100) from measured signals — maintainer response, outside PRs merged, merge speed, activity, onboarding docs — each shown with its evidence; unmeasured signals are n/a and excluded, not zero.
 - FR-8 Language breakdown (GitHub linguist colours) and detected tools/services (containers, CI, cloud, databases, testing…).
-
-**Maintainers tab**
 - FR-9 Active maintainers: users with OWNER/MEMBER/COLLABORATOR association who replied on issues/PRs in the last 90 days, merged with CODEOWNERS (users and teams); flag repos where nobody with access replies.
 - FR-10 All-time top contributors by commits, as context.
 
-**Contribute tab**
-- FR-11 Contributor-friendliness health score (0–100) from measured signals — maintainer response, outside PRs merged, merge speed, activity, onboarding docs — each shown with its evidence; unmeasured signals are n/a and excluded, not zero.
-- FR-12 Pull request list: open/closed toggle, paging, and a Find box accepting a PR number, a PR link, or keywords (searches every PR).
-- FR-13 **Understand this PR** brief: status verdict (approved / waiting for review / changes requested / updated after review / checks failing / conflicts / draft / merged / closed), AI summary including the full conversation in order and what's still open, activity, files changed with code owners, and people.
-
-**Chat tab**
+**Ask tab**
 - FR-14 Multi-turn chat grounded in the repo: code retrieval per question, answers cite `path:line` linked to GitHub, "Read N files" source chips, regenerate, starter prompts, per-repo history (50 messages).
+- FR-14a **Focus chip** (`About #12 ✕`): while set from a brief, answers are grounded in that item — the issue and its discussion plus retrieved code, or the PR's status, checks, whole activity log and numbered diff (citations link to the PR's head, in the author's fork). Questions are tagged with the item; ✕ returns to repo-wide questions; a new repo clears it.
 - FR-15 Files named in a question are read directly; follow-ups keep the previous answer's files.
 
 **Settings & rate limits**
@@ -51,7 +51,7 @@ All API paths below are relative to `https://api.github.com/repos/{owner}/{repo}
 |---|---|
 | `github.com/{owner}/{repo}/…` | That repo is loaded into the panel. |
 | `github.com/{owner}/{repo}/pull/{n}` (also `/files`, `/commits`) | Repo loaded **and** PR #n's brief opens on the Contribute tab. |
-| `github.com/{owner}/{repo}/issues/{n}` | Repo loaded **and** issue #n's brief opens on the Issues tab (`GET /issues/{n}` unless it's in the loaded list). |
+| `github.com/{owner}/{repo}/issues/{n}` | Repo loaded **and** issue #n's brief opens on the Contribute tab (`GET /issues/{n}` unless it's in the loaded list). |
 | `github.com/explore`, `/settings`, `/notifications`, … or any non-GitHub page | Welcome screen (not a repo). |
 
 **Repo-level data**
@@ -115,10 +115,10 @@ The extension uses **retrieval-augmented generation**: before the AI answers, it
 | Verify | Citations to files that were read become links; a "Read N files" row lists the excerpts | `linkifyCitations`, `sourcesHtml` |
 
 Where it's used:
-- **Chat** — the full pipeline above, per question (follow-ups carry the previous files).
-- **Start this issue** — the same pipeline with the issue's title and body as the query; the AI writes the brief from the retrieved code plus the issue discussion.
-- **Understand this PR** — grounded generation without the retrieval step: the "retrieved" context is the PR itself (every timeline event, review thread and numbered diff), packed to fit the budget.
-- **Not used** for availability verdicts, PR status, the health score, maintainers or CI commands — those are computed deterministically from GitHub data, so they're consistent and work without AI.
+- **Ask** — the full pipeline above, per question (follow-ups carry the previous files).
+- **Ask focused on an issue** (`ask-focus.js`) — the same pipeline, with the issue and its discussion prepended to the retrieved code; follow-ups carry the files behind the last answer about the same item (falling back to the issue's likely files).
+- **Ask focused on a PR** — grounded generation without the retrieval step: the "retrieved" context is the PR itself (status, checks, every timeline event, review thread and numbered diff), packed to fit the budget. `buildChatPrompt({ focus })` tells the model which item it's about.
+- **Not used** for briefs, availability verdicts, PR status, the health score, maintainers or CI commands — those are computed deterministically from GitHub data, so they're consistent and work without AI.
 
 ---
 
@@ -126,8 +126,8 @@ Where it's used:
 
 | Area | Requirement |
 |---|---|
-| **API budget** | Opening a repo costs 2 GitHub requests; other tabs load lazily on first view; reopening the panel costs 0 (session cache); chat costs 0 (file contents come from `raw.githubusercontent.com`); an issue brief costs 2 (3 when opened from its page), a PR brief 5. |
-| **AI budget** | No AI call happens without a user action: chat on send, briefs on **Generate**. Opening a brief — from a list or by following the page — costs 0 AI credits. |
+| **API budget** | Opening a repo costs 3 GitHub requests (header, first page of issues, first page of PRs); the Repo tab loads on first view; reopening the panel costs 0 (session cache); chat costs 0 (file contents come from `raw.githubusercontent.com`); an issue brief costs 2 (3 when opened from its page), a PR brief 5. |
+| **AI budget** | No AI call happens without a user action, and only in Ask (on send, or a brief's suggestion). Opening a brief — from a list or by following the page — costs 0 AI credits. |
 | **Rate-limit resilience** | Never collect raw 403s: stop requesting when the core quota is spent, serve stale cache instead of failing, track the search quota separately, honour `Retry-After` for secondary limits (not the hourly reset), auto-reload failed tabs when the window resets or a token is added. |
 | **Correctness under navigation** | Every async render is guarded by the repo it started for (`isCurrentRepo(key)`); briefs are guarded by an active token so a stale response never renders into another repo or brief. |
 | **Privacy** | No backend and no telemetry. Keys and chat history live in `chrome.storage.local`; GitHub responses in `chrome.storage.session`. The GitHub token is only ever sent to `api.github.com`. Repo content is sent only to the AI provider the user chose. |
@@ -135,8 +135,8 @@ Where it's used:
 | **AI answer quality** | Grounded answers with citations; per-provider context budgets (Groq/Ollama smaller); Ollama `num_ctx` sized to the request; temperature 0.2 (0 for file picking); history has its own budget. |
 | **Performance** | Local ranking of 100k paths ≈ 150 ms; file reads in parallel; skeletons instead of layout jumps; streaming AI output. |
 | **Accessibility** | Keyboard-reachable controls with visible focus rings, ARIA roles on tabs/status, `prefers-reduced-motion` respected, theme-aware label contrast. |
-| **Compatibility** | Chrome with the Side Panel API (MV3); works at narrow panel widths (tab icons hide below 480px via a container query); light and dark themes follow the OS. |
-| **Maintainability** | Plain JS, no build step; pure logic separated from rendering and unit-tested; 147 tests (`npm test`, ~3s) run in CI on every push. |
+| **Compatibility** | Chrome with the Side Panel API (MV3); works at narrow panel widths (three tabs; icons hide below 480px via a container query); light and dark themes follow the OS. |
+| **Maintainability** | Plain JS, no build step; pure logic separated from rendering and unit-tested; 149 tests (`npm test`, ~3s) run in CI on every push. |
 | **Cost** | Zero infrastructure cost; users bring their own AI key (free tiers on Groq/Gemini, free local Ollama). |
 
 ---
@@ -145,7 +145,7 @@ Where it's used:
 
 **Opening a repo**
 1. `chrome.tabs.onUpdated` / `onActivated` fire in the side panel (active tab of its window only).
-2. `handleRepoRefresh(url)` parses `owner/repo` (and a PR number if on a PR page) and calls `updateRepoInfo()` for a new repo.
+2. `handleRepoRefresh(url)` parses `owner/repo` (and an issue/PR number if on one — `briefPageFromPath`) and calls `updateRepoInfo()` for a new repo.
 3. `updateRepoInfo()` resets per-repo UI, fetches repo metadata, loads chat history, and loads **only the visible tab** (`loadTabData`).
 4. Every GitHub call goes through `githubRequest()`: check the session cache → serve if fresh (10 min) → otherwise send with `If-None-Match` (a 304 costs nothing) → record rate-limit headers → cache 200s and 404s in memory + `chrome.storage.session`.
 5. Renders check `isCurrentRepo(key)` before touching the DOM; results are cached in `repoCache[owner/repo]`.
@@ -159,10 +159,13 @@ Where it's used:
 9. `callAIStreaming()` → `providerBody()` builds the request for the selected provider → tokens stream into the bubble → citations to files actually read are linkified → the message and its sources are saved to the repo that asked.
 
 **Start this issue**
-10. Load the issue's comments + timeline (2 requests), CI commands (`loadVerifyCommands`, raw files) and CODEOWNERS → `issueAvailability()` verdict, likely files (path ranking) and their owners render instantly → on **Generate**: chat-style retrieval for the issue → AI brief streams in → owners of the cited files are resolved.
+10. Load the issue's comments + timeline (2 requests), CI commands (`loadVerifyCommands`, raw files) and CODEOWNERS → `issueAvailability()` verdict, likely files (path ranking) and their owners render instantly. No AI.
+
+**Asking about a brief**
+11a. A brief's suggestion → `askAboutBrief(kind, i)` → `setChatFocus()` shows the chip → `switchTab("chat")` → `handleChat()` sees `focusedItem()` → `buildFocusedContext()`: issue → `issueFocusContext()` + `buildChatContext()`; PR → `prFocusContext()` (no file picking) → `buildChatPrompt({ focus })` → answer streams in Ask and is saved with its `focus` tag (and `cite` repo for PRs).
 
 **Understand this PR**
-11. Load PR detail, then timeline, review comments, files and check runs (5 requests, paged with a token) → `prStatus()` verdict, activity, files and people render instantly → on **Generate**: `prEventLog()` (every event, bodies shortened evenly to fit) + `prDiffContext()` (numbered diffs, most-discussed first) → AI summary streams in, citations link to the head commit (in the author's fork if it is one).
+11. Load PR detail, then timeline, review comments, files and check runs (5 requests, paged with a token) → `prStatus()` verdict, activity, files and people render instantly. `prEventLog()` (every event, bodies shortened evenly to fit) and `prDiffContext()` (numbered diffs, most-discussed first) feed Ask when it's focused on the PR.
 
 **Rate limits & tokens**
 12. Response headers update `ghState` → `renderRateLimit()` updates the badge/banner and a countdown; at reset (or after a token is saved and validated via `/rate_limit`), `reloadCurrentRepo()` re-runs what's visible, deferring until the user is back on a repo page.
@@ -192,7 +195,7 @@ Where it's used:
 ## 5. Frontend design philosophy
 
 - **Evidence over assertion.** Every verdict shows its reasons; every metric shows the numbers behind it; every AI claim about code cites `path:line` and links to it. Unlinked citations visibly mean "not verified".
-- **Deterministic first, AI second.** Anything computable (availability, PR status, owners, CI commands, health signals) renders instantly and works without an AI key; AI adds summaries on top and streams in.
+- **Deterministic first, AI second.** Anything computable (availability, PR status, owners, CI commands, health signals) renders instantly and works without an AI key; AI lives in one place (Ask) and adds summaries and answers on top, grounded in the item you came from.
 - **Honest states.** Skeletons instead of spinners-and-jumps; "n/a" instead of fake zeros; "Paused until 19:13" instead of raw 403s; "all 18 are already claimed" instead of an empty list.
 - **Fit a narrow panel.** A fixed header and tab bar with independently scrolling panes; a pinned chat composer; tab icons drop out below 480px; lists page instead of growing unbounded.
 - **Calm, native look.** GitHub-adjacent (Primer-like) tokens, system font, light and dark from the OS, subtle motion (≤250 ms) that respects reduced-motion.
@@ -212,8 +215,9 @@ Where it's used:
 │                                         │  ├ retrieval.js  tree, raw reads, ranking,    │ │
 │  ┌──────────────┐  openPanelOnAction    │  │               snippets, packing, prompts   │ │
 │  │background.js │ ───────────────────▶  │  ├ insights.js   maintainers, health score    │ │
-│  │ (worker)     │                       │  ├ brief.js      Start this issue             │ │
-│  └──────────────┘                       │  └ pr-brief.js   PR list, Find, PR brief      │ │
+│  │ (worker)     │                       │  ├ brief.js      Start this issue, focus view │ │
+│  └──────────────┘                       │  ├ pr-brief.js   PR list, Find, PR brief      │ │
+│                                         │  └ ask-focus.js  Ask focused on an issue / PR │ │
 │                                         └───────┬───────────────────┬───────────────────┘ │
 │  ┌──────────────┐   settings (onChanged)        │                   │                     │
 │  │ options.html │ ◀──────────────┐              │                   │                     │
@@ -246,7 +250,7 @@ Where it's used:
 
 - **Run:** `chrome://extensions` → Developer mode → Load unpacked → this folder. Reload the extension after edits.
 - **Test:** `npm test` (all suites) and `npm run check` (syntax). Node 22+. CI: `.github/workflows/test.yml`.
-- **Script order matters:** `sidepanel.html` loads `retrieval.js`, `insights.js`, `brief.js`, `pr-brief.js`, then `sidepanel.js` as classic scripts sharing one global scope; `test/helpers/panel.js` loads them in the same order. New files must be added to both (and to `npm run check`).
+- **Script order matters:** `sidepanel.html` loads `retrieval.js`, `insights.js`, `brief.js`, `pr-brief.js`, `ask-focus.js`, then `sidepanel.js` as classic scripts sharing one global scope; `test/helpers/panel.js` loads them in the same order. New files must be added to both (and to `npm run check`).
 - **Tests use the real code:** `loadPanel()` evals the scripts with a fake DOM, `chrome.*` and `fetch`; `githubMock()` fakes GitHub, raw files and AI replies and records requests. Use `panel.run("…")` to reach `let`/`const` state.
 - **Conventions:** keep pure logic (verdicts, scoring, parsing, prompts) separate from rendering and unit-test it; escape everything interpolated into `innerHTML`; guard async renders with `isCurrentRepo(key)`; go through `fetchGitHub`/`fetchGitHubPage` (never raw `fetch`) for GitHub API calls; always pass `direction=desc` when sorting GitHub lists (it defaults to ascending); put AI instructions in `opts.system`.
 - **Model IDs** live in `MODELS` (`sidepanel.js`); context budgets in `CONTEXT_BUDGET` and picker sizes in `PICKER_SHORTLIST` (`retrieval.js`).
@@ -256,4 +260,4 @@ Where it's used:
 
 ## 8. Summary
 
-GitHub Repo Analyzer is a backend-free Chrome side panel that turns "a repo I've never seen" into "a contribution I can start today". It finds issues that are genuinely available across the whole repo, briefs each one (is it free, where to start, who to ask, what CI will run), explains pull requests including their full conversation and status, surfaces the people who actually maintain the project, scores contributor-friendliness from measured signals, and answers questions from the repo's real source code with line-level citations. Everything is computed client-side from the GitHub API — carefully budgeted, cached and rate-limit-aware — with the user's own AI provider adding summaries on top of deterministic, verifiable data. It's plain JavaScript with no build step, a token-based light/dark design built for a narrow panel, and 147 tests running in CI.
+GitHub Repo Analyzer is a backend-free Chrome side panel that turns "a repo I've never seen" into "a contribution I can start today". It finds issues that are genuinely available across the whole repo, briefs each one (is it free, where to start, who to ask, what CI will run), explains pull requests including their full conversation and status, surfaces the people who actually maintain the project, scores contributor-friendliness from measured signals, and answers questions from the repo's real source code with line-level citations. Everything is computed client-side from the GitHub API — carefully budgeted, cached and rate-limit-aware — with the user's own AI provider adding summaries on top of deterministic, verifiable data. It's plain JavaScript with no build step, a token-based light/dark design built for a narrow panel, and 149 tests running in CI.
