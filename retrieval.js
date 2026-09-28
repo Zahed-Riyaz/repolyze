@@ -6,9 +6,11 @@
 // Chat retrieval, per question:
 //   1. rank the repo's source files against the question by path,
 //   2. let the model pick the files worth reading from that shortlist,
-//   3. read them and keep the line ranges that match the question,
-//   4. pack code + README/config context into the provider's budget,
-//      numbered so answers can cite `path:line`.
+//   3. read them, then follow the code: the files they import (and, with a
+//      token, code search for identifiers nothing read defines),
+//   4. keep the line ranges that match the question,
+//   5. pack code + README/config context into the provider's budget,
+//      numbered so answers can cite `path:line` — checked after the answer.
 
 const RAW_CACHE = new Map(); // "owner/repo@ref:path" → Promise<string|null>
 
@@ -348,11 +350,16 @@ Files:
 ${list}`;
 }
 
-// Files the question names outright ("what does `src/brief.js` do?", "in retrieval.js…")
+// Files the question names outright ("what does `src/brief.js` do?", "in
+// retrieval.js…", "@Makefile" — "@" also picks files without an extension)
 function mentionedFiles(question, entries) {
   const blobs = entries.filter(e => e.type === "blob");
   const found = [];
-  for (const token of (question || "").match(/[\w./-]+\.[a-z0-9]{1,8}\b/gi) || []) {
+  const tokens = [
+    ...((question || "").match(/@[\w./-]+[\w-]/g) || []).map(t => t.slice(1)),
+    ...((question || "").match(/[\w./-]+\.[a-z0-9]{1,8}\b/gi) || []),
+  ];
+  for (const token of tokens) {
     const t = token.replace(/^\.?\//, "");
     const hit = blobs.find(e => e.path === t) || blobs.find(e => e.path.endsWith(`/${t}`));
     if (hit && !found.includes(hit.path)) found.push(hit.path);
@@ -428,6 +435,165 @@ function formatSnippet(path, lines, range) {
   return `=== ${path} (lines ${range.start}-${range.end}) ===\n${body}`;
 }
 
+// ── Following the code ───────────────────────────────────────────────────────
+// Path ranking finds files by name, but the answer often lives in what those
+// files import or call. After the chosen files are read, their imports are
+// resolved against the tree and the most relevant ones are read too, with
+// snippets centred on the names they're imported for. Identifiers the question
+// names that no file read defines are then looked up with GitHub code search
+// (only with a token — anonymous code search isn't allowed).
+
+const IMPORT_EXT = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".vue", ".svelte"];
+
+// `Foo, { a, b as c, type D }` / `* as ns` → ["a", "b", "D", "Foo"]
+function importedNames(clause) {
+  const names = [];
+  const braces = clause.match(/\{([^}]*)\}/);
+  if (braces) {
+    for (const part of braces[1].split(",")) {
+      const n = part.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0].trim();
+      if (/^[\w$]+$/.test(n)) names.push(n);
+    }
+  }
+  const rest = clause.replace(/\{[^}]*\}/, "").replace(/\*\s+as\s+[\w$]+/, "").replace(/^type\s+/, "");
+  for (const part of rest.split(",")) if (/^[\w$]+$/.test(part.trim())) names.push(part.trim());
+  return names;
+}
+
+// A file's imports → [{ spec, names, py? }] (JS/TS: import/export-from/require;
+// Python: from … import / import …)
+function parseImports(text, path) {
+  const out = [];
+  if (/\.py$/.test(path)) {
+    for (const m of text.matchAll(/^[ \t]*from[ \t]+([.\w]+)[ \t]+import[ \t]+\(?([^\n)]+)/gm)) {
+      out.push({ spec: m[1], names: m[2].split(",").map(s => s.trim().split(/\s+as\s+/)[0]).filter(n => /^\w+$/.test(n)), py: true });
+    }
+    for (const m of text.matchAll(/^[ \t]*import[ \t]+([\w.]+)(?:[ \t]+as[ \t]+\w+)?[ \t]*$/gm)) out.push({ spec: m[1], names: [], py: true });
+    return out;
+  }
+  for (const m of text.matchAll(/\b(?:import|export)\s+(?:type\s+)?([^;'"`]*?)\s+from\s+["']([^"']+)["']/g)) out.push({ spec: m[2], names: importedNames(m[1]) });
+  for (const m of text.matchAll(/\b(?:const|let|var)\s+(\{[^}]*\}|[\w$]+)\s*=\s*require\(\s*["']([^"']+)["']\s*\)/g)) out.push({ spec: m[2], names: importedNames(m[1].replace(/:\s*[\w$]+/g, "")) });
+  for (const m of text.matchAll(/(?:^|[^.\w$])(?:require|import)\s*\(\s*["']([^"']+)["']\s*\)/g)) out.push({ spec: m[1], names: [] });
+  for (const m of text.matchAll(/^\s*import\s+["']([^"']+)["']/gm)) out.push({ spec: m[1], names: [] });
+  return out;
+}
+
+function normalizePath(p) {
+  const out = [];
+  for (const seg of p.split("/")) {
+    if (!seg || seg === ".") continue;
+    if (seg === "..") out.pop(); else out.push(seg);
+  }
+  return out.join("/");
+}
+
+// First of `bases` that exists as a file, trying JS/TS extensions and index files
+// (and a TS source behind an ESM ".js" import)
+function firstExistingModule(bases, known) {
+  for (const base of bases) {
+    const b = normalizePath(base);
+    const tries = [b, ...IMPORT_EXT.map(e => b + e), ...IMPORT_EXT.map(e => `${b}/index${e}`)];
+    if (/\.m?js$/.test(b)) tries.push(b.replace(/\.m?js$/, ".ts"), b.replace(/\.m?js$/, ".tsx"));
+    const hit = tries.find(t => known.has(t));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+// An import → the repo files it refers to ([] for packages and anything unresolvable)
+function resolveImport(imp, fromPath, known) {
+  const dir = fromPath.includes("/") ? fromPath.slice(0, fromPath.lastIndexOf("/")) : "";
+  if (imp.py) {
+    const dots = imp.spec.match(/^\.+/)?.[0].length || 0;
+    const rel = imp.spec.slice(dots).replace(/\./g, "/");
+    const dirParts = dir ? dir.split("/") : [];
+    const roots = dots ? [dirParts.slice(0, dirParts.length - (dots - 1)).join("/")] : ["", "src", dirParts[0] || ""];
+    const found = [];
+    for (const root of [...new Set(roots)]) {
+      const base = [root, rel].filter(Boolean).join("/");
+      if (rel) {
+        const hit = [`${base}.py`, `${base}/__init__.py`].find(p => known.has(p));
+        if (hit) { found.push(hit); break; }
+      }
+      // `from . import mod` / `from pkg import mod` — the names may be modules
+      for (const n of imp.names) if (known.has(`${base ? `${base}/` : ""}${n}.py`)) found.push(`${base ? `${base}/` : ""}${n}.py`);
+      if (found.length) break;
+    }
+    return [...new Set(found)];
+  }
+  if (imp.spec.startsWith(".")) {
+    const hit = firstExistingModule([`${dir}/${imp.spec}`], known);
+    return hit ? [hit] : [];
+  }
+  const alias = imp.spec.match(/^[@~]\/(.+)/); // "@/lib/x", "~/lib/x" → src/lib/x
+  if (alias) {
+    const hit = firstExistingModule([`src/${alias[1]}`, alias[1]], known);
+    return hit ? [hit] : [];
+  }
+  return [];
+}
+
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// Does `text` define `name` (function, class, method, const, def, fn…)?
+function definesIdentifier(text, name) {
+  const n = escapeRegExp(name);
+  return new RegExp(
+    `\\b(?:function\\*?|class|def|fn|func|interface|type|struct|enum|trait|const|let|var|module|macro_rules!)\\s+${n}\\b` +
+    `|\\bfunc\\s*\\([^)]*\\)\\s*${n}\\b` +
+    `|(?:^|[\\s,{])${n}\\s*[:=]\\s*(?:async\\s*)?(?:function\\b|\\([^)]*\\)\\s*=>|[\\w$]+\\s*=>)` +
+    `|^[ \\t]*(?:(?:public|private|protected|static|async|override|export|default|get|set)\\s+)*${n}\\s*\\([^)]*\\)\\s*(?::\\s*[^{\\n]+)?\\{`,
+    "m").test(text);
+}
+
+// Code identifiers the question names: `backticked`, camelCase, snake_case, PascalCase
+function questionIdentifiers(text) {
+  const ids = new Set();
+  for (const m of (text || "").matchAll(/`([A-Za-z_$][\w$]*)(?:\(\))?`/g)) ids.add(m[1]);
+  for (const tok of (text || "").split(/[^A-Za-z0-9_$.\/]+/)) {
+    if (!/^[A-Za-z_$][\w$]*$/.test(tok)) continue; // skips file paths like a/b.ts
+    if (/[a-z0-9][A-Z]/.test(tok) || /[A-Za-z0-9]_[A-Za-z]/.test(tok)) ids.add(tok);
+  }
+  return [...ids].filter(id => id.length >= 4).slice(0, 5);
+}
+
+// The imports of the files read → [{ path, score, names }], best first. A file
+// that brings in a name the question asks about ranks highest; then one whose
+// name matches the question; then one several read files depend on.
+function relatedFiles(readFiles, known, terms, identifiers) {
+  const readPaths = new Set(readFiles.map(f => f.path));
+  const ids = new Set(identifiers.map(s => s.toLowerCase()));
+  const byPath = new Map();
+  for (const f of readFiles) {
+    for (const imp of parseImports(f.text, f.path)) {
+      for (const p of resolveImport(imp, f.path, known)) {
+        if (readPaths.has(p) || NOISE_PATH.test(p)) continue;
+        const e = byPath.get(p) || { path: p, names: new Set(), from: new Set() };
+        e.from.add(f.path);
+        for (const n of imp.names) e.names.add(n);
+        byPath.set(p, e);
+      }
+    }
+  }
+  return [...byPath.values()].map(e => {
+    const names = [...e.names];
+    const file = e.path.toLowerCase().split("/").pop();
+    let score = 0.5 * e.from.size;
+    if (names.some(n => ids.has(n.toLowerCase()))) score += 4;
+    score += Math.min(2, names.filter(n => terms.some(t => t.length >= 4 && n.toLowerCase().includes(t))).length);
+    if (terms.some(t => t.length >= 3 && file.includes(t))) score += 2;
+    return { path: e.path, score, names };
+  }).sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+}
+
+// GitHub code search for files that mention `name` → paths (token only; the
+// search quota is 10/min, so failures just mean no extra files)
+async function searchCodeFor(name, repo) {
+  const q = `${name} repo:${repo.owner}/${repo.repo}`;
+  const res = await fetchGitHub(`https://api.github.com/search/code?q=${encodeURIComponent(q)}&per_page=5`, repo);
+  return (res.items || []).map(i => i.path);
+}
+
 // Characters of context each provider gets; Groq's free tier and small local
 // models have far tighter token-per-minute / context limits than the others.
 const CONTEXT_BUDGET = { groq: 14000, ollama: 10000, gemini: 48000, openai: 40000, anthropic: 40000 };
@@ -446,24 +612,37 @@ function packContext(parts, budget) {
 }
 
 // Builds the chat context for one question.
-// → { context, sources: [{ path, start, end }], ref }
+// → { context, sources: [{ path, start, end, via }], ref }
+// `via` says how each file was found: "named" (in the question), "picked"
+// (chosen from the shortlist), "import" (imported by a file read), "search"
+// (GitHub code search) or "chosen" (the user edited the file list).
 // `previousFiles` are the files read for the previous answer, so follow-ups
 // ("and where is it called?") keep their context even when the terms are vague.
-async function buildChatContext(repo, question, previousQuestion, onStatus = () => {}, { previousFiles = [] } = {}) {
+// `files` replaces all file selection with exactly those files.
+// `onFiles` hears the file list as soon as it's known, before the answer.
+async function buildChatContext(repo, question, previousQuestion, onStatus = () => {}, { previousFiles = [], files = null, onFiles = () => {} } = {}) {
   const budget = CONTEXT_BUDGET[aiProvider] || 20000;
   onStatus("Reading the repo…");
   const [meta, tree, baseParts] = await Promise.all([loadRepoData(repo), getRepoTree(repo), getRepoContextParts(repo)]);
   const ref = meta.default_branch || "HEAD";
   const terms = queryTerms(`${question} ${previousQuestion || ""}`);
   const ranked = rankCodeFiles(tree.entries, terms);
-  const known = new Set(tree.entries.map(e => e.path));
+  const known = new Set(tree.entries.filter(e => e.type === "blob").map(e => e.path));
   const carried = previousFiles.filter(p => known.has(p));
+  const via = new Map(); // path → how it was found
+
+  // 0. The user chose the files — read exactly those
+  let picked = files ? files.filter(p => known.has(p)) : [];
+  picked.forEach(p => via.set(p, "chosen"));
 
   // 1. Files named in the question are read directly — no picker call needed
-  let picked = mentionedFiles(question, tree.entries);
+  if (!files) {
+    picked = mentionedFiles(question, tree.entries);
+    picked.forEach(p => via.set(p, "named"));
+  }
 
   // 2. Otherwise shortlist by path and let the model choose
-  if (!picked.length) {
+  if (!files && !picked.length) {
     const size = PICKER_SHORTLIST[aiProvider] || 250;
     const shortlist = [...carried.map(p => ranked.find(r => r.path === p)).filter(Boolean),
       ...ranked.filter(r => !carried.includes(r.path))].slice(0, size);
@@ -485,30 +664,96 @@ async function buildChatContext(repo, question, previousQuestion, onStatus = () 
       const lexical = ranked.filter(c => c.score >= 1).slice(0, 4).map(c => c.path);
       picked = lexical.length ? lexical : carried.slice(0, 4);
     }
+    picked.forEach(p => via.set(p, "picked"));
   }
 
-  // 3. Read them (in parallel) and keep what matches
-  const codeBudget = Math.floor(budget * 0.6);
-  const perFile = picked.length ? Math.floor(codeBudget / picked.length) : 0;
+  // 3. Read them (in parallel)
+  const read = async (paths) => (await Promise.all(paths.map(async path => ({ path, text: await readRepoFile(path, repo).catch(() => null) }))))
+    .filter(f => f.text);
   if (picked.length) onStatus(`Reading ${picked.map(p => p.split("/").pop()).slice(0, 3).join(", ")}${picked.length > 3 ? "…" : ""}`);
-  const texts = await Promise.all(picked.map(path => readRepoFile(path, repo).catch(() => null)));
+  const readFiles = await read(picked);
+  const extraTerms = new Map(); // path → names it was imported for (snippets centre on them)
+
+  // 4. Follow the code: imports of what was read, then code search for
+  //    identifiers the question names that nothing read defines
+  if (!files && readFiles.length) {
+    const identifiers = questionIdentifiers(question);
+    const maxExtra = budget < 15000 ? 2 : 4;
+    const related = relatedFiles(readFiles, known, terms, identifiers).filter(r => r.score >= 1).slice(0, maxExtra);
+    if (related.length) {
+      onStatus(`Following imports: ${related.map(r => r.path.split("/").pop()).join(", ")}`);
+      related.forEach(r => { via.set(r.path, "import"); extraTerms.set(r.path, r.names.map(n => n.toLowerCase())); });
+      readFiles.push(...await read(related.map(r => r.path)));
+    }
+    const missing = identifiers.filter(id => !readFiles.some(f => definesIdentifier(f.text, id)));
+    if (missing.length && githubToken) {
+      const found = [];
+      for (const id of missing.slice(0, 2)) {
+        onStatus(`Searching the code for ${id}…`);
+        const paths = await searchCodeFor(id, repo).catch(() => []);
+        const hit = paths.find(p => known.has(p) && !via.has(p) && !found.includes(p) && isCodeCandidate({ path: p, type: "blob", size: 0 }));
+        if (hit) { found.push(hit); via.set(hit, "search"); extraTerms.set(hit, [id.toLowerCase()]); }
+      }
+      readFiles.push(...await read(found));
+    }
+  }
+  onFiles(readFiles.map(f => ({ path: f.path, via: via.get(f.path) })));
+
+  // 5. Keep what matches: primary files get a full share of the code budget,
+  //    files found by following the code a smaller one
+  const codeBudget = Math.floor(budget * 0.6);
+  const weight = (p) => (["import", "search"].includes(via.get(p)) ? 0.6 : 1);
+  const totalWeight = readFiles.reduce((n, f) => n + weight(f.path), 0);
   const sources = [];
   const codeParts = [];
-  picked.forEach((path, i) => {
-    const text = texts[i];
-    if (!text) return;
+  for (const { path, text } of readFiles) {
     const lines = text.split("\n");
-    for (const range of extractSnippets(text, terms, perFile)) {
+    const share = Math.floor(codeBudget * weight(path) / totalWeight);
+    for (const range of extractSnippets(text, [...terms, ...(extraTerms.get(path) || [])], share)) {
       codeParts.push({ label: `${path} (lines ${range.start}-${range.end})`, text: formatSnippet(path, lines, range).replace(/^=== .* ===\n/, ""), priority: 0 });
-      sources.push({ path, start: range.start, end: range.end });
+      sources.push({ path, start: range.start, end: range.end, via: via.get(path) });
     }
-  });
+  }
 
-  // 4. Pack: code first, then README, tree, configs — documents trimmed to the
+  // 6. Pack: code first, then README, tree, configs — documents trimmed to the
   //    sections that match this question
   onStatus("Thinking…");
   const context = packContext([...codeParts, ...contextPartsForQuestion(baseParts, terms)], budget);
   return { context, sources, ref };
+}
+
+// ── Checking citations ───────────────────────────────────────────────────────
+// After an answer, every `path:line` it cites is checked against what was
+// actually sent. A line outside the excerpts read, or a file that wasn't read
+// at all, can't have come from the context, so it's flagged for the user.
+
+// The file a citation names: an exact path, or a file name that was read
+function resolveCitedPath(raw, sources) {
+  const paths = [...new Set(sources.map(s => s.path))];
+  return paths.includes(raw) ? raw : paths.find(p => p.split("/").pop() === raw) || null;
+}
+
+// Was path:start–end inside what was read? Sources without line ranges (a PR's
+// changed files) cover the whole file.
+function citationInRange(sources, path, start, end = start) {
+  const ranges = sources.filter(s => s.path === path);
+  if (!ranges.length) return false;
+  if (!start || ranges.some(r => !r.start)) return true;
+  return ranges.some(r => start >= r.start && start <= r.end && end <= r.end + 2);
+}
+
+// An answer's Markdown → { total, verified, outOfRange: [..], unread: [..] }
+function checkCitations(text, sources = []) {
+  const res = { total: 0, verified: 0, outOfRange: [], unread: [] };
+  for (const [raw, rawPath, start, end] of (text || "").matchAll(/`([^`\s]+?):(\d+)(?:[-–](\d+))?`/g)) {
+    if (!/[./]/.test(rawPath) || /^https?:/.test(rawPath)) continue; // `foo:3` isn't a file citation
+    res.total++;
+    const path = resolveCitedPath(rawPath, sources);
+    if (!path) res.unread.push(raw.slice(1, -1));
+    else if (!citationInRange(sources, path, +start, +(end || start))) res.outOfRange.push(raw.slice(1, -1));
+    else res.verified++;
+  }
+  return res;
 }
 
 // ── Chat prompt ──────────────────────────────────────────────────────────────

@@ -92,7 +92,8 @@ ${diff.text || "(no diff available)"}${diff.skipped.length ? `\n(Not shown: ${di
 // → { context, sources, ref, cite, focus } for a question about the focused item.
 // `cite` (PRs only) is the repo citations link into: the PR's head, in the
 // author's fork if it's one. `focus` goes into the system prompt.
-async function buildFocusedContext(repo, item, question, previousQuestion, onStatus, previousFiles) {
+// `opts` ({ files, onFiles }) pass through to buildChatContext for issues.
+async function buildFocusedContext(repo, item, question, previousQuestion, onStatus, previousFiles, opts = {}) {
   const isPr = item.kind === "pr";
   const noun = isPr ? "pull request" : "issue";
   const focus = `The user is asking about ${noun} #${item.number} ("${item.title}"), shown in the <${isPr ? "pull_request" : "issue"}> block of the context. Answer about this ${noun} specifically.` +
@@ -110,6 +111,6 @@ async function buildFocusedContext(repo, item, question, previousQuestion, onSta
     };
   }
   const retrieved = await buildChatContext(repo, question, previousQuestion || item.title, onStatus,
-    { previousFiles: previousFiles.length ? previousFiles : item.brief.likelyFiles || [] });
+    { ...opts, previousFiles: previousFiles.length ? previousFiles : item.brief.likelyFiles || [] });
   return { context: `${issueFocusContext(item.brief)}\n\n${retrieved.context}`, sources: retrieved.sources, ref: retrieved.ref, cite: null, focus };
 }

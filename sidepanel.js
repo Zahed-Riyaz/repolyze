@@ -82,9 +82,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("send-btn").addEventListener("click", () => { handleChat(); });
   const chatInput = document.getElementById("chat-input");
   chatInput.addEventListener("keydown", (e) => {
+    if (fileSuggestKeydown(e)) return;
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); handleChat(); }
   });
-  chatInput.addEventListener("input", autosizeChatInput);
+  chatInput.addEventListener("input", () => { autosizeChatInput(); updateFileSuggest(); });
+  chatInput.addEventListener("blur", () => setTimeout(closeFileSuggest, 150));
+  document.getElementById("file-suggest").addEventListener("mousedown", (e) => {
+    const item = e.target.closest?.(".file-suggest-item");
+    if (item) { e.preventDefault(); chooseFileSuggestion(item.dataset.path); }
+  });
+  // "Read N files" under an answer: remove / add files, then re-run
+  const chatHistory = document.getElementById("chat-history");
+  chatHistory.addEventListener("click", handleSourcesClick);
+  chatHistory.addEventListener("keydown", handleSourcesKeydown);
   document.getElementById("clear-chat-btn").addEventListener("click", clearChat);
   document.getElementById("chat-focus").addEventListener("click", (e) => {
     if (e.target.closest?.(".chat-focus-clear")) setChatFocus(null);
@@ -1329,7 +1339,8 @@ function renderHealthCard({ score, factors, measured, signals }) {
 }
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
-async function handleChat() {
+// `files` (from editing an answer's file list) replaces file selection for this question
+async function handleChat({ files = null } = {}) {
   const input = document.getElementById("chat-input");
   const query = input.value.trim();
   if (!query) return;
@@ -1365,6 +1376,8 @@ async function handleChat() {
   document.getElementById("typing-status").textContent = "Reading the repo…";
   typingEl.style.display = "flex";
   typingEl.classList.add("typing-anim");
+  const typingFiles = document.getElementById("typing-files");
+  typingFiles.hidden = true;
   chatHistEl.classList.add("responding");
   document.getElementById("send-btn").disabled = true;
 
@@ -1389,9 +1402,16 @@ async function handleChat() {
     const lastBot = messages.slice(0, -1).reverse().find(m => m.role === "bot" && m.sources);
     const sameFocus = lastBot && !lastBot.cite && lastBot.focus?.kind === tag?.kind && lastBot.focus?.number === tag?.number;
     const previousFiles = sameFocus ? [...new Set(lastBot.sources.map(s => s.path))] : [];
+    // The files being read show as chips while the answer is prepared
+    const onFiles = (list) => {
+      if (isStale() || !list.length) return;
+      typingFiles.innerHTML = `<span class="msg-sources-label">Reading ${list.length} file${list.length === 1 ? "" : "s"}</span>` +
+        list.map(f => `<span class="source-chip${FOLLOWED.has(f.via) ? " source-followed" : ""}" title="${escapeHtml(f.path)} — ${VIA_LABEL[f.via] || ""}">${icon("file", "icon-sm")}<span>${escapeHtml(f.path.split("/").pop())}</span></span>`).join("");
+      typingFiles.hidden = false;
+    };
     const { context, sources, ref, cite = null, focus = "" } = item
-      ? await buildFocusedContext(repo, item, query, previousQuestion, setStatus, previousFiles)
-      : await buildChatContext(repo, query, previousQuestion, setStatus, { previousFiles });
+      ? await buildFocusedContext(repo, item, query, previousQuestion, setStatus, previousFiles, { files, onFiles })
+      : await buildChatContext(repo, query, previousQuestion, setStatus, { previousFiles, files, onFiles });
     const { system, contents } = buildChatPrompt({
       repo, context, question: query, focus,
       history: messages.slice(0, -1),
@@ -1405,6 +1425,7 @@ async function handleChat() {
       if (!streamStarted) {
         streamStarted = true;
         typingEl.style.display = "none";
+        typingFiles.hidden = true;
         // Animate in + show streaming glow on left border
         botBubble.classList.add("msg-entering", "streaming");
         chatHistEl.appendChild(botWrap);
@@ -1423,7 +1444,7 @@ async function handleChat() {
     botBubble.classList.remove("streaming");
     botBubble.innerHTML = linkifyCitations(renderMarkdown(fullReply), cite || repo, ref, sources);
     if (!streamStarted) chatHistEl.appendChild(botWrap); // empty reply: no chunk ever arrived
-    appendBotFooter(botWrap, botTime, query, meta);
+    appendBotFooter(botWrap, botTime, query, { ...meta, text: fullReply });
     if (isNearBottom(chatHistEl)) chatHistEl.scrollTop = chatHistEl.scrollHeight;
   } catch (err) {
     const ollamaErr = err.message === "OLLAMA_NOT_RUNNING" || err.message === "OLLAMA_CORS";
@@ -1449,12 +1470,14 @@ async function handleChat() {
     }
   } finally {
     typingEl.style.display = "none";
+    typingFiles.hidden = true;
     chatHistEl.classList.remove("responding");
     document.getElementById("send-btn").disabled = false;
   }
 }
 
-async function regenerateResponse(botWrap, query) {
+// Re-asks the question behind `botWrap`; `opts.files` re-runs it on an edited file list
+async function regenerateResponse(botWrap, query, opts = {}) {
   if (document.getElementById("send-btn").disabled) return; // a reply is already streaming
 
   const chatHistEl = document.getElementById("chat-history");
@@ -1474,7 +1497,7 @@ async function regenerateResponse(botWrap, query) {
   // Re-send the original query
   const input = document.getElementById("chat-input");
   input.value = query;
-  handleChat();
+  return handleChat(opts);
 }
 
 function isNearBottom(el, threshold = 80) {
@@ -1515,7 +1538,7 @@ function appendChatMessage(role, text, save = true, animate = true, time = null,
   wrap.appendChild(msg);
 
   if (role === "bot") {
-    appendBotFooter(wrap, time, query, meta);
+    appendBotFooter(wrap, time, query, { ...meta, text });
   } else if (time) {
     const t = document.createElement("span");
     t.className = "msg-time";
@@ -1530,38 +1553,227 @@ function appendChatMessage(role, text, save = true, animate = true, time = null,
 
 const BOT_LABEL_HTML = `${icon("sparkles", "icon-sm")}Assistant`;
 
-// Files the answer was grounded in, linked to the exact lines on GitHub
-function sourcesHtml(sources, ref) {
+// How each file came to be read (retrieval.js sets `via`)
+const VIA_LABEL = {
+  named: "named in the question", picked: "chosen for the question", chosen: "chosen by you",
+  import: "imported by a file that was read", search: "found by code search",
+};
+const FOLLOWED = new Set(["import", "search"]);
+
+// Files the answer was grounded in, linked to the exact lines on GitHub. When
+// `editable`, each file can be left out (✕) or another added, then re-run.
+function sourcesHtml(sources, ref, { editable = false } = {}) {
   if (!sources?.length || !currentRepo) return "";
   const byFile = new Map();
   for (const s of sources) {
     if (!byFile.has(s.path)) byFile.set(s.path, []);
     byFile.get(s.path).push(s);
   }
-  const chips = [...byFile].map(([path, ranges]) => {
-    const r = ranges[0];
-    const lines = ranges.map(x => (x.start === 1 && ranges.length === 1 ? "" : `L${x.start}–${x.end}`)).filter(Boolean).join(", ");
-    return `<a class="source-chip" href="${sourceUrl(currentRepo, ref, path, r.start, r.end)}" target="_blank" title="${escapeHtml(path)}${lines ? ` (${lines})` : ""}">` +
-      `${icon("file", "icon-sm")}<span>${escapeHtml(path.split("/").pop())}</span>${lines ? `<em>${lines}</em>` : ""}</a>`;
-  }).join("");
-  return `<div class="msg-sources"><span class="msg-sources-label">Read ${byFile.size} file${byFile.size === 1 ? "" : "s"}</span>${chips}</div>`;
+  const chips = [...byFile].map(([path, ranges]) => sourceChipHtml(path, ranges, ref, editable)).join("");
+  const edit = editable
+    ? `<button class="source-add" title="Add a file and re-run">${icon("file", "icon-sm")}Add file</button>` +
+      `<button class="btn btn-primary btn-xs source-rerun" hidden>${icon("refresh", "icon-sm")}Re-run with these files</button>`
+    : "";
+  return `<div class="msg-sources"${editable ? ' data-editable="1"' : ""}><span class="msg-sources-label">Read ${byFile.size} file${byFile.size === 1 ? "" : "s"}</span>${chips}${edit}</div>`;
 }
 
-// Turn `path:line` citations that point at files we actually read into links
+function sourceChipHtml(path, ranges, ref, editable, extraClass = "") {
+  const r = ranges[0] || {};
+  const via = r.via;
+  const lines = ranges.map(x => (!x.start || (x.start === 1 && ranges.length === 1) ? "" : `L${x.start}–${x.end}`)).filter(Boolean).join(", ");
+  const name = path.split("/").pop();
+  const title = `${path}${lines ? ` (${lines})` : ""}${VIA_LABEL[via] ? ` — ${VIA_LABEL[via]}` : ""}`;
+  return `<span class="source-chip${FOLLOWED.has(via) ? " source-followed" : ""}${extraClass}" data-path="${escapeHtml(path)}">` +
+    `<a class="source-link" href="${sourceUrl(currentRepo, ref, path, r.start, r.end)}" target="_blank" title="${escapeHtml(title)}">` +
+    `${icon("file", "icon-sm")}<span>${escapeHtml(name)}</span>${lines ? `<em>${lines}</em>` : ""}</a>` +
+    (editable ? `<button class="source-remove" title="Leave ${escapeHtml(name)} out" aria-label="Leave ${escapeHtml(path)} out">${icon("x", "icon-sm")}</button>` : "") +
+    `</span>`;
+}
+
+// Turn `path:line` citations into links, checked against what was read: a line
+// outside the excerpts is linked but marked unverified; a file that wasn't
+// read at all is marked and not linked.
 function linkifyCitations(html, repo, ref, sources) {
-  const known = new Set((sources || []).map(s => s.path));
-  if (!known.size) return html;
-  const byName = new Map([...known].map(p => [p.split("/").pop(), p]));
+  const list = sources || [];
+  if (!list.length) return html;
   return html.replace(/<code>([^<\s]+?)(?::(\d+)(?:[-–](\d+))?)?<\/code>/g, (m, rawPath, start, end) => {
-    const path = known.has(rawPath) ? rawPath : byName.get(rawPath);
-    if (!path) return m;
-    return `<a class="cite" href="${sourceUrl(repo, ref, path, start && +start, end && +end)}" target="_blank">${m}</a>`;
+    const path = resolveCitedPath(rawPath, list);
+    if (!path) {
+      return start && /[./]/.test(rawPath) && !/^https?:/.test(rawPath)
+        ? `<span class="cite-unread" title="This file wasn't read for this answer — check it before relying on it">${m}</span>`
+        : m;
+    }
+    const ok = citationInRange(list, path, start && +start, end ? +end : start && +start);
+    return `<a class="cite${ok ? "" : " cite-unverified"}" href="${sourceUrl(repo, ref, path, start && +start, end && +end)}" target="_blank"` +
+      `${ok ? "" : ` title="Line ${start} wasn't in the code read for this answer — check it"`}>${m}</a>`;
   });
 }
 
+// A note under answers that cite code which wasn't sent to the model
+function citationNoteHtml(text, sources) {
+  const { outOfRange, unread } = checkCitations(text, sources || []);
+  const n = outOfRange.length + unread.length;
+  if (!n) return "";
+  return `<p class="citation-note">${icon("alert", "icon-sm")}<span>${n} citation${n === 1 ? "" : "s"} point${n === 1 ? "s" : ""} to code that wasn't read for this answer ` +
+    `(${[...outOfRange, ...unread].slice(0, 3).map(c => `<code>${escapeHtml(c)}</code>`).join(", ")}${n > 3 ? "…" : ""}). Open ${n === 1 ? "it" : "them"} to check before relying on ${n === 1 ? "it" : "them"}.</span></p>`;
+}
+
+// ── Editing an answer's files ────────────────────────────────────────────────
+function editedFiles(row) {
+  return [...row.querySelectorAll(".source-chip")].filter(c => !c.classList.contains("is-removed")).map(c => c.dataset.path);
+}
+
+function markSourcesEdited(row) {
+  const rerun = row.querySelector(".source-rerun");
+  if (rerun) rerun.hidden = false;
+}
+
+function handleSourcesClick(e) {
+  const row = e.target.closest?.('.msg-sources[data-editable="1"]');
+  if (!row) return;
+  const remove = e.target.closest(".source-remove");
+  if (remove) {
+    e.preventDefault();
+    remove.closest(".source-chip").classList.toggle("is-removed");
+    markSourcesEdited(row);
+    return;
+  }
+  if (e.target.closest(".source-add")) { showAddFileInput(row); return; }
+  if (e.target.closest(".source-rerun")) {
+    const wrap = row.closest(".msg-wrap-bot");
+    if (wrap?.dataset.query) regenerateResponse(wrap, wrap.dataset.query, { files: editedFiles(row) });
+  }
+}
+
+// Add file: an input with the repo's files as suggestions; Enter adds the chip
+async function showAddFileInput(row) {
+  if (row.querySelector(".source-add-input")) { row.querySelector(".source-add-input").focus(); return; }
+  row.querySelector(".source-add").insertAdjacentHTML("beforebegin",
+    `<input class="input source-add-input" list="repo-files" placeholder="path/to/file" aria-label="File to add">`);
+  const input = row.querySelector(".source-add-input");
+  input.focus();
+  const list = document.getElementById("repo-files");
+  if (currentRepo && list.dataset.repo !== repoKey()) {
+    const key = repoKey();
+    const tree = await getRepoTree().catch(() => null);
+    if (tree && isCurrentRepo(key)) {
+      list.dataset.repo = key;
+      list.innerHTML = tree.entries.filter(isCodeCandidate).slice(0, 3000).map(e => `<option value="${escapeHtml(e.path)}">`).join("");
+    }
+  }
+}
+
+async function addFileToSources(row, value) {
+  if (!currentRepo || !value.trim()) return false;
+  const tree = await getRepoTree().catch(() => null);
+  const [path] = tree ? mentionedFiles(`@${value.trim().replace(/^@/, "")}`, tree.entries) : [];
+  const input = row.querySelector(".source-add-input");
+  if (!path) { input?.classList.add("is-invalid"); return false; }
+  input?.remove();
+  if (!editedFiles(row).includes(path)) {
+    row.querySelector(".source-add").insertAdjacentHTML("beforebegin", sourceChipHtml(path, [{ via: "chosen" }], null, true, " is-added"));
+  }
+  markSourcesEdited(row);
+  return true;
+}
+
+function handleSourcesKeydown(e) {
+  if (!e.target.classList?.contains("source-add-input")) return;
+  if (e.key === "Enter") { e.preventDefault(); addFileToSources(e.target.closest(".msg-sources"), e.target.value); }
+  if (e.key === "Escape") e.target.remove();
+}
+
+// ── @file mentions ───────────────────────────────────────────────────────────
+// Typing "@" and part of a path suggests files from the tree; a chosen file is
+// read directly for that question (mentionedFiles in retrieval.js).
+let fileSuggest = { items: [], index: 0, start: -1 };
+
+// Best matches for a partial path: file name starts with it, then contains it,
+// then the path contains it; shorter paths first
+function suggestFiles(entries, query, limit = 8) {
+  const q = query.toLowerCase();
+  if (!q) return [];
+  return entries
+    .filter(e => e.type === "blob" && !NOISE_PATH.test(e.path))
+    .map(e => {
+      const p = e.path.toLowerCase();
+      const name = p.slice(p.lastIndexOf("/") + 1);
+      return { path: e.path, score: name.startsWith(q) ? 3 : name.includes(q) ? 2 : p.includes(q) ? 1 : 0 };
+    })
+    .filter(x => x.score)
+    .sort((a, b) => b.score - a.score || a.path.length - b.path.length || a.path.localeCompare(b.path))
+    .slice(0, limit)
+    .map(x => x.path);
+}
+
+async function updateFileSuggest() {
+  const input = document.getElementById("chat-input");
+  const before = input.value.slice(0, input.selectionStart ?? input.value.length);
+  const m = before.match(/(?:^|\s)@([\w./-]+)$/);
+  if (!m || !currentRepo) { closeFileSuggest(); return; }
+  const key = repoKey();
+  const tree = await getRepoTree().catch(() => null);
+  if (!tree || !isCurrentRepo(key)) { closeFileSuggest(); return; }
+  const items = suggestFiles(tree.entries, m[1]);
+  if (!items.length) { closeFileSuggest(); return; }
+  fileSuggest = { items, index: 0, start: before.length - m[1].length - 1 };
+  renderFileSuggest();
+}
+
+function renderFileSuggest() {
+  const list = document.getElementById("file-suggest");
+  list.innerHTML = fileSuggest.items.map((p, i) => {
+    const cut = p.lastIndexOf("/");
+    return `<li role="option" class="file-suggest-item${i === fileSuggest.index ? " active" : ""}" aria-selected="${i === fileSuggest.index}" data-path="${escapeHtml(p)}">` +
+      `${icon("file", "icon-sm")}<strong>${escapeHtml(p.slice(cut + 1))}</strong><span>${escapeHtml(cut > 0 ? p.slice(0, cut) : "")}</span></li>`;
+  }).join("");
+  list.hidden = false;
+}
+
+function closeFileSuggest() {
+  fileSuggest = { items: [], index: 0, start: -1 };
+  document.getElementById("file-suggest").hidden = true;
+}
+
+function chooseFileSuggestion(path) {
+  const input = document.getElementById("chat-input");
+  if (fileSuggest.start < 0) return;
+  const end = input.selectionStart ?? input.value.length;
+  const inserted = `@${path} `;
+  input.value = input.value.slice(0, fileSuggest.start) + inserted + input.value.slice(end);
+  const caret = fileSuggest.start + inserted.length;
+  closeFileSuggest();
+  input.focus();
+  input.setSelectionRange?.(caret, caret);
+  autosizeChatInput();
+}
+
+// Arrow keys move through the suggestions, Enter/Tab choose, Escape closes → true when handled
+function fileSuggestKeydown(e) {
+  if (document.getElementById("file-suggest").hidden || !fileSuggest.items.length) return false;
+  const n = fileSuggest.items.length;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    fileSuggest.index = (fileSuggest.index + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+    renderFileSuggest();
+  } else if (e.key === "Enter" || e.key === "Tab") {
+    chooseFileSuggestion(fileSuggest.items[fileSuggest.index]);
+  } else if (e.key === "Escape") {
+    closeFileSuggest();
+  } else {
+    return false;
+  }
+  e.preventDefault();
+  return true;
+}
+
 // Timestamp + (hover-revealed) regenerate action under a bot reply
+// Answers from the repo's code get an editable file list (a PR's answers read
+// the PR itself, so theirs isn't); any answer gets a note if it cites code that
+// wasn't read.
 function appendBotFooter(wrap, time, query, meta = {}) {
-  if (meta.sources?.length && !meta.cite) wrap.insertAdjacentHTML("beforeend", sourcesHtml(meta.sources, meta.ref));
+  if (query) wrap.dataset.query = query;
+  if (meta.text && meta.sources?.length) wrap.insertAdjacentHTML("beforeend", citationNoteHtml(meta.text, meta.sources));
+  if (meta.sources?.length && !meta.cite) wrap.insertAdjacentHTML("beforeend", sourcesHtml(meta.sources, meta.ref, { editable: !!query }));
   if (!time && !query) return;
   const actions = document.createElement("div");
   actions.className = "msg-actions";

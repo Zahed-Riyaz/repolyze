@@ -32,7 +32,10 @@ Three tabs: **Repo** · **Contribute** · **Ask**. A repo opens on Contribute �
 **Ask tab**
 - FR-14 Multi-turn chat grounded in the repo: code retrieval per question, answers cite `path:line` linked to GitHub, "Read N files" source chips, regenerate, starter prompts, per-repo history (50 messages).
 - FR-14a **Focus chip** (`About #12 ✕`): while set from a brief, answers are grounded in that item — the issue and its discussion plus retrieved code, or the PR's status, checks, whole activity log and numbered diff (citations link to the PR's head, in the author's fork). Questions are tagged with the item; ✕ returns to repo-wide questions; a new repo clears it.
-- FR-15 Files named in a question are read directly; follow-ups keep the previous answer's files.
+- FR-15 Files named in a question are read directly (`@path` with autocomplete from the tree; `@` also names files without an extension); follow-ups keep the previous answer's files.
+- FR-15a **Follow the code**: after the chosen files are read, their imports (JS/TS, Python) are resolved and the most relevant read too; with a token, identifiers the question names that nothing read defines are found with GitHub code search.
+- FR-15b **Check citations**: each `path:line` is checked against the excerpts sent — outside them it's marked unverified, a file not read is marked unread, and the answer gets a note.
+- FR-15c **Edit what was read**: the files being read show as chips before the answer; under an answer, each file can be left out (✕) or another added, then **Re-run with these files**. Chips say how each file was found (dashed = followed from an import or code search).
 
 **Settings & rate limits**
 - FR-16 Five AI providers (Groq, Gemini, OpenAI, Anthropic, local Ollama) with key format checks; settings sync between the panel and the options page.
@@ -107,12 +110,13 @@ The extension uses **retrieval-augmented generation**: before the AI answers, it
 |---|---|---|
 | Collect | File tree (1 API call) + file contents from raw GitHub on demand | `getRepoTree`, `readRepoFile` |
 | Shortlist | Rank every path against the question: identifiers split (`handleRepoRefresh` → handle, repo, refresh), file-name hits beat directory hits, tests/vendor/lockfiles demoted or skipped | `queryTerms`, `rankCodeFiles` |
-| Select | Files named in the question are read directly; otherwise the AI picks ≤5 from the shortlist (60/120/250 paths by model size), falling back to the best path matches or the previous answer's files | `mentionedFiles`, `buildChatContext` |
-| Chunk | Query-time chunking: small files whole; large files keep their head plus the best-matching 40-line windows (definitions weigh extra), with line numbers | `extractSnippets` |
+| Select | Files named in the question (or with `@`) are read directly; otherwise the AI picks ≤5 from the shortlist (60/120/250 paths by model size), falling back to the best path matches or the previous answer's files; an edited file list replaces all of this | `mentionedFiles`, `buildChatContext` |
+| Follow | Imports of the files read are resolved against the tree (relative paths, extensions, index files, `@/` aliases, Python modules) and ranked — a file importing a name the question asks about first; the top 2–4 are read, snippets centred on the imported names. With a token, identifiers the question names that no file read defines go to `/search/code` (≤2) | `parseImports`, `resolveImport`, `relatedFiles`, `definesIdentifier`, `questionIdentifiers`, `searchCodeFor` |
+| Chunk | Query-time chunking: small files whole; large files keep their head plus the best-matching 40-line windows (definitions weigh extra), with line numbers; followed files get 0.6 of a chosen file's share | `extractSnippets` |
 | Pick doc sections | README, CONTRIBUTING and dev docs are split by heading once per repo; per question keep the intro + best-matching sections (heading hits weigh most) in order, and name the rest; `package.json` sent as a summary (scripts in full) | `splitMarkdownSections`, `selectSections`, `summarizePackageJson`, `contextPartsForQuestion` |
 | Pack | Code first, then README, file tree, CONTRIBUTING/configs/CI, within a per-provider character budget | `packContext`, `CONTEXT_BUDGET` |
 | Generate | System prompt with grounding rules; context in `<repository_context>`; question last; answer streams | `buildChatPrompt`, `callAIStreaming` |
-| Verify | Citations to files that were read become links; a "Read N files" row lists the excerpts | `linkifyCitations`, `sourcesHtml` |
+| Verify | Each `path:line` is checked against the excerpts sent: verified ones link to the line, lines outside them are marked unverified, files not read are marked unread, and the answer gets a note; an editable "Read N files" row lists the excerpts and how each file was found | `checkCitations`, `linkifyCitations`, `citationNoteHtml`, `sourcesHtml` |
 
 Where it's used:
 - **Ask** — the full pipeline above, per question (follow-ups carry the previous files).
@@ -126,7 +130,7 @@ Where it's used:
 
 | Area | Requirement |
 |---|---|
-| **API budget** | Opening a repo costs 3 GitHub requests (header, first page of issues, first page of PRs); the Repo tab loads on first view; reopening the panel costs 0 (session cache); chat costs 0 (file contents come from `raw.githubusercontent.com`); an issue brief costs 2 (3 when opened from its page), a PR brief 5. |
+| **API budget** | Opening a repo costs 3 GitHub requests (header, first page of issues, first page of PRs); the Repo tab loads on first view; reopening the panel costs 0 (session cache); chat costs 0 (file contents come from `raw.githubusercontent.com`), plus ≤2 code-search requests with a token when the question names identifiers nothing read defines; an issue brief costs 2 (3 when opened from its page), a PR brief 5. |
 | **AI budget** | No AI call happens without a user action, and only in Ask (on send, or a brief's suggestion). Opening a brief — from a list or by following the page — costs 0 AI credits. |
 | **Rate-limit resilience** | Never collect raw 403s: stop requesting when the core quota is spent, serve stale cache instead of failing, track the search quota separately, honour `Retry-After` for secondary limits (not the hourly reset), auto-reload failed tabs when the window resets or a token is added. |
 | **Correctness under navigation** | Every async render is guarded by the repo it started for (`isCurrentRepo(key)`); briefs are guarded by an active token so a stale response never renders into another repo or brief. |
@@ -136,7 +140,7 @@ Where it's used:
 | **Performance** | Local ranking of 100k paths ≈ 150 ms; file reads in parallel; skeletons instead of layout jumps; streaming AI output. |
 | **Accessibility** | Keyboard-reachable controls with visible focus rings, ARIA roles on tabs/status, `prefers-reduced-motion` respected, theme-aware label contrast. |
 | **Compatibility** | Chrome with the Side Panel API (MV3); works at narrow panel widths (three tabs; icons hide below 480px via a container query); light and dark themes follow the OS. |
-| **Maintainability** | Plain JS, no build step; pure logic separated from rendering and unit-tested; 149 tests (`npm test`, ~3s) run in CI on every push. |
+| **Maintainability** | Plain JS, no build step; pure logic separated from rendering and unit-tested; 164 tests (`npm test`, ~3s) run in CI on every push. |
 | **Cost** | Zero infrastructure cost; users bring their own AI key (free tiers on Groq/Gemini, free local Ollama). |
 
 ---
@@ -154,7 +158,7 @@ Where it's used:
 6. `switchTab(name)` → `loadTabData(name)` runs that tab's loader once per repo; a loader that fails (rate limit, network) is un-marked so it retries next time the tab is shown.
 
 **Asking in Chat**
-7. `buildChatContext()`: fetch the file tree (1 request, shared) → if the question names files, read them directly; otherwise rank paths lexically (`rankCodeFiles`), let the AI pick ≤5 files from a shortlist sized to the model (falls back to lexical/previous files) → read files from raw GitHub in parallel → keep the head plus best-matching 40-line windows (`extractSnippets`) with line numbers → `packContext()` code first, then README, tree, configs, within the provider's budget.
+7. `buildChatContext()`: fetch the file tree (1 request, shared) → if the question names files, read them directly; otherwise rank paths lexically (`rankCodeFiles`), let the AI pick ≤5 files from a shortlist sized to the model (falls back to lexical/previous files) → read files from raw GitHub in parallel → follow their imports (and code search, with a token) and read the relevant ones → `onFiles` shows the chips → keep the head plus best-matching 40-line windows (`extractSnippets`) with line numbers → `packContext()` code first, then README, tree, configs, within the provider's budget.
 8. `buildChatPrompt()`: system prompt (rules) + trimmed history + final user message `<repository_context>…</repository_context> Question: …`.
 9. `callAIStreaming()` → `providerBody()` builds the request for the selected provider → tokens stream into the bubble → citations to files actually read are linkified → the message and its sources are saved to the repo that asked.
 
@@ -260,4 +264,4 @@ Where it's used:
 
 ## 8. Summary
 
-GitHub Repo Analyzer is a backend-free Chrome side panel that turns "a repo I've never seen" into "a contribution I can start today". It finds issues that are genuinely available across the whole repo, briefs each one (is it free, where to start, who to ask, what CI will run), explains pull requests including their full conversation and status, surfaces the people who actually maintain the project, scores contributor-friendliness from measured signals, and answers questions from the repo's real source code with line-level citations. Everything is computed client-side from the GitHub API — carefully budgeted, cached and rate-limit-aware — with the user's own AI provider adding summaries on top of deterministic, verifiable data. It's plain JavaScript with no build step, a token-based light/dark design built for a narrow panel, and 149 tests running in CI.
+GitHub Repo Analyzer is a backend-free Chrome side panel that turns "a repo I've never seen" into "a contribution I can start today". It finds issues that are genuinely available across the whole repo, briefs each one (is it free, where to start, who to ask, what CI will run), explains pull requests including their full conversation and status, surfaces the people who actually maintain the project, scores contributor-friendliness from measured signals, and answers questions from the repo's real source code with line-level citations. Everything is computed client-side from the GitHub API — carefully budgeted, cached and rate-limit-aware — with the user's own AI provider adding summaries on top of deterministic, verifiable data. It's plain JavaScript with no build step, a token-based light/dark design built for a narrow panel, and 164 tests running in CI.

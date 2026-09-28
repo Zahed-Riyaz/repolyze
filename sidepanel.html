@@ -223,14 +223,19 @@
             <div class="typing-dots"><span></span><span></span><span></span></div>
             <span id="typing-status">Thinking…</span>
           </div>
+          <!-- The files being read for the answer on its way -->
+          <div id="typing-files" class="msg-sources typing-files" hidden></div>
+          <datalist id="repo-files"></datalist>
           <div id="chat-composer">
+            <!-- "@" file suggestions -->
+            <ul id="file-suggest" class="file-suggest" role="listbox" aria-label="Files" hidden></ul>
             <!-- "About #123" — set from a brief; answers are grounded in that item (ask-focus.js) -->
             <div id="chat-focus" class="chat-focus" hidden></div>
             <div id="chat-input-container">
-              <textarea id="chat-input" rows="1" placeholder="Ask about this repo…"></textarea>
+              <textarea id="chat-input" rows="1" placeholder="Ask about this repo…" aria-autocomplete="list" aria-controls="file-suggest"></textarea>
               <button id="send-btn" title="Send" aria-label="Send"><svg class="icon"><use href="#i-send"/></svg></button>
             </div>
-            <p class="composer-hint"><kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line</p>
+            <p class="composer-hint"><kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line · <kbd>@</kbd> to name a file</p>
           </div>
         </section>
 
