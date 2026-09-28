@@ -171,6 +171,7 @@
                     <option value="comments">Most discussed</option>
                     <option value="created">Newest</option>
                     <option value="updated">Recently updated</option>
+                    <option value="fit">Best fit for you</option>
                   </select>
                   <label class="switch" title="Hide issues that are assigned (and, for label filters, ones with a linked PR)">
                     <input type="checkbox" id="issue-unclaimed" checked><span class="switch-track"></span>Unclaimed
@@ -194,6 +195,14 @@
                 <svg class="icon icon-sm" aria-hidden="true"><use href="#i-search"/></svg>
                 <input id="pr-find-input" class="input" placeholder="Search PRs, or paste a number or link" aria-label="Find a pull request">
               </form>
+              <div class="list-controls">
+                <div class="issue-controls">
+                  <select id="pr-sort" class="select select-quiet" aria-label="Sort pull requests">
+                    <option value="newest">Newest</option>
+                    <option value="fit">Best fit for you</option>
+                  </select>
+                </div>
+              </div>
               <p id="prs-summary" class="issues-summary"></p>
               <ul id="prs-list" class="row-list"></ul>
               <button id="prs-more" class="btn btn-ghost btn-block issues-more" hidden>Load more</button>
@@ -322,6 +331,12 @@
             </details>
             <div id="sp-gh-status" class="status-msg"></div>
           </div>
+
+          <!-- Your stack: what issues are matched against (stack.js); shown when signed in -->
+          <div class="card" id="sp-stack-card" hidden>
+            <p class="sp-section-label">Your stack <span class="sp-optional">used to sort issues by fit · stays in this browser</span></p>
+            <div id="sp-stack-body"></div>
+          </div>
         </section>
       </main>
     </div>
@@ -332,6 +347,7 @@
   <script src="pr-brief.js"></script>
   <script src="ask-focus.js"></script>
   <script src="auth.js"></script>
+  <script src="stack.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

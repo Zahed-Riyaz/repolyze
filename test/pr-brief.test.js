@@ -169,6 +169,7 @@ test("the PR brief shows status, activity, files with owners and people for 5 AP
   assert.match(body, /Closes #1842/);
   assert.match(body, /src\/launch\/timer\.ts<\/span>[\s\S]*#i-comment"\/><\/svg>1 <span class="add">\+30<\/span>[\s\S]*owned by @ada/);
   assert.match(body, /ada[\s\S]*requested changes[\s\S]*bob[\s\S]*review requested/);
+  assert.match(body, /What it touches[\s\S]*<strong>TypeScript<\/strong> <code>src\/launch\/timer\.ts<\/code>/, "the stack of the files it actually changes");
   const prCalls = gh.apiCalls.filter(u => /\/(pulls|issues|commits)\//.test(u));
   assert.equal(prCalls.length, 5, prCalls.join("\n"));
 });

@@ -368,6 +368,7 @@ function renderPrBrief(repo, brief) {
       <p class="brief-note">${escapeHtml(status.advice)}</p>
     </section>
     ${askRowHtml("pr")}
+    ${stackSectionHtml(prStack(pr, files), stackProfile, "What it touches")}
     <section class="brief-section">
       <h2 class="section-title">Activity</h2>
       ${activity}
@@ -417,7 +418,7 @@ function copyPrBrief() {
 // ── Pull request list (Contribute tab) ───────────────────────────────────────
 // Open or closed PRs, paged; or a search across every PR by keyword. The Find
 // box also takes a number or a PR link and opens that PR's brief directly.
-const prView = { state: "open", query: "", expanded: false }; // previewed like the issue list
+const prView = { state: "open", query: "", sort: "newest", expanded: false }; // previewed like the issue list; "fit" reorders what's loaded
 const PR_PAGE = 15;
 const prViewKey = (v) => `${v.state}|${v.query}`;
 
@@ -448,7 +449,11 @@ async function fetchPrList({ append = false } = {}) {
   const more = document.getElementById("prs-more");
   const current = () => isCurrentRepo(cacheKey) && prViewKey(prView) === key;
 
-  if (!append && views[key]) { renderPrList(views[key], view); return true; }
+  if (!append && views[key]) {
+    await annotateStacks(repo, views[key].items, "pr");
+    if (current()) renderPrList(views[key], view);
+    return true;
+  }
   if (append) { more.disabled = true; more.textContent = "Loading…"; }
   else { list.innerHTML = skeletonList(3); more.hidden = true; document.getElementById("prs-summary").textContent = ""; }
 
@@ -466,6 +471,7 @@ async function fetchPrList({ append = false } = {}) {
       result = { items: data, page, total: null, hasMore: /rel="next"/.test(link || "") };
     }
     views[key] = append ? { ...result, items: [...views[key].items, ...result.items] } : result;
+    await annotateStacks(repo, views[key].items, "pr");
     if (current()) renderPrList(views[key], view);
     return true;
   } catch (err) {
@@ -486,7 +492,11 @@ function renderPrList(state, view) {
   const summary = document.getElementById("prs-summary");
   summary.innerHTML = view.query
     ? `<strong>${state.total.toLocaleString()}</strong> PR${state.total === 1 ? "" : "s"} matching “${escapeHtml(view.query)}” <button class="btn btn-ghost btn-xs pr-clear-search">Clear</button>`
-    : `${view.state === "open" ? "Open pull requests, newest first" : "Closed pull requests, most recently updated first"}`;
+    : prView.sort === "fit"
+      ? (stackProfile
+        ? `${view.state === "open" ? "Open" : "Closed"} pull requests needing more of your stack first · among the ${state.items.length} loaded`
+        : `${signInAvailable() || githubToken ? "Sign in to sort by fit with your own repos." : "Add a GitHub token in Settings to sort by fit with your repos."} <a href="#" class="fit-sign-in">Set up</a>`)
+      : `${view.state === "open" ? "Open pull requests, newest first" : "Closed pull requests, most recently updated first"}`;
 
   if (!state.items.length) {
     more.hidden = true;
@@ -494,8 +504,9 @@ function renderPrList(state, view) {
     return;
   }
   state.items.forEach(pr => prIndex.set(pr.number, pr));
+  const items = prView.sort === "fit" && stackProfile && !view.query ? sortByFit(state.items, "pr") : state.items;
   // A search is something the user asked for, so show all its results
-  const preview = listPreview(state, prView.expanded || !!view.query);
+  const preview = listPreview({ ...state, items }, prView.expanded || !!view.query);
   list.innerHTML = preview.items.map(prCard).join("");
   more.hidden = !preview.button;
   more.disabled = false;
@@ -528,6 +539,7 @@ function prCard(pr) {
           ${chip}
           <span class="row-age">${daysAgo(pr.state === "closed" ? (pr.closed_at || pr.updated_at) : pr.created_at)}</span>
         </span>
+        ${stackLineHtml(stackFor(pr.number, "pr"))}
       </button>
       <a class="row-external" href="${pr.html_url}" target="_blank" title="Open on GitHub" aria-label="Open PR #${pr.number} on GitHub">${icon("external", "icon-sm")}</a>
     </li>`;

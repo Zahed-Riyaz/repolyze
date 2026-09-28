@@ -50,11 +50,11 @@ async function visitAllTabs(panel) {
 }
 
 // ── Request budget ───────────────────────────────────────────────────────────
-test("opening a repo costs 3 API requests (header, issues, PRs); the Repo tab loads only when opened", async () => {
+test("opening a repo costs 4 API requests (header, issues, PRs, file tree); the Repo tab loads only when opened", async () => {
   const { gh, panel } = openRepo();
   await panel.fn.updateRepoInfo(); await tick(5);
   assert.equal(panel.run("lastContentTab"), "contribute", "a repo opens on what's available to work on");
-  assert.deepEqual(gh.apiCalls.slice().sort(), ["", "/issues?state=open&assignee=none&sort=comments&direction=desc&per_page=30&page=1",
+  assert.deepEqual(gh.apiCalls.slice().sort(), ["", "/git/trees/HEAD?recursive=1", "/issues?state=open&assignee=none&sort=comments&direction=desc&per_page=30&page=1",
     "/pulls?state=open&sort=created&direction=desc&per_page=15&page=1"]);
 });
 

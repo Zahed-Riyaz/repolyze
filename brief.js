@@ -354,6 +354,7 @@ function renderBrief(repo, issue, brief) {
       <p class="brief-note">${escapeHtml(a.advice)}</p>
     </section>
     ${askRowHtml("issue")}
+    ${stackSectionHtml(issueStack(issue, brief.likelyFiles))}
     ${brief.likelyFiles.length ? `<section class="brief-section">
       <h2 class="section-title">Likely files</h2>
       <ul class="brief-files">${brief.likelyFiles.map(f => `<li><a href="${sourceUrl(repo, null, f)}" target="_blank"><code>${escapeHtml(f)}</code></a></li>`).join("")}</ul>

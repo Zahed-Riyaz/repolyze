@@ -54,6 +54,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     findIssue(document.getElementById("issue-find-input").value);
   });
   document.getElementById("issues-summary").addEventListener("click", (e) => {
+    if (e.target.closest?.(".fit-sign-in")) { e.preventDefault(); openTokenSettings(); return; }
     if (e.target.closest?.(".issue-clear-search")) clearIssueSearch();
   });
 
@@ -81,7 +82,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     findPr(document.getElementById("pr-find-input").value);
   });
   document.getElementById("prs-more").addEventListener("click", () => showMorePrs());
+  document.getElementById("pr-sort").addEventListener("change", (e) => { prView.sort = e.target.value; fetchPrList(); });
   document.getElementById("prs-summary").addEventListener("click", (e) => {
+    if (e.target.closest?.(".fit-sign-in")) { e.preventDefault(); openTokenSettings(); return; }
     if (e.target.closest?.(".pr-clear-search")) setPrState(prView.state);
   });
 
@@ -137,6 +140,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openTokenSettings(); }
   });
   refreshRateLimit();
+  loadAccountAndStack();
 
   if (aiProvider !== "ollama" && !aiApiKey) {
     document.querySelector('.tab-btn[data-tab="settings"]')?.click();
@@ -162,6 +166,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   const [activeTab] = await chrome.tabs.query({ active: true, windowId: panelWindowId });
   if (activeTab?.url) handleRepoRefresh(activeTab.url);
 });
+
+// Signed in (or a pasted token from before sign-in existed): know who, then
+// load their stack so issues can be scored by fit
+async function loadAccountAndStack() {
+  if (githubToken && !githubUser) {
+    githubUser = await fetchGitHubUser(githubToken).catch(() => null);
+    if (githubUser) await chrome.storage.local.set({ githubUser });
+    renderGitHubAccount();
+  }
+  const profile = await loadStackProfile();
+  renderStackCard();
+  if (profile) onStackChanged();
+}
 
 // ── View & tab state ──────────────────────────────────────────────────────────
 let onRepoPage = false;
@@ -772,7 +789,9 @@ function formatNumber(n) {
 const issueView = { filter: "", sort: "comments", unclaimed: true, query: "", expanded: false };
 const ISSUE_PAGE = 30;
 const LIST_PREVIEW = 5;
-const SORT_WORDS = { comments: "most discussed first", created: "newest first", updated: "recently updated first" };
+const SORT_WORDS = { comments: "most discussed first", created: "newest first", updated: "recently updated first", fit: "best fit for you first" };
+// "Best fit" reorders what GitHub returns for "most discussed" (fit is scored here, not by GitHub)
+const apiSort = (view) => (view.sort === "fit" ? "comments" : view.sort);
 
 const issueViewKey = (v) => (v.query ? `q|${v.query}` : `${v.filter}|${v.sort}|${v.unclaimed}`);
 
@@ -786,7 +805,11 @@ async function fetchIssues({ append = false } = {}) {
   const more = document.getElementById("issues-more");
   const current = () => isCurrentRepo(cacheKey) && issueViewKey(issueView) === key;
 
-  if (!append && views[key]) { renderIssueList(views[key], view); return true; }
+  if (!append && views[key]) {
+    await annotateStacks(repo, views[key].items, "issue");
+    if (current()) renderIssueList(views[key], view);
+    return true;
+  }
   if (append) { more.disabled = true; more.textContent = "Loading…"; }
   else { list.innerHTML = skeletonList(5); more.hidden = true; document.getElementById("issues-summary").textContent = ""; }
 
@@ -796,6 +819,7 @@ async function fetchIssues({ append = false } = {}) {
       : view.filter ? await searchLabelIssues(repo, view, page)
       : await listOpenIssues(repo, view, page);
     views[key] = append ? { ...result, items: [...views[key].items, ...result.items] } : result;
+    await annotateStacks(repo, views[key].items, "issue");
     if (current()) renderIssueList(views[key], view);
     return true;
   } catch (err) {
@@ -813,7 +837,7 @@ async function fetchIssues({ append = false } = {}) {
 
 async function listOpenIssues(repo, view, page) {
   const { data, link } = await fetchGitHubPage(
-    `/issues?state=open${view.unclaimed ? "&assignee=none" : ""}&sort=${view.sort}&direction=desc&per_page=${ISSUE_PAGE}&page=${page}`, repo);
+    `/issues?state=open${view.unclaimed ? "&assignee=none" : ""}&sort=${apiSort(view)}&direction=desc&per_page=${ISSUE_PAGE}&page=${page}`, repo);
   return { items: data.filter(i => !i.pull_request), page, total: null, hasMore: /rel="next"/.test(link || "") };
 }
 
@@ -830,7 +854,7 @@ async function searchLabelIssues(repo, view, page) {
   if (!labels.length) return { items: [], page, total: 0, hasMore: false, labels, noLabel: true };
   const search = (unclaimed, perPage, p) => fetchGitHub(
     `https://api.github.com/search/issues?q=${encodeURIComponent(beginnerSearchQuery(repo, labels, { unclaimed }))}` +
-    `&sort=${view.sort}&order=desc&per_page=${perPage}&page=${p}`, repo);
+    `&sort=${apiSort(view)}&order=desc&per_page=${perPage}&page=${p}`, repo);
   const res = await search(view.unclaimed, ISSUE_PAGE, page);
   const total = res.total_count ?? 0;
   const result = { items: res.items || [], page, total, labels, hasMore: page * ISSUE_PAGE < Math.min(total, 1000) };
@@ -858,6 +882,11 @@ function renderIssueList(state, view) {
   } else {
     summary.textContent = `${view.unclaimed ? "Unassigned open issues" : "All open issues"}, ${SORT_WORDS[view.sort]}`;
   }
+  if (view.sort === "fit" && !view.query) {
+    summary.insertAdjacentHTML("beforeend", stackProfile
+      ? `<span class="issues-labels">Issues needing more of your stack first (${stackProfile.languages.slice(0, 3).map(l => escapeHtml(l.name)).concat(stackProfile.terms.slice(0, 3).map(t => escapeHtml(techName(t.term)))).join(", ")}) · among the ${state.items.length} loaded</span>`
+      : `<span class="issues-labels">${signInAvailable() || githubToken ? "Sign in to sort by fit with your own repos." : "Add a GitHub token in Settings to sort by fit with your repos."} <a href="#" class="fit-sign-in">Set up</a></span>`);
+  }
 
   if (!state.items.length) {
     more.hidden = true;
@@ -878,8 +907,12 @@ function renderIssueList(state, view) {
   }
 
   state.items.forEach(i => issueIndex.set(i.number, i));
+  // Best fit: highest score first; ties keep GitHub's "most discussed" order
+  const items = view.sort === "fit" && stackProfile && !view.query
+    ? sortByFit(state.items, "issue")
+    : state.items;
   // A search is something the user asked for, so show all its results
-  const preview = listPreview(state, issueView.expanded || !!view.query);
+  const preview = listPreview({ ...state, items }, issueView.expanded || !!view.query);
   list.innerHTML = preview.items.map(issueCard).join("");
   more.hidden = !preview.button;
   more.disabled = false;
@@ -925,6 +958,7 @@ function issueCard(issue) {
           ${labels}
           <span class="row-age">${daysAgo(issue.created_at)}</span>
         </span>
+        ${stackLineHtml(stackFor(issue.number, "issue"))}
       </button>
       <a class="row-external" href="${issue.html_url}" target="_blank" title="Open on GitHub" aria-label="Open #${issue.number} on GitHub">${icon("external", "icon-sm")}</a>
     </li>`;
@@ -2124,6 +2158,9 @@ function initSettingsTab() {
   if (ollamaModel) document.getElementById("sp-ollama-model").value = ollamaModel;
   if (githubToken) document.getElementById("sp-gh-token").placeholder = maskApiKey(githubToken);
   renderGitHubAccount();
+  const stackCard = document.getElementById("sp-stack-card");
+  stackCard.addEventListener("click", handleStackCardClick);
+  stackCard.addEventListener("keydown", handleStackCardKeydown);
   refreshBadge();
 
   // Provider pill clicks
@@ -2244,6 +2281,9 @@ async function onGitHubTokenChanged() {
   ghState.resetAt = 0;
   await refreshRateLimit();
   reloadCurrentRepo();
+  // A different account (or none) means a different stack
+  stackProfile = null;
+  loadAccountAndStack();
 }
 
 function maskApiKey(key) {

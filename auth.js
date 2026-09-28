@@ -165,7 +165,7 @@ function cancelGitHubSignIn() {
 // Removes the token from this browser. (Revoking it on GitHub needs the app's
 // secret, so the note points the user to GitHub's Applications page for that.)
 async function signOutOfGitHub() {
-  await chrome.storage.local.remove(["githubToken", "githubUser"]);
+  await chrome.storage.local.remove(["githubToken", "githubUser", "stackProfile"]); // your stack edits are kept
   githubToken = "";
   githubUser = null;
   document.getElementById("sp-gh-token").placeholder = "ghp_...";

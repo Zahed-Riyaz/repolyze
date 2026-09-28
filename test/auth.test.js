@@ -102,6 +102,7 @@ test("signing out removes the token and account from this browser", async () => 
 
 test("without a client ID, Settings falls back to the paste-a-token form", () => {
   const panel = loadPanel({ fetch: async () => json({}) });
+  panel.run(`AUTH.clientId = ""`); // independent of the ID auth.js ships with
   panel.fn.initSettingsTab();
   assert.equal(panel.fn.signInAvailable(), false);
   assert.equal(panel.el("sp-gh-signin").hidden, true);
@@ -116,6 +117,7 @@ test("the rate-limit banner offers Sign in when it's available, a token otherwis
   assert.match(withSignIn.panel.el("rate-banner-sub").textContent, /Signing in raises the limit/);
 
   const tokenOnly = loadPanel({ fetch: async () => json({}) });
+  tokenOnly.run(`AUTH.clientId = ""`);
   tokenOnly.run(`ghState.remaining = 3; ghState.limit = 60; ghState.resetAt = Date.now() + 60000`);
   tokenOnly.fn.renderRateLimit();
   assert.equal(tokenOnly.el("rate-banner-btn").textContent, "Get token");

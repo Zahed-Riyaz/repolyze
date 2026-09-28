@@ -18,6 +18,8 @@ Three tabs: **Repo** · **Contribute** · **Ask**. A repo opens on Contribute �
 - FR-4 List open issues (unassigned by default), sortable by most discussed / newest / recently updated. Shows a 5-item preview; "Show all" expands from what's loaded, then "Load more" pages.
 - FR-5 "Good first" and "Help wanted" filters search *all* open issues via the search API, matched against the repo's real label names (spelling variants included), showing the total.
 - FR-5a Issue **Find** box: a number or an issue link opens its brief (a PR link opens the PR's), keywords search every issue in the repo — open and closed, best match first, closed ones marked; a filter or the Unclaimed toggle ends the search. A closed issue's brief says **Closed** (and why), not "Looks free".
+- FR-5b **What each issue requires**: every issue row lists its stack — the languages of the files it likely touches (path ranking on its title/body, as in "Likely files") and languages/technologies it names — with the file behind each language on hover; the issue brief has a "What it requires" section. PR rows get the same line (from title, description and branch name — the list has no files, and fetching them per PR would cost a request each); the PR brief's **What it touches** uses the files it actually changes, languages ordered by how much of the PR is in them. No AI; shown signed in or not.
+- FR-5c **Fit with your stack** (signed in): your profile is built from your own public repos (languages, topics, descriptions; forks skipped, recent repos weigh most) and bio. The parts of an issue's stack you know are shown brighter, and sort **Best fit for you** (issues and PRs, each scored against its own list) puts first the items needing the most of your stack — scored relative to the repo, so the repo's main language or a term most issues mention doesn't lift one issue over another. Settings → **Your stack** shows the profile and lets you hide or add items.
 - FR-6 "Unclaimed" toggle hides assigned issues and, for label filters, issues with a linked PR; when that hides everything, say so and offer to show them.
 - FR-7 **Start this issue** brief per issue: availability verdict (assignees, PRs referencing it, "I'll take this" comments, maintainer replies), likely files (path ranking), who to ask (CODEOWNERS + maintainers in the thread), and **Run before opening a PR** (commands from CI and `package.json`). No AI.
 - FR-12 Pull request list below the issues: open/closed toggle, a 5-item preview then paging, hints from the list data (draft, review requested, idle ≥21 days), and a Find box accepting a PR number, a PR link (an issue link opens the issue's brief), or keywords (searches every PR).
@@ -71,6 +73,7 @@ All API paths below are relative to `https://api.github.com/repos/{owner}/{repo}
 | Sign-in: device code | `POST https://github.com/login/device/code` (`client_id`, empty scope) |
 | Sign-in: token (polled every `interval`s; `slow_down` lengthens it) | `POST https://github.com/login/oauth/access_token` (`grant_type=urn:ietf:params:oauth:grant-type:device_code`) |
 | Signed-in account (name + avatar in Settings) | `GET https://api.github.com/user` |
+| Your stack (once a day, signed in) | `GET https://api.github.com/users/{login}` (bio), `GET …/users/{login}/repos?type=owner&sort=pushed&direction=desc&per_page=100`, and `GET {repo.languages_url}` for your 6 most recently pushed own repos |
 
 **Issues**
 | Purpose | Request |
@@ -136,17 +139,17 @@ Where it's used:
 
 | Area | Requirement |
 |---|---|
-| **API budget** | Opening a repo costs 3 GitHub requests (header, first page of issues, first page of PRs); the Repo tab loads on first view; reopening the panel costs 0 (session cache); chat costs 0 (file contents come from `raw.githubusercontent.com`), plus ≤2 code-search requests with a token when the question names identifiers nothing read defines; an issue brief costs 2 (3 when opened from its page), a PR brief 5. |
+| **API budget** | Opening a repo costs 4 GitHub requests (header, first page of issues, first page of PRs, the file tree — shared with briefs and Ask); the Repo tab loads on first view; reopening the panel costs 0 (session cache); chat costs 0 (file contents come from `raw.githubusercontent.com`), plus ≤2 code-search requests with a token when the question names identifiers nothing read defines; an issue brief costs 2 (3 when opened from its page), a PR brief 5; signed in, your stack costs ≤8 a day. |
 | **AI budget** | No AI call happens without a user action, and only in Ask (on send, or a brief's suggestion). Opening a brief — from a list or by following the page — costs 0 AI credits. |
 | **Rate-limit resilience** | Never collect raw 403s: stop requesting when the core quota is spent, serve stale cache instead of failing, track the search quota separately, honour `Retry-After` for secondary limits (not the hourly reset), auto-reload failed tabs when the window resets or a token is added. |
 | **Correctness under navigation** | Every async render is guarded by the repo it started for (`isCurrentRepo(key)`); briefs are guarded by an active token so a stale response never renders into another repo or brief. |
-| **Privacy** | No backend and no telemetry. Keys and chat history live in `chrome.storage.local`; GitHub responses in `chrome.storage.session`. The GitHub token is only ever sent to `api.github.com`. Repo content is sent only to the AI provider the user chose. |
+| **Privacy** | No backend and no telemetry. Keys, chat history and your stack profile (built from your public data, never sent anywhere but GitHub) live in `chrome.storage.local`; GitHub responses in `chrome.storage.session`. The GitHub token is only ever sent to `api.github.com`. Repo content is sent only to the AI provider the user chose. |
 | **Security** | All GitHub/AI text is HTML-escaped before rendering; Markdown links only render for `http(s)`; label colours are validated; AI instructions go in each provider's system slot and repo content is marked as data, not instructions. Minimal permissions: `sidePanel`, `storage`, `tabs`; host access to `github.com/login/*` only for the sign-in endpoints (they don't allow cross-origin requests). Sign out removes the token locally; revoking it is done on GitHub (Settings → Applications), since that needs the app's secret. |
 | **AI answer quality** | Grounded answers with citations; per-provider context budgets (Groq/Ollama smaller); Ollama `num_ctx` sized to the request; temperature 0.2 (0 for file picking); history has its own budget. |
 | **Performance** | Local ranking of 100k paths ≈ 150 ms; file reads in parallel; skeletons instead of layout jumps; streaming AI output. |
 | **Accessibility** | Keyboard-reachable controls with visible focus rings, ARIA roles on tabs/status, `prefers-reduced-motion` respected, theme-aware label contrast. |
 | **Compatibility** | Chrome with the Side Panel API (MV3); works at narrow panel widths (three text-only tabs); light and dark themes follow the OS. |
-| **Maintainability** | Plain JS, no build step; pure logic separated from rendering and unit-tested; 176 tests (`npm test`, ~3s) run in CI on every push. |
+| **Maintainability** | Plain JS, no build step; pure logic separated from rendering and unit-tested; 191 tests (`npm test`, ~3s) run in CI on every push. |
 | **Cost** | Zero infrastructure cost; users bring their own AI key (free tiers on Groq/Gemini, free local Ollama). |
 
 ---
@@ -228,7 +231,8 @@ Where it's used:
 │  │ (worker)     │                       │  ├ brief.js      Start this issue, focus view │ │
 │  └──────────────┘                       │  ├ pr-brief.js   PR list, Find, PR brief      │ │
 │                                         │  ├ ask-focus.js  Ask focused on an issue / PR │ │
-│                                         │  └ auth.js       Sign in with GitHub (device) │ │
+│                                         │  ├ auth.js       Sign in with GitHub (device) │ │
+│                                         │  └ stack.js      Your stack, fit per issue    │ │
 │                                         └───────┬───────────────────┬───────────────────┘ │
 │  ┌──────────────┐   settings (onChanged)        │                   │                     │
 │  │ options.html │ ◀──────────────┐              │                   │                     │
@@ -261,7 +265,7 @@ Where it's used:
 
 - **Run:** `chrome://extensions` → Developer mode → Load unpacked → this folder. Reload the extension after edits.
 - **Test:** `npm test` (all suites) and `npm run check` (syntax). Node 22+. CI: `.github/workflows/test.yml`.
-- **Script order matters:** `sidepanel.html` loads `retrieval.js`, `insights.js`, `brief.js`, `pr-brief.js`, `ask-focus.js`, `auth.js`, then `sidepanel.js` as classic scripts sharing one global scope; `test/helpers/panel.js` loads them in the same order. New files must be added to both (and to `npm run check`).
+- **Script order matters:** `sidepanel.html` loads `retrieval.js`, `insights.js`, `brief.js`, `pr-brief.js`, `ask-focus.js`, `auth.js`, `stack.js`, then `sidepanel.js` as classic scripts sharing one global scope; `test/helpers/panel.js` loads them in the same order. New files must be added to both (and to `npm run check`).
 - **Tests use the real code:** `loadPanel()` evals the scripts with a fake DOM, `chrome.*` and `fetch`; `githubMock()` fakes GitHub, raw files and AI replies and records requests. Use `panel.run("…")` to reach `let`/`const` state.
 - **Conventions:** keep pure logic (verdicts, scoring, parsing, prompts) separate from rendering and unit-test it; escape everything interpolated into `innerHTML`; guard async renders with `isCurrentRepo(key)`; go through `fetchGitHub`/`fetchGitHubPage` (never raw `fetch`) for GitHub API calls; always pass `direction=desc` when sorting GitHub lists (it defaults to ascending); put AI instructions in `opts.system`.
 - **GitHub sign-in** needs an OAuth App's Client ID in `AUTH.clientId` (`auth.js`), with "Enable Device Flow" ticked; empty → token form only.
@@ -272,4 +276,4 @@ Where it's used:
 
 ## 8. Summary
 
-GitHub Repo Analyzer is a backend-free Chrome side panel that turns "a repo I've never seen" into "a contribution I can start today". It finds issues that are genuinely available across the whole repo, briefs each one (is it free, where to start, who to ask, what CI will run), explains pull requests including their full conversation and status, surfaces the people who actually maintain the project, scores contributor-friendliness from measured signals, and answers questions from the repo's real source code with line-level citations. Everything is computed client-side from the GitHub API — carefully budgeted, cached and rate-limit-aware — with the user's own AI provider adding summaries on top of deterministic, verifiable data. It's plain JavaScript with no build step, a token-based light/dark design built for a narrow panel, and 176 tests running in CI.
+GitHub Repo Analyzer is a backend-free Chrome side panel that turns "a repo I've never seen" into "a contribution I can start today". It finds issues that are genuinely available across the whole repo, briefs each one (is it free, where to start, who to ask, what CI will run), explains pull requests including their full conversation and status, surfaces the people who actually maintain the project, scores contributor-friendliness from measured signals, and answers questions from the repo's real source code with line-level citations. Everything is computed client-side from the GitHub API — carefully budgeted, cached and rate-limit-aware — with the user's own AI provider adding summaries on top of deterministic, verifiable data. It's plain JavaScript with no build step, a token-based light/dark design built for a narrow panel, and 191 tests running in CI.
