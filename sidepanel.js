@@ -781,7 +781,7 @@ function formatNumber(n) {
 // ── Issues ────────────────────────────────────────────────────────────────────
 // "All" pages through the issues API. Label filters use the search API across
 // every open issue (not just one page), matched against the repo's real label
-// names; "Unclaimed only" there also drops issues with a linked PR. The Find box
+// names; "Unassigned" there also drops issues with a linked PR. The Find box
 // takes a number or link (opens the brief) or keywords (searches every issue,
 // open and closed, best match first — filters don't apply to a search).
 // The list opens as a short preview next to the PRs; "Show all" expands it
@@ -880,12 +880,12 @@ function renderIssueList(state, view) {
       `${view.unclaimed ? " · unassigned, no linked PR" : ""} · ${SORT_WORDS[view.sort]}` +
       `<span class="issues-labels" title="Matched labels">Labels: ${state.labels.map(l => escapeHtml(l)).join(", ")}</span>`;
   } else {
-    summary.textContent = `${view.unclaimed ? "Unassigned open issues" : "All open issues"}, ${SORT_WORDS[view.sort]}`;
+    summary.textContent = ""; // the controls already say what's shown
   }
-  if (view.sort === "fit" && !view.query) {
-    summary.insertAdjacentHTML("beforeend", stackProfile
-      ? `<span class="issues-labels">Issues needing more of your stack first (${stackProfile.languages.slice(0, 3).map(l => escapeHtml(l.name)).concat(stackProfile.terms.slice(0, 3).map(t => escapeHtml(techName(t.term)))).join(", ")}) · among the ${state.items.length} loaded</span>`
-      : `<span class="issues-labels">${signInAvailable() || githubToken ? "Sign in to sort by fit with your own repos." : "Add a GitHub token in Settings to sort by fit with your repos."} <a href="#" class="fit-sign-in">Set up</a></span>`);
+  // Best fit without a profile can't sort — say how to get one
+  if (view.sort === "fit" && !view.query && !stackProfile) {
+    summary.insertAdjacentHTML("beforeend",
+      `<span class="issues-labels">${signInAvailable() || githubToken ? "Sign in to sort by fit with your own repos." : "Add a GitHub token in Settings to sort by fit with your repos."} <a href="#" class="fit-sign-in">Set up</a></span>`);
   }
 
   if (!state.items.length) {

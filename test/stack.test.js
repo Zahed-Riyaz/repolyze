@@ -123,7 +123,7 @@ test("Best fit for you puts first the issues needing the most of your stack, rel
   assert.ok(gh.apiCalls.some(u => u.includes("sort=comments")), "GitHub is asked for most discussed; fit is scored here");
   const html = panel.el("issues-list").innerHTML;
   assert.ok(html.indexOf("#12") < html.indexOf("#10"), "TypeScript + Docker in a Python repo beats Python + LLMs, which every issue has");
-  assert.match(panel.el("issues-summary").innerHTML, /Issues needing more of your stack first \(TypeScript, Python, Docker, LLMs\) · among the 3 loaded/);
+  assert.equal(panel.el("issues-summary").innerHTML, "", "the sort menu already says what's shown");
 });
 
 test("signed out, requirements still show (nothing is brighter) and Best fit asks you to sign in", async () => {
@@ -208,7 +208,7 @@ test("Best fit for you sorts PRs too, and asks you to sign in without a profile"
   await panel.fn.fetchPrList();
   const html = panel.el("prs-list").innerHTML;
   assert.ok(html.indexOf("#31") < html.indexOf("#30"), "TypeScript + Docker first in a Python repo");
-  assert.match(panel.el("prs-summary").innerHTML, /Open pull requests needing more of your stack first · among the 2 loaded/);
+  assert.equal(panel.el("prs-summary").innerHTML, "");
 
   const anon = prFitPanel({ profile: null });
   anon.panel.run(`prView.sort = "fit"; AUTH.clientId = "x"`);

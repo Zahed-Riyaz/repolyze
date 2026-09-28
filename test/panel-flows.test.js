@@ -127,13 +127,13 @@ test("a stale response never renders into a different repo", async () => {
 });
 
 // ── Issues ───────────────────────────────────────────────────────────────────
-test("All lists unassigned issues without PRs, with a summary", async () => {
+test("All lists unassigned issues without PRs, with no summary line restating the controls", async () => {
   const { panel } = openRepo();
   await panel.fn.fetchIssues();
   const html = panel.el("issues-list").innerHTML;
   assert.match(html, /Issue 1/);
   assert.doesNotMatch(html, /Issue 3/, "pull requests are filtered out");
-  assert.equal(panel.el("issues-summary").textContent, "Unassigned open issues, most discussed first");
+  assert.equal(panel.el("issues-summary").textContent, "");
 });
 
 test("Good first searches all issues with the repo's real label names and shows the total", async () => {

@@ -70,7 +70,7 @@ test("open PRs are listed newest first and page with Load more", async () => {
   });
   await panel.fn.fetchPrList();
   assert.ok(gh.apiCalls.includes("/pulls?state=open&sort=created&direction=desc&per_page=15&page=1"));
-  assert.equal(panel.el("prs-summary").innerHTML, "Open pull requests, newest first");
+  assert.equal(panel.el("prs-summary").innerHTML, "", "no summary line restating the controls");
   assert.equal(panel.el("prs-more").hidden, false);
   await panel.fn.fetchPrList({ append: true });
   assert.match(panel.el("prs-list").innerHTML, /#50[\s\S]*#49[\s\S]*#48/);

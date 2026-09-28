@@ -492,11 +492,9 @@ function renderPrList(state, view) {
   const summary = document.getElementById("prs-summary");
   summary.innerHTML = view.query
     ? `<strong>${state.total.toLocaleString()}</strong> PR${state.total === 1 ? "" : "s"} matching “${escapeHtml(view.query)}” <button class="btn btn-ghost btn-xs pr-clear-search">Clear</button>`
-    : prView.sort === "fit"
-      ? (stackProfile
-        ? `${view.state === "open" ? "Open" : "Closed"} pull requests needing more of your stack first · among the ${state.items.length} loaded`
-        : `${signInAvailable() || githubToken ? "Sign in to sort by fit with your own repos." : "Add a GitHub token in Settings to sort by fit with your repos."} <a href="#" class="fit-sign-in">Set up</a>`)
-      : `${view.state === "open" ? "Open pull requests, newest first" : "Closed pull requests, most recently updated first"}`;
+    : prView.sort === "fit" && !stackProfile
+      ? `${signInAvailable() || githubToken ? "Sign in to sort by fit with your own repos." : "Add a GitHub token in Settings to sort by fit with your repos."} <a href="#" class="fit-sign-in">Set up</a>`
+      : ""; // the controls already say what's shown
 
   if (!state.items.length) {
     more.hidden = true;
