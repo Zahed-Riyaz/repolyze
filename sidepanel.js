@@ -227,7 +227,7 @@ function handleRepoRefresh(url) {
 
   if (urlObj.hostname !== "github.com" && urlObj.hostname !== "www.github.com") {
     showNotRepoMessage();
-    syncPrBriefWithPage(null);
+    syncBriefWithPage(null);
     return;
   }
 
@@ -243,7 +243,7 @@ function handleRepoRefresh(url) {
   ];
   if (pathParts.length < 2 || nonRepoPaths.includes(pathParts[0].toLowerCase())) {
     showNotRepoMessage();
-    syncPrBriefWithPage(null);
+    syncBriefWithPage(null);
     return;
   }
 
@@ -254,8 +254,39 @@ function handleRepoRefresh(url) {
     currentRepo = newRepo;
     updateRepoInfo();
   }
-  // On a PR page (…/pull/123, including its Files/Commits tabs)? Open its brief.
-  syncPrBriefWithPage(prNumberFromPath(pathParts));
+  // On an issue or PR page (…/issues/12, …/pull/123 and its tabs)? Open its brief.
+  syncBriefWithPage(briefPageFromPath(pathParts));
+}
+
+// ── Following the issue / PR page the user is on ─────────────────────────────
+// Opening github.com/o/r/issues/12 opens that issue's brief on the Issues tab;
+// github.com/o/r/pull/123 (or its Files/Commits tabs) opens the PR's brief on
+// Contribute. Only the deterministic parts load — the AI waits for Generate.
+// Moving between the same PR's tabs doesn't reopen or reload it (so closing it
+// sticks), and leaving the page closes a brief that was opened this way.
+let pageBrief = null; // "pr:owner/repo#123" / "issue:owner/repo#12" of the active tab
+
+function briefPageFromPath(pathParts) {
+  if (!/^\d+$/.test(pathParts[3] || "")) return null;
+  const kind = { pull: "pr", issues: "issue" }[pathParts[2]];
+  return kind ? { kind, number: Number(pathParts[3]) } : null;
+}
+
+function syncBriefWithPage(page) {
+  const pageKey = page && currentRepo ? `${page.kind}:${repoKey()}#${page.number}` : null;
+  if (pageKey === pageBrief) return;
+  const leaving = pageBrief;
+  pageBrief = pageKey;
+  if (page?.kind === "pr") {
+    switchTab("contribute");
+    showPrBrief(page.number, { auto: true });
+  } else if (page?.kind === "issue") {
+    switchTab("issues");
+    showIssueBrief(page.number, { auto: true });
+  }
+  if (!leaving) return;
+  if (activePrBrief?.auto && `pr:${activePrBrief.key}#${activePrBrief.number}` === leaving) closePrBrief();
+  if (activeBrief?.auto && `issue:${activeBrief.key}#${activeBrief.number}` === leaving) closeIssueBrief();
 }
 
 function showNotRepoMessage() {

@@ -1099,6 +1099,21 @@ a.cite:hover code { background: var(--accent-subtle); }
 .brief-ai h3:first-child { margin-top: 0; }
 .brief-ai ol { margin: 6px 0; padding-left: 20px; }
 .brief-status { display: flex; align-items: center; gap: 8px; padding: 10px 0; font-size: 12px; color: var(--fg-muted); }
+
+/* On-demand AI: nothing is generated until the user asks */
+.brief-generate {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: var(--r-lg);
+  background: var(--accent-subtle);
+}
+.brief-generate-icon { display: grid; place-items: center; width: 28px; height: 28px; flex-shrink: 0; border-radius: var(--r-md); background: var(--accent); color: var(--accent-fg); }
+.brief-generate-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 12px; color: var(--fg-muted); }
+.brief-generate-text strong { font-size: 13px; font-weight: 600; color: var(--fg); }
+.brief-generate .btn { flex-shrink: 0; }
 .brief-files { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
 .brief-files code { font-size: 12px; }
 .brief-section .cmd-row + .cmd-row { margin-top: 6px; }

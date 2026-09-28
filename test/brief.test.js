@@ -190,9 +190,29 @@ function briefPanel({ ai = true, comments = [], timeline = [] } = {}) {
   return { gh, panel, aiCalls: () => aiCalls };
 }
 
+test("opening a brief never calls the AI: it offers Generate, with likely files and owners from paths", async () => {
+  const { panel, aiCalls } = briefPanel();
+  await panel.fn.showIssueBrief({ ...baseIssue, title: "Timer drifts during launch countdown" });
+  assert.equal(aiCalls(), 0);
+  assert.match(panel.el("brief-ai").innerHTML, /Summary, where to start and a plan[\s\S]*brief-generate-btn">Generate[\s\S]*Likely files[\s\S]*src\/launch\/timer\.ts/);
+  assert.match(panel.el("brief-people").innerHTML, />ada<\/a>[\s\S]*Code owner/);
+});
+
+test("clicking Generate writes the brief once, even when clicked twice", async () => {
+  const { panel, aiCalls } = briefPanel();
+  await panel.fn.showIssueBrief(baseIssue);
+  const target = { closest: (sel) => (sel.includes("brief-generate-btn") ? {} : null) };
+  panel.fn.handleBriefClick({ target, preventDefault() {} });
+  panel.fn.handleBriefClick({ target, preventDefault() {} });
+  while (!panel.run("currentBrief().ai")) await tick(2);
+  assert.equal(aiCalls(), 2, "one file pick + one brief");
+  assert.match(panel.el("brief-ai").innerHTML, /Where to start/);
+});
+
 test("the brief renders availability, a cited AI plan, code owners and verify commands for 2 API requests", async () => {
   const { gh, panel } = briefPanel({ comments: [comment("bob", "MEMBER", "Timer bug, see tick()", 2)] });
   await panel.fn.showIssueBrief(baseIssue);
+  await panel.fn.generateIssueBriefAI();
 
   const body = panel.el("brief-body").innerHTML;
   assert.match(body, /availability-free[\s\S]*Looks free/);
@@ -214,6 +234,7 @@ test("the brief renders availability, a cited AI plan, code owners and verify co
 test("reopening a brief is instant: no new API requests or AI calls", async () => {
   const { gh, panel, aiCalls } = briefPanel();
   await panel.fn.showIssueBrief(baseIssue);
+  await panel.fn.generateIssueBriefAI();
   const [api, ai] = [gh.apiCalls.length, aiCalls()];
   panel.fn.closeIssueBrief();
   await panel.fn.showIssueBrief(baseIssue);
@@ -253,7 +274,8 @@ test("switching repos while the AI is writing never renders the brief into the o
   const panel = loadPanel({ fetch: gh.fetch });
   panel.setRepo();
   panel.run(`aiProvider = "groq"; aiApiKey = "gsk_test"`);
-  const pending = panel.fn.showIssueBrief(baseIssue);
+  await panel.fn.showIssueBrief(baseIssue);
+  const pending = panel.fn.generateIssueBriefAI();
   while (aiCalls < 2) await tick(2);   // the brief is now waiting on the AI
   panel.setRepo("other", "repo");
   panel.el("brief-ai").innerHTML = "OTHER";

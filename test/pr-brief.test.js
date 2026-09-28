@@ -186,8 +186,12 @@ test("the PR brief shows status, activity, files with owners and people for 5 AP
 
 test("the AI summary gets the whole conversation and the numbered diff, and cites the PR's head in the fork", async () => {
   let request;
-  const { panel } = prPanel({ onAI: (b) => { request = b; } });
+  const { panel, aiCalls } = prPanel({ onAI: (b) => { request = b; } });
   await panel.fn.showPrBrief(basePr);
+  assert.equal(aiCalls(), 0, "nothing is generated until asked");
+  assert.match(panel.el("pr-ai").innerHTML, /pr-generate-btn">Generate/);
+  await panel.fn.generatePrBriefAI();
+  assert.equal(aiCalls(), 1);
   const user = request.messages.find(m => m.role === "user").content;
   assert.match(request.messages[0].content, /## Conversation so far/);
   assert.match(user, /requested changes: Add a test please[\s\S]*Test added/);
@@ -208,11 +212,13 @@ test("without AI the PR brief still shows everything deterministic", async () =>
 test("reopening a PR brief is instant and a stale one never renders into another repo", async () => {
   const { gh, panel, aiCalls } = prPanel();
   await panel.fn.showPrBrief(basePr);
+  await panel.fn.generatePrBriefAI();
   const [api, ai] = [gh.apiCalls.length, aiCalls()];
   panel.fn.closePrBrief();
   await panel.fn.showPrBrief(basePr);
   assert.equal(gh.apiCalls.length, api);
   assert.equal(aiCalls(), ai);
+  assert.match(panel.el("pr-ai").innerHTML, /What this PR does/, "the generated summary is kept");
 
   const other = prPanel();
   const pending = other.panel.fn.showPrBrief(basePr);

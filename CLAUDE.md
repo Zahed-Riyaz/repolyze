@@ -9,7 +9,8 @@ A Chrome (Manifest V3) side-panel extension that helps someone contribute to a G
 **Repo detection & navigation**
 - FR-1 Detect the repository in the active tab of the panel's window (URL changes and tab switches); ignore background tabs and other windows.
 - FR-2 Show a welcome screen on non-repo pages; keep Settings reachable there.
-- FR-3 When the active tab is a pull request page (`/pull/123`, incl. Files/Commits tabs), open that PR's brief on the Contribute tab; close it when leaving the PR if it was opened that way.
+- FR-3 When the active tab is a pull request page (`/pull/123`, incl. Files/Commits tabs), open that PR's brief on the Contribute tab; on an issue page (`/issues/12`), open that issue's brief on the Issues tab. Close it when leaving the page if it was opened that way.
+- FR-3a AI sections of briefs (issue and PR) never run on open — they spend the user's AI credits, so the brief shows a **Generate** button and only the deterministic parts until it's clicked; a generated summary is cached for the session.
 
 **Issues tab**
 - FR-4 List open issues (unassigned by default), sortable by most discussed / newest / recently updated, paged with "Load more".
@@ -50,6 +51,7 @@ All API paths below are relative to `https://api.github.com/repos/{owner}/{repo}
 |---|---|
 | `github.com/{owner}/{repo}/…` | That repo is loaded into the panel. |
 | `github.com/{owner}/{repo}/pull/{n}` (also `/files`, `/commits`) | Repo loaded **and** PR #n's brief opens on the Contribute tab. |
+| `github.com/{owner}/{repo}/issues/{n}` | Repo loaded **and** issue #n's brief opens on the Issues tab (`GET /issues/{n}` unless it's in the loaded list). |
 | `github.com/explore`, `/settings`, `/notifications`, … or any non-GitHub page | Welcome screen (not a repo). |
 
 **Repo-level data**
@@ -124,7 +126,8 @@ Where it's used:
 
 | Area | Requirement |
 |---|---|
-| **API budget** | Opening a repo costs 2 GitHub requests; other tabs load lazily on first view; reopening the panel costs 0 (session cache); chat costs 0 (file contents come from `raw.githubusercontent.com`); an issue brief costs 2, a PR brief 5. |
+| **API budget** | Opening a repo costs 2 GitHub requests; other tabs load lazily on first view; reopening the panel costs 0 (session cache); chat costs 0 (file contents come from `raw.githubusercontent.com`); an issue brief costs 2 (3 when opened from its page), a PR brief 5. |
+| **AI budget** | No AI call happens without a user action: chat on send, briefs on **Generate**. Opening a brief — from a list or by following the page — costs 0 AI credits. |
 | **Rate-limit resilience** | Never collect raw 403s: stop requesting when the core quota is spent, serve stale cache instead of failing, track the search quota separately, honour `Retry-After` for secondary limits (not the hourly reset), auto-reload failed tabs when the window resets or a token is added. |
 | **Correctness under navigation** | Every async render is guarded by the repo it started for (`isCurrentRepo(key)`); briefs are guarded by an active token so a stale response never renders into another repo or brief. |
 | **Privacy** | No backend and no telemetry. Keys and chat history live in `chrome.storage.local`; GitHub responses in `chrome.storage.session`. The GitHub token is only ever sent to `api.github.com`. Repo content is sent only to the AI provider the user chose. |
@@ -133,7 +136,7 @@ Where it's used:
 | **Performance** | Local ranking of 100k paths ≈ 150 ms; file reads in parallel; skeletons instead of layout jumps; streaming AI output. |
 | **Accessibility** | Keyboard-reachable controls with visible focus rings, ARIA roles on tabs/status, `prefers-reduced-motion` respected, theme-aware label contrast. |
 | **Compatibility** | Chrome with the Side Panel API (MV3); works at narrow panel widths (tab icons hide below 480px via a container query); light and dark themes follow the OS. |
-| **Maintainability** | Plain JS, no build step; pure logic separated from rendering and unit-tested; 142 tests (`npm test`, ~3s) run in CI on every push. |
+| **Maintainability** | Plain JS, no build step; pure logic separated from rendering and unit-tested; 147 tests (`npm test`, ~3s) run in CI on every push. |
 | **Cost** | Zero infrastructure cost; users bring their own AI key (free tiers on Groq/Gemini, free local Ollama). |
 
 ---
@@ -156,10 +159,10 @@ Where it's used:
 9. `callAIStreaming()` → `providerBody()` builds the request for the selected provider → tokens stream into the bubble → citations to files actually read are linkified → the message and its sources are saved to the repo that asked.
 
 **Start this issue**
-10. Load the issue's comments + timeline (2 requests), CI commands (`loadVerifyCommands`, raw files) and CODEOWNERS → `issueAvailability()` verdict renders instantly → chat-style retrieval for the issue → AI brief streams in → owners of the cited files are resolved.
+10. Load the issue's comments + timeline (2 requests), CI commands (`loadVerifyCommands`, raw files) and CODEOWNERS → `issueAvailability()` verdict, likely files (path ranking) and their owners render instantly → on **Generate**: chat-style retrieval for the issue → AI brief streams in → owners of the cited files are resolved.
 
 **Understand this PR**
-11. Load PR detail, then timeline, review comments, files and check runs (5 requests, paged with a token) → `prStatus()` verdict, activity, files and people render instantly → `prEventLog()` (every event, bodies shortened evenly to fit) + `prDiffContext()` (numbered diffs, most-discussed first) → AI summary streams in, citations link to the head commit (in the author's fork if it is one).
+11. Load PR detail, then timeline, review comments, files and check runs (5 requests, paged with a token) → `prStatus()` verdict, activity, files and people render instantly → on **Generate**: `prEventLog()` (every event, bodies shortened evenly to fit) + `prDiffContext()` (numbered diffs, most-discussed first) → AI summary streams in, citations link to the head commit (in the author's fork if it is one).
 
 **Rate limits & tokens**
 12. Response headers update `ghState` → `renderRateLimit()` updates the badge/banner and a countdown; at reset (or after a token is saved and validated via `/rate_limit`), `reloadCurrentRepo()` re-runs what's visible, deferring until the user is back on a repo page.
@@ -253,4 +256,4 @@ Where it's used:
 
 ## 8. Summary
 
-GitHub Repo Analyzer is a backend-free Chrome side panel that turns "a repo I've never seen" into "a contribution I can start today". It finds issues that are genuinely available across the whole repo, briefs each one (is it free, where to start, who to ask, what CI will run), explains pull requests including their full conversation and status, surfaces the people who actually maintain the project, scores contributor-friendliness from measured signals, and answers questions from the repo's real source code with line-level citations. Everything is computed client-side from the GitHub API — carefully budgeted, cached and rate-limit-aware — with the user's own AI provider adding summaries on top of deterministic, verifiable data. It's plain JavaScript with no build step, a token-based light/dark design built for a narrow panel, and 142 tests running in CI.
+GitHub Repo Analyzer is a backend-free Chrome side panel that turns "a repo I've never seen" into "a contribution I can start today". It finds issues that are genuinely available across the whole repo, briefs each one (is it free, where to start, who to ask, what CI will run), explains pull requests including their full conversation and status, surfaces the people who actually maintain the project, scores contributor-friendliness from measured signals, and answers questions from the repo's real source code with line-level citations. Everything is computed client-side from the GitHub API — carefully budgeted, cached and rate-limit-aware — with the user's own AI provider adding summaries on top of deterministic, verifiable data. It's plain JavaScript with no build step, a token-based light/dark design built for a narrow panel, and 147 tests running in CI.

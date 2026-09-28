@@ -4,11 +4,13 @@
 //   • What / where / plan   AI summary grounded in the repo's code (cited)
 //   • Who to ask       CODEOWNERS for the files involved + maintainers in the thread
 //   • Run before opening a PR   the checks CI will run (workflow + package.json)
-// Everything except the AI section is deterministic and shows instantly.
-// Cost: 2 API requests (issue comments + timeline); files come from raw reads.
+// Everything except the AI section is deterministic and shows instantly; the AI
+// section spends the user's AI credits, so it only runs when they click Generate.
+// Cost: 2 API requests (issue comments + timeline), plus the issue itself when
+// opened from its page; files come from raw reads.
 
 const issueIndex = new Map(); // issue number → issue object from the current list
-let activeBrief = null;       // { key, number, token } of the brief on screen
+let activeBrief = null;       // { key, number, token, auto } of the brief on screen
 
 // ── Pure logic ───────────────────────────────────────────────────────────────
 // CODEOWNERS pattern → RegExp, following gitignore-style rules: a leading or
@@ -269,41 +271,57 @@ function closeIssueBrief() {
   document.getElementById("issues-browse").hidden = false;
 }
 
-async function showIssueBrief(issue, { regenerate = false } = {}) {
+// Takes the issue from the list, or just its number (opened from its GitHub
+// page), in which case the issue itself is fetched too.
+async function showIssueBrief(issueOrNumber, { auto = false } = {}) {
+  const listIssue = typeof issueOrNumber === "object" ? issueOrNumber : issueIndex.get(Number(issueOrNumber)) || null;
+  const number = Number(listIssue ? listIssue.number : issueOrNumber);
   const repo = currentRepo;
   const key = repoKey(repo);
   const token = {};
-  activeBrief = { key, number: issue.number, token };
+  activeBrief = { key, number, token, auto };
   const live = () => activeBrief?.token === token && isCurrentRepo(key);
 
   document.getElementById("issues-browse").hidden = true;
   document.getElementById("issue-brief").hidden = false;
   document.getElementById("tab-content").scrollTop = 0;
   const body = document.getElementById("brief-body");
-  body.innerHTML = briefHeaderHtml(issue) + `<div class="card">${skeletonList(3)}</div>`;
+  const placeholder = () => (listIssue ? briefHeaderHtml(listIssue) : `<div class="brief-head"><span class="brief-title"><span class="issue-number">#${number}</span> Loading issue…</span></div>`);
+  body.innerHTML = placeholder() + `<div class="card">${skeletonList(3)}</div>`;
 
   const briefs = (cacheFor(key).briefs ??= {});
   try {
-    let brief = briefs[issue.number];
+    let brief = briefs[number];
     if (!brief) {
-      const [{ comments, timeline }, commands, owners] = await Promise.all([
-        loadIssueThread(repo, issue.number),
+      const [issue, { comments, timeline }, commands, owners] = await Promise.all([
+        listIssue || fetchGitHub(`/issues/${number}`, repo),
+        loadIssueThread(repo, number),
         loadVerifyCommands(repo).catch(() => []),
         loadCodeOwners(repo).catch(() => ({ rules: [] })),
       ]);
-      brief = briefs[issue.number] = {
+      if (issue.pull_request) {
+        if (live()) body.innerHTML = placeholder() + stateItem(`#${number} is a pull request — its brief is on the Contribute tab.`, { tag: "div" });
+        return;
+      }
+      // Path matches stand in for the AI's sources until (or unless) it runs,
+      // so "Who to ask" works without spending AI credits
+      const files = await likelyFiles(repo, issue).catch(() => []);
+      brief = briefs[number] = {
         issue, comments, commands, codeOwnerRules: owners.rules,
         availability: issueAvailability(issue, comments, timeline, Date.now()),
-        ai: null, people: null,
+        likelyFiles: files, people: briefPeople(files, owners.rules, comments),
+        ai: null, generating: null,
       };
     }
-    if (regenerate) brief.ai = null;
     if (!live()) return;
-    renderBrief(repo, issue, brief);
-    if (!brief.ai) await generateBriefAI(repo, issue, brief, live);
+    renderBrief(repo, brief.issue, brief);
     return brief;
   } catch (err) {
-    if (live()) body.innerHTML = briefHeaderHtml(issue) + errorState(err, "div");
+    if (!live()) return;
+    const notFound = err.status === 404
+      ? stateItem(`There's no issue #${number} in ${escapeHtml(repo.owner)}/${escapeHtml(repo.repo)}.`, { tag: "div" })
+      : errorState(err, "div");
+    body.innerHTML = placeholder() + notFound;
   }
 }
 
@@ -347,32 +365,71 @@ function renderBrief(repo, issue, brief) {
     </section>
     <section class="brief-section">
       <h2 class="section-title">Who to ask</h2>
-      <div id="brief-people"><p class="brief-note">Working out which files are involved…</p></div>
+      <div id="brief-people"></div>
     </section>
     <section class="brief-section">
       <h2 class="section-title">Run before opening a PR</h2>
       ${commands}
     </section>`;
   if (brief.ai) renderBriefAI(repo, brief);
-  if (brief.people) renderBriefPeople(brief.people);
+  else if (brief.generating === activeBrief?.token) setAIStatus(document.getElementById("brief-ai"), "Writing the brief…");
+  else document.getElementById("brief-ai").innerHTML = briefAIPlaceholderHtml(repo, brief);
+  renderBriefPeople(brief.people);
 }
 
-async function generateBriefAI(repo, issue, brief, live) {
+// ── On-demand AI ─────────────────────────────────────────────────────────────
+// The AI part of a brief (issue or PR) spends the user's AI credits, so it
+// never runs just because a brief opened — the user asks for it.
+function aiConfigured() {
+  return aiProvider === "ollama" || !!aiApiKey;
+}
+
+function generateCardHtml(what, btnClass) {
+  return `<div class="brief-generate">
+    <span class="brief-generate-icon">${icon("sparkles", "icon-sm")}</span>
+    <div class="brief-generate-text"><strong>${what}</strong><span>Uses your AI provider</span></div>
+    <button class="btn btn-primary btn-xs ${btnClass}">Generate</button>
+  </div>`;
+}
+
+function aiSetupNoteHtml(what) {
+  return `<p class="brief-note">Add an AI provider in <a href="#" class="brief-open-settings">Settings</a> for ${what}.</p>`;
+}
+
+function setAIStatus(el, text) {
+  el.innerHTML = `<div class="brief-status"><div class="typing-dots"><span></span><span></span><span></span></div>${escapeHtml(text)}</div>`;
+}
+
+function aiErrorHtml(err, retryClass) {
+  const msg = err.message === "OLLAMA_NOT_RUNNING" ? "Ollama isn't running — start it and try again."
+    : err.message === "OLLAMA_CORS" ? "Ollama is blocking the extension — restart it with OLLAMA_ORIGINS='*'." : err.message;
+  return stateItem(`${escapeHtml(msg)} <button class="btn btn-xs ${retryClass}">Try again</button>`, { error: !err.rateLimited, iconName: err.rateLimited ? "clock" : "alert", tag: "div" });
+}
+
+// Before the AI runs: the Generate button (or how to set up a provider) and
+// the files that match the issue by path
+function briefAIPlaceholderHtml(repo, brief) {
+  const files = brief.likelyFiles || [];
+  return `
+    ${aiConfigured() ? generateCardHtml("Summary, where to start and a plan", "brief-generate-btn") : aiSetupNoteHtml("a summary, the code to change and a plan")}
+    ${files.length ? `<h2 class="section-title">Likely files</h2><ul class="brief-files">${files.map(f => `<li><a href="${sourceUrl(repo, null, f)}" target="_blank"><code>${escapeHtml(f)}</code></a></li>`).join("")}</ul>` : ""}`;
+}
+
+// Generate (or retry) the AI part of the issue brief on screen
+function generateIssueBriefAI() {
+  const brief = currentBrief();
+  if (!brief || !currentRepo || !aiConfigured()) return;
+  const { key, token } = activeBrief;
+  if (brief.generating === token) return; // already running for this view
+  const live = () => activeBrief?.token === token && isCurrentRepo(key);
+  return generateBriefAI(currentRepo, brief.issue, brief, live, token);
+}
+
+async function generateBriefAI(repo, issue, brief, live, token) {
   const aiEl = () => document.getElementById("brief-ai");
-  const setStatus = (text) => { if (live()) aiEl().innerHTML = `<div class="brief-status"><div class="typing-dots"><span></span><span></span><span></span></div>${escapeHtml(text)}</div>`; };
-
-  if (aiProvider !== "ollama" && !aiApiKey) {
-    // No AI: still point at likely files (by path) so "who to ask" works
-    const files = await likelyFiles(repo, issue).catch(() => []);
-    brief.people = briefPeople(files, brief.codeOwnerRules, brief.comments);
-    if (!live()) return;
-    aiEl().innerHTML = `
-      <p class="brief-note">Add an AI provider in <a href="#" class="brief-open-settings">Settings</a> for a summary, the code to change and a plan.</p>
-      ${files.length ? `<h2 class="section-title">Likely files</h2><ul class="brief-files">${files.map(f => `<li><a href="${sourceUrl(repo, null, f)}" target="_blank"><code>${escapeHtml(f)}</code></a></li>`).join("")}</ul>` : ""}`;
-    renderBriefPeople(brief.people);
-    return;
-  }
-
+  const setStatus = (text) => { if (live()) setAIStatus(aiEl(), text); };
+  brief.generating = token;
+  setStatus("Reading the code…");
   try {
     const { context, sources, ref } = await buildChatContext(repo, `${issue.title}\n${(issue.body || "").slice(0, 600)}`, null, setStatus);
     if (!live()) return;
@@ -383,17 +440,14 @@ async function generateBriefAI(repo, issue, brief, live) {
     }, { system });
     brief.ai = { text, sources, ref };
     const files = [...new Set(sources.map(s => s.path))];
-    brief.people = briefPeople(files.length ? files : await likelyFiles(repo, issue).catch(() => []), brief.codeOwnerRules, brief.comments);
+    if (files.length) brief.people = briefPeople(files, brief.codeOwnerRules, brief.comments);
     if (!live()) return;
     renderBriefAI(repo, brief);
     renderBriefPeople(brief.people);
   } catch (err) {
-    if (!live()) return;
-    const msg = err.message === "OLLAMA_NOT_RUNNING" ? "Ollama isn't running — start it and try again."
-      : err.message === "OLLAMA_CORS" ? "Ollama is blocking the extension — restart it with OLLAMA_ORIGINS='*'." : err.message;
-    aiEl().innerHTML = stateItem(`${escapeHtml(msg)} <button class="btn btn-xs brief-retry">Try again</button>`, { error: !err.rateLimited, iconName: err.rateLimited ? "clock" : "alert", tag: "div" });
-    brief.people ??= briefPeople(await likelyFiles(repo, issue).catch(() => []), brief.codeOwnerRules, brief.comments);
-    renderBriefPeople(brief.people);
+    if (live()) aiEl().innerHTML = aiErrorHtml(err, "brief-retry");
+  } finally {
+    if (brief.generating === token) brief.generating = null;
   }
 }
 
@@ -442,9 +496,8 @@ function handleBriefClick(e) {
     });
     return;
   }
-  if (target.closest?.(".brief-retry") && activeBrief) {
-    const brief = cacheFor(activeBrief.key).briefs?.[activeBrief.number];
-    if (brief) showIssueBrief(brief.issue, { regenerate: true });
+  if (target.closest?.(".brief-generate-btn, .brief-retry")) {
+    generateIssueBriefAI();
     return;
   }
   if (target.closest?.(".brief-open-settings")) {

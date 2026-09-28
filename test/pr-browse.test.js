@@ -40,10 +40,13 @@ test("parsePrQuery understands numbers, PR links and keywords", () => {
   assert.equal(pure.parsePrQuery("   ", repo), null);
 });
 
-test("prNumberFromPath only matches PR pages", () => {
-  assert.equal(pure.prNumberFromPath(["o", "r", "pull", "42", "files"]), 42);
-  assert.equal(pure.prNumberFromPath(["o", "r", "pull", "42"]), 42);
-  for (const parts of [["o", "r"], ["o", "r", "pulls"], ["o", "r", "issues", "42"], ["o", "r", "pull", "new"]]) assert.equal(pure.prNumberFromPath(parts), null, parts.join("/"));
+test("briefPageFromPath matches PR and issue pages only", () => {
+  assert.deepEqual(plain(pure.briefPageFromPath(["o", "r", "pull", "42", "files"])), { kind: "pr", number: 42 });
+  assert.deepEqual(plain(pure.briefPageFromPath(["o", "r", "pull", "42"])), { kind: "pr", number: 42 });
+  assert.deepEqual(plain(pure.briefPageFromPath(["o", "r", "issues", "7"])), { kind: "issue", number: 7 });
+  for (const parts of [["o", "r"], ["o", "r", "pulls"], ["o", "r", "issues"], ["o", "r", "issues", "new"], ["o", "r", "pull", "new"], ["o", "r", "discussions", "5"]]) {
+    assert.equal(pure.briefPageFromPath(parts), null, parts.join("/"));
+  }
 });
 
 test("closed PRs get honest verdicts: merged vs closed without merging", () => {
@@ -159,6 +162,58 @@ test("a brief you opened yourself stays when you navigate around the repo", asyn
   panel.fn.handleRepoRefresh("https://github.com/o/r/issues");
   assert.equal(panel.el("pr-brief").hidden, false);
   assert.equal(panel.run("activePrBrief.number"), 42);
+});
+
+const issue = (number, extra = {}) => ({
+  number, title: `Issue ${number}`, state: "open", user: user("reporter"), html_url: `https://github.com/o/r/issues/${number}`,
+  created_at: iso(5), updated_at: iso(1), body: "", labels: [], comments: 0, assignees: [], ...extra,
+});
+const issueRoutes = (n, extra) => ({
+  [`/issues/${n}`]: issue(n, extra),
+  [`/issues/${n}/comments?per_page=100`]: [],
+  [`/issues/${n}/timeline?per_page=100`]: [],
+});
+
+test("opening an issue page opens its brief on the Issues tab, fetching the issue once", async () => {
+  const { gh, panel } = panelWith(issueRoutes(7), { repo: false });
+  panel.fn.handleRepoRefresh("https://github.com/o/r/pull/42");
+  await tick(10);
+  panel.fn.handleRepoRefresh("https://github.com/o/r/issues/7");
+  await tick(10);
+  assert.equal(panel.run("lastContentTab"), "issues");
+  assert.equal(panel.el("issue-brief").hidden, false);
+  assert.equal(panel.run("activeBrief.number"), 7);
+  assert.equal(panel.run("activeBrief.auto"), true);
+  assert.match(panel.el("brief-body").innerHTML, /Issue 7/);
+  assert.equal(panel.el("pr-brief").hidden, true, "the PR brief it left behind closes");
+  assert.equal(gh.apiCalls.filter(u => u === "/issues/7").length, 1);
+
+  panel.fn.handleRepoRefresh("https://github.com/o/r");
+  assert.equal(panel.el("issue-brief").hidden, true, "leaving the issue closes its auto-opened brief");
+});
+
+test("an issue page that turns out to be a PR, or a missing issue, gets a clear message", async () => {
+  const { panel } = panelWith({ ...issueRoutes(8, { pull_request: { url: "x" } }), "/issues/999": json({ message: "Not Found" }, { status: 404 }),
+    "/issues/999/comments?per_page=100": [], "/issues/999/timeline?per_page=100": [] });
+  await panel.fn.showIssueBrief(8);
+  assert.match(panel.el("brief-body").innerHTML, /#8 is a pull request/);
+  await panel.fn.showIssueBrief(999);
+  assert.match(panel.el("brief-body").innerHTML, /There's no issue #999 in o\/r/);
+});
+
+test("auto-opened briefs never call the AI — they offer a Generate button", async () => {
+  let aiCalls = 0;
+  const gh = githubMock({ "": { default_branch: "main" }, "/git/trees/HEAD?recursive=1": { tree: [] }, ...detailRoutes(42), ...issueRoutes(7) },
+    { ai: async () => { aiCalls++; throw new Error("AI must not be called"); } });
+  const panel = loadPanel({ fetch: gh.fetch });
+  panel.run(`aiProvider = "groq"; aiApiKey = "gsk_test"`);
+  panel.fn.handleRepoRefresh("https://github.com/o/r/issues/7");
+  await tick(20);
+  assert.match(panel.el("brief-ai").innerHTML, /class="btn btn-primary btn-xs brief-generate-btn">Generate/);
+  panel.fn.handleRepoRefresh("https://github.com/o/r/pull/42");
+  await tick(20);
+  assert.match(panel.el("pr-ai").innerHTML, /class="btn btn-primary btn-xs pr-generate-btn">Generate/);
+  assert.equal(aiCalls, 0);
 });
 
 test("the same PR number in a different repo still opens", async () => {

@@ -4,7 +4,8 @@
 //   • Summary (AI)      what it does, how, the whole conversation in order —
 //                       every decision and request kept — and what's still open
 //   • Activity, files changed (+ code owners), people involved
-// Deterministic parts show instantly; the AI summary streams in after.
+// Deterministic parts show instantly; the AI summary spends the user's AI
+// credits, so it only runs (and streams in) when they click Generate.
 // Cost: 5 API requests (PR, timeline, review comments, files, check runs).
 
 const prIndex = new Map(); // PR number → PR object from the Contribute list
@@ -315,7 +316,7 @@ function closePrBrief() {
   document.getElementById("contribute-browse").hidden = false;
 }
 
-async function showPrBrief(prOrNumber, { regenerate = false, auto = false } = {}) {
+async function showPrBrief(prOrNumber, { auto = false } = {}) {
   const listPr = typeof prOrNumber === "object" ? prOrNumber : null;
   const number = Number(listPr ? listPr.number : prOrNumber);
   const repo = currentRepo;
@@ -340,13 +341,11 @@ async function showPrBrief(prOrNumber, { regenerate = false, auto = false } = {}
       brief = briefs[number] = {
         ...data, checks, codeOwnerRules: owners.rules,
         status: prStatus(data.pr, data.timeline, checks, Date.now()),
-        ai: null,
+        ai: null, generating: null,
       };
     }
-    if (regenerate) brief.ai = null;
     if (!live()) return;
     renderPrBrief(repo, brief);
-    if (!brief.ai) await generatePrSummary(repo, brief, live);
     return brief;
   } catch (err) {
     if (!live()) return;
@@ -440,17 +439,28 @@ function renderPrBrief(repo, brief) {
       ${owners.length ? `<p class="brief-note">Code owners of the changed files: ${owners.map(o => `<code>${escapeHtml(o)}</code>`).join(" ")}</p>` : ""}
       ${!people.length && !owners.length ? `<p class="brief-note">No reviewers yet.</p>` : ""}
     </section>`;
+  const aiEl = document.getElementById("pr-ai");
   if (brief.ai) renderPrSummary(repo, brief);
+  else if (brief.generating === activePrBrief?.token) setAIStatus(aiEl, "Writing the summary…");
+  else aiEl.innerHTML = aiConfigured()
+    ? generateCardHtml("Summary of the change and the conversation so far", "pr-generate-btn")
+    : aiSetupNoteHtml("a summary of what the PR does and the conversation so far");
 }
 
-async function generatePrSummary(repo, brief, live) {
-  const aiEl = () => document.getElementById("pr-ai");
-  const setStatus = (text) => { if (live()) aiEl().innerHTML = `<div class="brief-status"><div class="typing-dots"><span></span><span></span><span></span></div>${escapeHtml(text)}</div>`; };
+// Generate (or retry) the AI summary of the PR brief on screen
+function generatePrBriefAI() {
+  const brief = currentPrBrief();
+  if (!brief || !currentRepo || !aiConfigured()) return;
+  const { key, token } = activePrBrief;
+  if (brief.generating === token) return; // already running for this view
+  const live = () => activePrBrief?.token === token && isCurrentRepo(key);
+  return generatePrSummary(currentRepo, brief, live, token);
+}
 
-  if (aiProvider !== "ollama" && !aiApiKey) {
-    aiEl().innerHTML = `<p class="brief-note">Add an AI provider in <a href="#" class="brief-open-settings">Settings</a> for a summary of what the PR does and the conversation so far.</p>`;
-    return;
-  }
+async function generatePrSummary(repo, brief, live, token) {
+  const aiEl = () => document.getElementById("pr-ai");
+  const setStatus = (text) => { if (live()) setAIStatus(aiEl(), text); };
+  brief.generating = token;
   try {
     setStatus("Reading the conversation and the diff…");
     const budget = CONTEXT_BUDGET[aiProvider] || 20000;
@@ -463,10 +473,9 @@ async function generatePrSummary(repo, brief, live) {
     brief.ai = { text, shortened: eventLog.shortened };
     if (live()) renderPrSummary(repo, brief);
   } catch (err) {
-    if (!live()) return;
-    const msg = err.message === "OLLAMA_NOT_RUNNING" ? "Ollama isn't running — start it and try again."
-      : err.message === "OLLAMA_CORS" ? "Ollama is blocking the extension — restart it with OLLAMA_ORIGINS='*'." : err.message;
-    aiEl().innerHTML = stateItem(`${escapeHtml(msg)} <button class="btn btn-xs pr-retry">Try again</button>`, { error: !err.rateLimited, iconName: err.rateLimited ? "clock" : "alert", tag: "div" });
+    if (live()) aiEl().innerHTML = aiErrorHtml(err, "pr-retry");
+  } finally {
+    if (brief.generating === token) brief.generating = null;
   }
 }
 
@@ -482,9 +491,8 @@ function renderPrSummary(repo, brief) {
 
 function handlePrBriefClick(e) {
   const target = e.target;
-  if (target.closest?.(".pr-retry") && activePrBrief) {
-    const brief = currentPrBrief();
-    if (brief) showPrBrief(brief.pr, { regenerate: true });
+  if (target.closest?.(".pr-generate-btn, .pr-retry")) {
+    generatePrBriefAI();
     return;
   }
   if (target.closest?.(".brief-open-settings")) {
@@ -637,27 +645,4 @@ function findPr(text) {
   if (q.number) { showPrBrief(q.number); return; }
   prView.query = q.terms;
   fetchPrList();
-}
-
-// ── Following the PR page the user is on ─────────────────────────────────────
-// Opening github.com/o/r/pull/123 (or its Files/Commits tabs) opens that PR's
-// brief. Moving between the same PR's tabs doesn't reopen or reload it (so
-// closing it sticks), and leaving the PR closes a brief that was opened this way.
-let pagePr = null; // "owner/repo#123" of the PR page in the active tab
-
-function prNumberFromPath(pathParts) {
-  return pathParts[2] === "pull" && /^\d+$/.test(pathParts[3] || "") ? Number(pathParts[3]) : null;
-}
-
-function syncPrBriefWithPage(prNumber) {
-  const pageKey = prNumber && currentRepo ? `${repoKey()}#${prNumber}` : null;
-  if (pageKey === pagePr) return;
-  const leaving = pagePr;
-  pagePr = pageKey;
-  if (pageKey) {
-    switchTab("contribute");
-    showPrBrief(prNumber, { auto: true });
-  } else if (leaving && activePrBrief?.auto && `${activePrBrief.key}#${activePrBrief.number}` === leaving) {
-    closePrBrief();
-  }
 }
