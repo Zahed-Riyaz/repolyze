@@ -31,7 +31,7 @@ A Chrome extension that gives you an AI-powered side panel for any GitHub reposi
 | Tab | What it does |
 |---|---|
 | **Issues** | Open issues with sort (most discussed / newest / recently updated) and paging. **Good first** and **Help wanted** search *every* open issue using the repo's real label names (`good-first-issue`, `E-easy`, `first-timers-only`, …) and show the total. **Unclaimed** hides assigned issues and, for label filters, ones with a linked PR — and says so when that hides everything. |
-| **Start this issue** | Every issue card opens a brief: **is it free?** (assignees, open/merged/closed PRs that reference it, "I'll take this" comments, whether a maintainer has replied), **what's being asked, where to start and a plan** (AI, citing the code as `path:line`), **who to ask** (CODEOWNERS for the files involved + maintainers in the thread) and **what to run before opening a PR** (the checks CI will run, from the workflow and `package.json`). Works without an AI key too — availability, likely files, owners and commands are all deterministic. Costs 2 API requests. |
+| **Start this issue** | Every issue card opens a brief: **is it free?** (assignees, open/merged/closed PRs that reference it, "I'll take this" comments, whether a maintainer has replied), **why earlier attempts failed** (PRs for the issue that were closed without merging — went stale, superseded, declined, withdrawn after review or closed by a maintainer — with the maintainers' feedback quoted, and fed to the AI as lessons), **what's being asked, where to start and a plan** (AI, citing the code as `path:line`), **who to ask** (CODEOWNERS for the files involved + maintainers in the thread) and **what to run before opening a PR** (the checks CI will run, from the workflow and `package.json`). Works without an AI key too — availability, likely files, owners, earlier attempts and commands are all deterministic. Costs 2 API requests, plus 1 per earlier failed PR (at most 3). |
 | **Stack** | Shows languages used (from GitHub's language breakdown) with percentage bars. |
 | **Maintainers** | **Active maintainers**: people GitHub marks as owner / org member / collaborator who actually replied on issues or PRs in the last 90 days, ranked by threads answered, merged with `CODEOWNERS` (including code-owner teams). All-time top committers are listed below for context. |
 | **Contribute** | A contributor-friendliness score built from measured signals — each shown with what it measured (see [Health Score](#health-score)) — plus **every pull request**: switch between open and closed (paged), or use **Find** with a PR number, a PR link or keywords (searches all PRs). **Opening a PR on GitHub opens its brief automatically** (including its Files/Commits tabs); leaving the PR closes it again. Each PR has **Understand this PR**: where it stands (reviews, commits since review, CI checks, conflicts, staleness — or merged / closed without merging), an AI summary of what it does and **the whole conversation in order** — every decision, request and inline review thread kept, with what's still open — plus the activity, files changed (with code owners) and people involved. Costs 5 API requests. |
@@ -342,7 +342,7 @@ A token (no scopes needed for public repos) raises the limit to 5,000/hour. It's
 ## Running Tests
 
 ```bash
-npm test          # 142 unit + flow tests, ~3s, no dependencies (Node 22+)
+npm test          # 149 unit + flow tests, ~3s, no dependencies (Node 22+)
 npm run check     # syntax-check every script
 ```
 

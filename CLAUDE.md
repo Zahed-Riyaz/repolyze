@@ -15,7 +15,7 @@ A Chrome (Manifest V3) side-panel extension that helps someone contribute to a G
 - FR-4 List open issues (unassigned by default), sortable by most discussed / newest / recently updated, paged with "Load more".
 - FR-5 "Good first" and "Help wanted" filters search *all* open issues via the search API, matched against the repo's real label names (spelling variants included), showing the total.
 - FR-6 "Unclaimed" toggle hides assigned issues and, for label filters, issues with a linked PR; when that hides everything, say so and offer to show them.
-- FR-7 **Start this issue** brief per issue: availability verdict (assignees, PRs referencing it, "I'll take this" comments, maintainer replies), AI summary / where to start / plan / questions (cited `path:line`), who to ask (CODEOWNERS + maintainers in the thread), and **Run before opening a PR** (commands from CI and `package.json`). Works without AI except the summary.
+- FR-7 **Start this issue** brief per issue: availability verdict (assignees, PRs referencing it, "I'll take this" comments, maintainer replies), **Earlier attempts** (why PRs for the issue were closed without merging: stale, superseded, declined, withdrawn or closed by a maintainer, with the maintainers' feedback quoted), AI summary / where to start / plan / lessons from earlier attempts / questions (cited `path:line`), who to ask (CODEOWNERS + maintainers in the thread), and **Run before opening a PR** (commands from CI and `package.json`). Works without AI except the summary.
 
 **Stack tab**
 - FR-8 Language breakdown (GitHub linguist colours) and detected tools/services (containers, CI, cloud, databases, testing…).
@@ -70,6 +70,7 @@ All API paths below are relative to `https://api.github.com/repos/{owner}/{repo}
 | Unclaimed beginner-issue count (health score) | Same search with `per_page=1`, reading `total_count`. |
 | Issue brief: discussion + claims | `GET /issues/{n}/comments?per_page=100` |
 | Issue brief: linked/referencing PRs, assignment history | `GET /issues/{n}/timeline?per_page=100` (`cross-referenced` events whose source has `pull_request`) |
+| Issue brief: why earlier PRs failed | `GET /issues/{pr}/timeline?per_page=100` for each closed-unmerged PR in this repo that references the issue (newest 3): `closed` actor, labels, maintainer reviews/comments, commits after a change request |
 | Maintainer replies & response times | `GET /issues/comments?sort=created&direction=desc&since={90 days, day-aligned}&per_page=100&page={1–3}` (`author_association` identifies OWNER/MEMBER/COLLABORATOR) and `GET /issues?state=all&sort=created&direction=desc&per_page=50` |
 
 **Pull requests**
@@ -114,9 +115,9 @@ The extension uses **retrieval-augmented generation**: before the AI answers, it
 
 Where it's used:
 - **Chat** — the full pipeline above, per question (follow-ups carry the previous files).
-- **Start this issue** — the same pipeline with the issue's title and body as the query; the AI writes the brief from the retrieved code plus the issue discussion.
+- **Start this issue** — the same pipeline with the issue's title and body as the query; the AI writes the brief from the retrieved code plus the issue discussion and the earlier failed PRs (`<earlier_attempts>`).
 - **Understand this PR** — grounded generation without the retrieval step: the "retrieved" context is the PR itself (every timeline event, review thread and numbered diff), packed to fit the budget.
-- **Not used** for availability verdicts, PR status, the health score, maintainers or CI commands — those are computed deterministically from GitHub data, so they're consistent and work without AI.
+- **Not used** for availability verdicts, earlier-attempt outcomes, PR status, the health score, maintainers or CI commands — those are computed deterministically from GitHub data, so they're consistent and work without AI.
 
 ---
 
@@ -124,7 +125,7 @@ Where it's used:
 
 | Area | Requirement |
 |---|---|
-| **API budget** | Opening a repo costs 2 GitHub requests; other tabs load lazily on first view; reopening the panel costs 0 (session cache); chat costs 0 (file contents come from `raw.githubusercontent.com`); an issue brief costs 2, a PR brief 5. |
+| **API budget** | Opening a repo costs 2 GitHub requests; other tabs load lazily on first view; reopening the panel costs 0 (session cache); chat costs 0 (file contents come from `raw.githubusercontent.com`); an issue brief costs 2 (+1 per earlier failed PR, at most 3), a PR brief 5. |
 | **Rate-limit resilience** | Never collect raw 403s: stop requesting when the core quota is spent, serve stale cache instead of failing, track the search quota separately, honour `Retry-After` for secondary limits (not the hourly reset), auto-reload failed tabs when the window resets or a token is added. |
 | **Correctness under navigation** | Every async render is guarded by the repo it started for (`isCurrentRepo(key)`); briefs are guarded by an active token so a stale response never renders into another repo or brief. |
 | **Privacy** | No backend and no telemetry. Keys and chat history live in `chrome.storage.local`; GitHub responses in `chrome.storage.session`. The GitHub token is only ever sent to `api.github.com`. Repo content is sent only to the AI provider the user chose. |
@@ -133,7 +134,7 @@ Where it's used:
 | **Performance** | Local ranking of 100k paths ≈ 150 ms; file reads in parallel; skeletons instead of layout jumps; streaming AI output. |
 | **Accessibility** | Keyboard-reachable controls with visible focus rings, ARIA roles on tabs/status, `prefers-reduced-motion` respected, theme-aware label contrast. |
 | **Compatibility** | Chrome with the Side Panel API (MV3); works at narrow panel widths (tab icons hide below 480px via a container query); light and dark themes follow the OS. |
-| **Maintainability** | Plain JS, no build step; pure logic separated from rendering and unit-tested; 142 tests (`npm test`, ~3s) run in CI on every push. |
+| **Maintainability** | Plain JS, no build step; pure logic separated from rendering and unit-tested; 149 tests (`npm test`, ~3s) run in CI on every push. |
 | **Cost** | Zero infrastructure cost; users bring their own AI key (free tiers on Groq/Gemini, free local Ollama). |
 
 ---
@@ -156,7 +157,7 @@ Where it's used:
 9. `callAIStreaming()` → `providerBody()` builds the request for the selected provider → tokens stream into the bubble → citations to files actually read are linkified → the message and its sources are saved to the repo that asked.
 
 **Start this issue**
-10. Load the issue's comments + timeline (2 requests), CI commands (`loadVerifyCommands`, raw files) and CODEOWNERS → `issueAvailability()` verdict renders instantly → chat-style retrieval for the issue → AI brief streams in → owners of the cited files are resolved.
+10. Load the issue's comments + timeline (2 requests), CI commands (`loadVerifyCommands`, raw files) and CODEOWNERS → `issueAvailability()` verdict renders instantly → timelines of closed-unmerged PRs that referenced it (`failedAttempts` → `attemptSummary`, 1 request each, ≤3) render as Earlier attempts → chat-style retrieval for the issue → AI brief streams in → owners of the cited files are resolved.
 
 **Understand this PR**
 11. Load PR detail, then timeline, review comments, files and check runs (5 requests, paged with a token) → `prStatus()` verdict, activity, files and people render instantly → `prEventLog()` (every event, bodies shortened evenly to fit) + `prDiffContext()` (numbered diffs, most-discussed first) → AI summary streams in, citations link to the head commit (in the author's fork if it is one).
@@ -253,4 +254,4 @@ Where it's used:
 
 ## 8. Summary
 
-GitHub Repo Analyzer is a backend-free Chrome side panel that turns "a repo I've never seen" into "a contribution I can start today". It finds issues that are genuinely available across the whole repo, briefs each one (is it free, where to start, who to ask, what CI will run), explains pull requests including their full conversation and status, surfaces the people who actually maintain the project, scores contributor-friendliness from measured signals, and answers questions from the repo's real source code with line-level citations. Everything is computed client-side from the GitHub API — carefully budgeted, cached and rate-limit-aware — with the user's own AI provider adding summaries on top of deterministic, verifiable data. It's plain JavaScript with no build step, a token-based light/dark design built for a narrow panel, and 142 tests running in CI.
+GitHub Repo Analyzer is a backend-free Chrome side panel that turns "a repo I've never seen" into "a contribution I can start today". It finds issues that are genuinely available across the whole repo, briefs each one (is it free, where to start, who to ask, what CI will run), explains pull requests including their full conversation and status, surfaces the people who actually maintain the project, scores contributor-friendliness from measured signals, and answers questions from the repo's real source code with line-level citations. Everything is computed client-side from the GitHub API — carefully budgeted, cached and rate-limit-aware — with the user's own AI provider adding summaries on top of deterministic, verifiable data. It's plain JavaScript with no build step, a token-based light/dark design built for a narrow panel, and 149 tests running in CI.

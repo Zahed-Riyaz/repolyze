@@ -86,6 +86,85 @@ test("someone who already opened a PR isn't listed again as a claim", () => {
   assert.equal(a.reasons.filter(r => /grace/.test(r.text)).length, 1);
 });
 
+// ── Earlier attempts ─────────────────────────────────────────────────────────
+const REPO = { owner: "o", repo: "r" };
+const failedPR = (number, { login = "someone", closedDaysAgo = 5, openedDaysAgo = 20, url, labels = [] } = {}) => ({
+  event: "cross-referenced",
+  source: { issue: { number, title: `Attempt ${number}`, state: "closed", user: user(login), labels,
+    html_url: url || `https://github.com/o/r/pull/${number}`, created_at: iso(openedDaysAgo), closed_at: iso(closedDaysAgo),
+    pull_request: { merged_at: null } } },
+});
+const ev = {
+  commit: (daysAgo) => ({ event: "committed", committer: { date: iso(daysAgo) }, message: "wip" }),
+  comment: (login, assoc, body, daysAgo) => ({ event: "commented", actor: user(login), user: user(login), author_association: assoc, body, created_at: iso(daysAgo), html_url: `https://github.com/o/r/pull/41#c-${login}` }),
+  review: (login, state, body, daysAgo) => ({ event: "reviewed", user: user(login), author_association: "MEMBER", state, body, submitted_at: iso(daysAgo), html_url: `https://github.com/o/r/pull/41#r-${login}` }),
+  closed: (login, daysAgo, type = "User") => ({ event: "closed", actor: { ...user(login), type }, created_at: iso(daysAgo) }),
+  labeled: (name) => ({ event: "labeled", label: { name } }),
+};
+
+test("failedAttempts keeps closed-unmerged PRs in this repo, newest first, at most 3", () => {
+  const timeline = [
+    failedPR(1, { closedDaysAgo: 40 }), failedPR(2, { closedDaysAgo: 2 }), failedPR(3, { closedDaysAgo: 10 }),
+    failedPR(4, { closedDaysAgo: 1, url: "https://github.com/fork/other/pull/4" }),
+    prRef(5, "closed", true), prRef(6, "open", false), failedPR(7, { closedDaysAgo: 30 }),
+  ];
+  assert.deepEqual(plain(pure.failedAttempts(timeline, REPO).map(p => p.number)), [2, 3, 7]);
+});
+
+test("a maintainer closing it with feedback: outcome, notes and quotes, newest first", () => {
+  const pr = failedPR(41, { login: "newbie" }).source.issue;
+  const a = pure.attemptSummary(pr, [
+    ev.commit(18),
+    ev.review("ada", "CHANGES_REQUESTED", "This changes the public API — please keep `Timer.tick()` signature.", 15),
+    ev.comment("newbie", "CONTRIBUTOR", "Will fix soon", 14),
+    ev.comment("dependabot[bot]", "NONE", "bump", 12),
+    ev.comment("ada", "MEMBER", "Closing: we need an RFC for this first.", 5),
+    ev.closed("ada", 5),
+  ]);
+  assert.equal(a.outcome.kind, "closed");
+  assert.equal(a.outcome.text, "Closed by maintainer @ada without merging");
+  assert.deepEqual(plain(a.feedback.map(f => f.body.slice(0, 7))), ["Closing", "This ch"], "maintainers only, newest first");
+  assert.equal(a.feedback[1].state, "CHANGES_REQUESTED");
+  assert.ok(a.notes.includes("Changes were requested and no commits followed"));
+  assert.ok(a.notes.includes("Open for 15 days"));
+});
+
+test("attempt outcomes: stale bots, superseded, declined labels and the author withdrawing", () => {
+  const pr = failedPR(41, { login: "newbie" }).source.issue;
+  assert.equal(pure.attemptSummary(pr, [ev.closed("stale[bot]", 5, "Bot")]).outcome.kind, "stale");
+  assert.equal(pure.attemptSummary(pr, [ev.labeled("lifecycle/stale"), ev.closed("ada", 5)]).outcome.kind, "stale");
+  assert.equal(pure.attemptSummary(pr, [ev.comment("ada", "MEMBER", "Superseded by #50, thanks!", 5), ev.closed("ada", 5)]).outcome.kind, "superseded");
+  const declined = pure.attemptSummary(pr, [ev.labeled("wontfix"), ev.closed("ada", 5)]);
+  assert.equal(declined.outcome.kind, "declined");
+  assert.match(declined.outcome.text, /labelled "wontfix"/);
+  assert.equal(pure.attemptSummary(pr, [ev.closed("newbie", 5)]).outcome.text, "The author closed it themselves");
+  const afterReview = pure.attemptSummary(pr, [ev.review("ada", "CHANGES_REQUESTED", "", 8), ev.closed("newbie", 5)]);
+  assert.equal(afterReview.outcome.text, "The author closed it after changes were requested");
+  assert.equal(afterReview.feedback.length, 1, "an empty change request still counts as feedback");
+  const silent = pure.attemptSummary(pr, []);
+  assert.equal(silent.outcome.kind, "unknown");
+  assert.ok(silent.notes.includes("No maintainer left feedback on it"));
+});
+
+test("a reopened-then-merged-elsewhere PR uses the last close, and the author's own comments aren't feedback", () => {
+  const pr = failedPR(41, { login: "newbie" }).source.issue;
+  const a = pure.attemptSummary(pr, [ev.closed("ada", 9), { event: "reopened" }, ev.comment("newbie", "MEMBER", "reopening", 8), ev.closed("newbie", 5)]);
+  assert.equal(a.outcome.kind, "withdrawn");
+  assert.equal(a.feedback.length, 0);
+});
+
+test("issueBriefPrompt adds earlier attempts and the lessons section only when there are some", () => {
+  const avail = pure.issueAvailability(baseIssue, [], [], NOW);
+  const attempt = pure.attemptSummary(failedPR(41, { login: "newbie" }).source.issue,
+    [ev.review("ada", "CHANGES_REQUESTED", "Needs a test for DST " + "x".repeat(600), 8), ev.closed("ada", 5)]);
+  const withAttempts = pure.issueBriefPrompt(REPO, baseIssue, [], avail, "ctx", [attempt]);
+  assert.ok(withAttempts.system.includes("## Learn from earlier attempts"));
+  assert.match(withAttempts.user, /<earlier_attempts>[\s\S]*PR #41 "Attempt 41" by @newbie[\s\S]*Outcome: Closed by maintainer @ada[\s\S]*@ada \(member\) requested changes: Needs a test for DST/);
+  assert.ok(!withAttempts.user.includes("x".repeat(400)), "maintainer comments are clipped");
+  const without = pure.issueBriefPrompt(REPO, baseIssue, [], avail, "ctx");
+  assert.ok(!without.system.includes("earlier attempts") && !without.user.includes("<earlier_attempts>"));
+});
+
 // ── Verify commands ──────────────────────────────────────────────────────────
 const WORKFLOW = `name: CI
 on: [push]
@@ -170,16 +249,17 @@ const RAW = {
   "src/launch/timer.ts": "export class Timer {\n  tick() { /* drift */ }\n}",
 };
 
-function briefPanel({ ai = true, comments = [], timeline = [] } = {}) {
+function briefPanel({ ai = true, comments = [], timeline = [], routes = {}, aiBodies = [] } = {}) {
   let aiCalls = 0;
   const gh = githubMock({
+    ...routes,
     "": { default_branch: "main" },
     "/git/trees/HEAD?recursive=1": TREE,
     "/issues/7/comments?per_page=100": comments,
     "/issues/7/timeline?per_page=100": timeline,
   }, {
     raw: RAW,
-    ai: async () => (++aiCalls === 1
+    ai: async (url, init) => (aiBodies.push(String(init.body || "")), ++aiCalls === 1
       ? sseReply('["src/launch/timer.ts"]')
       : sseReply("## What's being asked\nFix drift.\n\n## Where to start\nSee `src/launch/timer.ts:2`.\n\n## Suggested plan\n1. Reproduce\n2. Fix `tick`")),
   });
@@ -209,6 +289,40 @@ test("the brief renders availability, a cited AI plan, code owners and verify co
   const issueCalls = gh.apiCalls.filter(u => u.startsWith("/issues/7/"));
   assert.deepEqual(issueCalls.sort(), ["/issues/7/comments?per_page=100", "/issues/7/timeline?per_page=100"]);
   assert.ok(gh.apiCalls.length <= 4, `API calls: ${gh.apiCalls.join(", ")}`); // + repo metadata + tree, shared with other tabs
+});
+
+test("earlier attempts: 1 request per failed PR, rendered without AI, and fed to the AI brief", async () => {
+  const aiBodies = [];
+  const prTimeline = [ev.review("ada", "CHANGES_REQUESTED", "Please don't add <b>new deps</b> for this.", 8), ev.closed("ada", 5)];
+  const { gh, panel } = briefPanel({ aiBodies, timeline: [failedPR(41, { login: "newbie" })],
+    routes: { "/issues/41/timeline?per_page=100": prTimeline } });
+  await panel.fn.showIssueBrief(baseIssue);
+
+  const attempts = panel.el("brief-attempts").innerHTML;
+  assert.match(attempts, /#41<\/span> Attempt 41[\s\S]*by @newbie[\s\S]*Closed by maintainer @ada without merging/);
+  assert.match(attempts, /Please don't add &lt;b&gt;new deps&lt;\/b&gt;/, "maintainer text is escaped");
+  assert.match(attempts, /requested changes/);
+  assert.ok(gh.apiCalls.includes("/issues/41/timeline?per_page=100"));
+  assert.equal(gh.apiCalls.filter(u => u.startsWith("/issues/")).length, 3);
+  assert.ok(aiBodies.some(b => b.includes("earlier_attempts") && b.includes("new deps")), "the AI sees the attempts");
+  assert.match(panel.fn.briefMarkdown({ owner: "o", repo: "r" }, baseIssue, panel.fn.currentBrief()), /## Earlier attempts\n- PR #41 by @newbie/);
+});
+
+test("earlier attempts show without an AI key, and a failed load is retried on reopen", async () => {
+  let fail = true;
+  const { gh, panel } = briefPanel({ ai: false, timeline: [failedPR(41)],
+    routes: { "/issues/41/timeline?per_page=100": () => (fail ? new Response("{}", { status: 500 }) : new Response(JSON.stringify([ev.closed("stale[bot]", 5, "Bot")]))) } });
+  await panel.fn.showIssueBrief(baseIssue);
+  assert.match(panel.el("brief-attempts").innerHTML, /Couldn't load the earlier pull requests/);
+  assert.match(panel.el("brief-ai").innerHTML, /Add an AI provider/, "the rest of the brief still renders");
+  fail = false;
+  panel.fn.closeIssueBrief();
+  await panel.fn.showIssueBrief(baseIssue);
+  assert.match(panel.el("brief-attempts").innerHTML, /Went stale and was closed automatically by @stale\[bot\]/);
+  const before = gh.apiCalls.length;
+  panel.fn.closeIssueBrief();
+  await panel.fn.showIssueBrief(baseIssue);
+  assert.equal(gh.apiCalls.length, before, "loaded attempts are cached");
 });
 
 test("reopening a brief is instant: no new API requests or AI calls", async () => {

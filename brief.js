@@ -3,9 +3,11 @@
 //   • Is it free?      assignees, PRs that reference it, "I'll take this" comments
 //   • What / where / plan   AI summary grounded in the repo's code (cited)
 //   • Who to ask       CODEOWNERS for the files involved + maintainers in the thread
+//   • Earlier attempts  why PRs for this issue were closed without merging
 //   • Run before opening a PR   the checks CI will run (workflow + package.json)
 // Everything except the AI section is deterministic and shows instantly.
-// Cost: 2 API requests (issue comments + timeline); files come from raw reads.
+// Cost: 2 API requests (issue comments + timeline), plus 1 per failed PR (≤ 3);
+// files come from raw reads.
 
 const issueIndex = new Map(); // issue number → issue object from the current list
 let activeBrief = null;       // { key, number, token } of the brief on screen
@@ -67,7 +69,7 @@ function issueAvailability(issue, comments, timeline, now) {
       bump("maybe");
       reasons.push({ tone: "warn", text: `PR #${pr.number}${by} that references it was merged — it may already be fixed`, url: pr.html_url });
     } else {
-      reasons.push({ tone: "info", text: `PR #${pr.number}${by} was closed without merging — worth reading why`, url: pr.html_url });
+      reasons.push({ tone: "info", text: `PR #${pr.number}${by} was closed without merging — see why under Earlier attempts`, url: pr.html_url });
     }
   }
 
@@ -104,6 +106,104 @@ function issueAvailability(issue, comments, timeline, now) {
     taken: "Pick another issue, or offer to help whoever has it.",
   }[status];
   return { status, verdict, advice, reasons };
+}
+
+// ── Earlier attempts ─────────────────────────────────────────────────────────
+// PRs that referenced the issue but were closed without merging: why they
+// didn't land is the best guide to what the maintainers will accept.
+const MAX_ATTEMPTS = 3;
+const STALE_LABEL = /\b(stale|inactive|abandoned|lifecycle\/rotten)\b/i;
+const DECLINED_LABEL = /\b(wontfix|won't fix|will not fix|invalid|not planned|rejected)\b/i;
+const DUPLICATE_LABEL = /\bduplicate\b/i;
+const SUPERSEDED_RE = /\b(superseded|supersedes|duplicate of|in favou?r of|replaced by|already (fixed|merged|done)|fixed (in|by) #?\d+)\b/i;
+const STALE_RE = /\b(stale|inactiv|no activity|hasn't had (any )?(recent )?activity|closing (this )?due to)\b/i;
+
+// Closed-unmerged PRs in this repo that reference the issue, newest first
+function failedAttempts(timeline, repo) {
+  const prefix = `https://github.com/${repo.owner}/${repo.repo}/pull/`.toLowerCase();
+  const prs = new Map();
+  for (const ev of timeline) {
+    const src = ev.event === "cross-referenced" ? ev.source?.issue : null;
+    if (!src?.pull_request || src.state !== "closed" || src.pull_request.merged_at) continue;
+    if (!String(src.html_url || "").toLowerCase().startsWith(prefix)) continue; // PRs in other repos
+    prs.set(src.number, src);
+  }
+  const when = (pr) => pr.closed_at || pr.updated_at || "";
+  return [...prs.values()].sort((a, b) => when(b).localeCompare(when(a))).slice(0, MAX_ATTEMPTS);
+}
+
+// One failed PR + its timeline → { number, title, url, author, openedAt, closedAt,
+//   closedBy, outcome: { kind, text }, notes[], feedback[] }
+function attemptSummary(pr, timeline) {
+  const author = pr.user?.login || null;
+  const at = (ev) => ev.submitted_at || ev.created_at || ev.committer?.date || ev.author?.date || "";
+  const labels = new Set((pr.labels || []).map(l => l.name));
+  let closed = null, lastCommit = "", lastChangesRequest = null;
+  const feedback = [];
+  for (const ev of timeline) {
+    const user = ev.user || ev.actor;
+    if (ev.event === "labeled" && ev.label?.name) labels.add(ev.label.name);
+    else if (ev.event === "closed") closed = ev;
+    else if (ev.event === "reopened") closed = null;
+    else if (ev.event === "committed") lastCommit = at(ev) > lastCommit ? at(ev) : lastCommit;
+    else if ((ev.event === "commented" || ev.event === "reviewed") && user && !isBot(user)
+      && user.login !== author && MAINTAINER_ROLES.has(ev.author_association)) {
+      const state = ev.event === "reviewed" ? String(ev.state || "").toUpperCase() : null;
+      if (state === "CHANGES_REQUESTED") lastChangesRequest = at(ev);
+      if (!(ev.body || "").trim() && state !== "CHANGES_REQUESTED") continue;
+      feedback.push({ login: user.login, role: ev.author_association, state, body: (ev.body || "").trim(), at: at(ev), url: ev.html_url || pr.html_url });
+    }
+  }
+  feedback.sort((a, b) => b.at.localeCompare(a.at));
+
+  const closer = closed?.actor || null;
+  const byBot = closer && isBot(closer);
+  const maintainers = new Set(feedback.map(f => f.login));
+  const labelHit = (re) => [...labels].find(l => re.test(l));
+  const saidSuperseded = feedback.find(f => SUPERSEDED_RE.test(f.body));
+  let outcome;
+  if (labelHit(DUPLICATE_LABEL) || saidSuperseded) {
+    outcome = { kind: "superseded", text: "Superseded — the maintainers pointed to other work" };
+  } else if (byBot || labelHit(STALE_LABEL) || STALE_RE.test(feedback[0]?.body || "")) {
+    outcome = { kind: "stale", text: byBot ? `Went stale and was closed automatically${closer ? ` by @${closer.login}` : ""}` : "Went stale and was closed for inactivity" };
+  } else if (labelHit(DECLINED_LABEL)) {
+    outcome = { kind: "declined", text: `Declined by the maintainers (labelled "${labelHit(DECLINED_LABEL)}")` };
+  } else if (closer && closer.login === author) {
+    outcome = lastChangesRequest
+      ? { kind: "withdrawn", text: "The author closed it after changes were requested" }
+      : { kind: "withdrawn", text: "The author closed it themselves" };
+  } else if (closer) {
+    outcome = { kind: "closed", text: `Closed by ${maintainers.has(closer.login) ? "maintainer " : ""}@${closer.login} without merging` };
+  } else {
+    outcome = { kind: "unknown", text: "Closed without merging" };
+  }
+
+  const notes = [];
+  if (lastChangesRequest && lastChangesRequest > lastCommit) notes.push("Changes were requested and no commits followed");
+  if (!feedback.length) notes.push("No maintainer left feedback on it");
+  const closedAt = closed?.created_at || pr.closed_at || null;
+  if (pr.created_at && closedAt) {
+    const days = Math.round((Date.parse(closedAt) - Date.parse(pr.created_at)) / DAY_MS);
+    if (days >= 1) notes.push(`Open for ${days} day${days === 1 ? "" : "s"}`);
+  }
+  return {
+    number: pr.number, title: pr.title || "", url: pr.html_url, author,
+    openedAt: pr.created_at || null, closedAt, closedBy: closer?.login || null,
+    outcome, notes, feedback,
+  };
+}
+
+// Attempts as prompt text: outcome, notes and the maintainers' words (clipped)
+function attemptsPromptText(attempts, { maxFeedback = 3, clip = 300 } = {}) {
+  const short = (t) => { const s = t.replace(/\s+/g, " ").trim(); return s.length > clip ? `${s.slice(0, clip)}…` : s; };
+  return attempts.map(a => {
+    const lines = [`PR #${a.number} "${a.title}" by @${a.author || "unknown"}${a.closedAt ? `, closed ${a.closedAt.slice(0, 10)}` : ""}`,
+      `Outcome: ${a.outcome.text}${a.notes.length ? ` (${a.notes.join("; ")})` : ""}`];
+    for (const f of a.feedback.slice(0, maxFeedback)) {
+      lines.push(`  @${f.login} (${f.role.toLowerCase()})${f.state === "CHANGES_REQUESTED" ? " requested changes" : ""}: ${f.body ? short(f.body) : "(no comment)"}`);
+    }
+    return lines.join("\n");
+  }).join("\n\n");
 }
 
 // `run:` commands from a GitHub Actions workflow (single-line and `run: |` blocks)
@@ -175,8 +275,11 @@ function briefPeople(files, codeOwnerRules, comments) {
 
 // → { system, user }: instructions and output format in the system prompt; the
 // repo context first and the issue last in the user message.
-function issueBriefPrompt(repo, issue, comments, availability, context) {
+function issueBriefPrompt(repo, issue, comments, availability, context, attempts = []) {
   const labels = issue.labels.map(l => l.name).join(", ") || "none";
+  const lessons = attempts.length ? `
+## Learn from earlier attempts
+For each earlier pull request, one bullet: why it didn't land, in the maintainers' own words where given, and what to do differently. Only use what the earlier attempts show; if no reason was given, say so.` : "";
   const discussion = comments.slice(-10).map(c =>
     `@${c.user?.login} (${(c.author_association || "NONE").toLowerCase()}): ${(c.body || "").replace(/\s+/g, " ").slice(0, 500)}`).join("\n");
   const system = `You help first-time contributors start work on an issue in the GitHub repository "${repo.owner}/${repo.repo}".
@@ -189,7 +292,7 @@ Write a concise brief in Markdown with exactly these sections:
 ## Where to start
 The files and functions to change, citing code inline as \`path:line\`. Only cite code you were shown; if the relevant code isn't shown, say which files to look in.
 ## Suggested plan
-A short numbered list of concrete steps, including reproducing the problem and adding or updating a test.
+A short numbered list of concrete steps, including reproducing the problem and adding or updating a test.${lessons}
 ## Questions to ask first
 1–3 things the issue leaves unclear that are worth confirming with maintainers. Omit this section if nothing is unclear.
 
@@ -205,7 +308,7 @@ Opened by @${issue.user?.login || "unknown"} ${daysAgo(issue.created_at)}.
 
 ${(issue.body || "(no description)").slice(0, 4000)}
 </issue>
-${discussion ? `\n<discussion>\n${discussion}\n</discussion>\n` : ""}
+${discussion ? `\n<discussion>\n${discussion}\n</discussion>\n` : ""}${attempts.length ? `\n<earlier_attempts>\nPull requests for this issue that were closed without merging:\n${attemptsPromptText(attempts)}\n</earlier_attempts>\n` : ""}
 Availability check: ${availability.verdict}. ${availability.reasons.map(r => r.text).join("; ")}.
 
 Write the brief for issue #${issue.number}.`;
@@ -216,6 +319,14 @@ Write the brief for issue #${issue.number}.`;
 function briefMarkdown(repo, issue, brief) {
   const lines = [`# #${issue.number} ${issue.title}`, issue.html_url, "", `**${brief.availability.verdict}** — ${brief.availability.advice}`];
   for (const r of brief.availability.reasons) lines.push(`- ${r.text}${r.url ? ` (${r.url})` : ""}`);
+  if (brief.attempts?.length) {
+    lines.push("", "## Earlier attempts");
+    for (const a of brief.attempts) {
+      lines.push(`- PR #${a.number} by @${a.author || "unknown"} (${a.url}): ${a.outcome.text}${a.notes.length ? ` — ${a.notes.join("; ")}` : ""}`);
+      const f = a.feedback[0];
+      if (f?.body) lines.push(`  > ${f.body.replace(/\s+/g, " ").slice(0, 300)} — @${f.login}`);
+    }
+  }
   if (brief.ai?.text) lines.push("", brief.ai.text.trim());
   const people = brief.people;
   if (people?.owners.length || people?.inThread.length) {
@@ -236,6 +347,12 @@ async function loadIssueThread(repo, number) {
     fetchGitHub(`/issues/${number}/timeline?per_page=100`, repo),
   ]);
   return { comments, timeline };
+}
+
+// Why earlier PRs failed: one timeline request per failed PR (≤ MAX_ATTEMPTS)
+async function loadAttempts(repo, timeline) {
+  return Promise.all(failedAttempts(timeline, repo).map(async (pr) =>
+    attemptSummary(pr, await fetchGitHub(`/issues/${pr.number}/timeline?per_page=100`, repo))));
 }
 
 async function loadVerifyCommands(repo) {
@@ -294,12 +411,15 @@ async function showIssueBrief(issue, { regenerate = false } = {}) {
       brief = briefs[issue.number] = {
         issue, comments, commands, codeOwnerRules: owners.rules,
         availability: issueAvailability(issue, comments, timeline, Date.now()),
-        ai: null, people: null,
+        attemptCount: failedAttempts(timeline, repo).length, timeline,
+        attempts: undefined, ai: null, people: null,
       };
     }
     if (regenerate) brief.ai = null;
     if (!live()) return;
     renderBrief(repo, issue, brief);
+    if (brief.attempts === undefined) await loadBriefAttempts(repo, brief, live);
+    if (!live()) return;
     if (!brief.ai) await generateBriefAI(repo, issue, brief, live);
     return brief;
   } catch (err) {
@@ -342,6 +462,10 @@ function renderBrief(repo, issue, brief) {
       <ul class="reason-list">${reasons}</ul>
       <p class="brief-note">${escapeHtml(a.advice)}</p>
     </section>
+    ${brief.attemptCount ? `<section class="brief-section">
+      <h2 class="section-title">Earlier attempts</h2>
+      <div id="brief-attempts">${brief.attempts === undefined ? skeletonList(brief.attemptCount) : ""}</div>
+    </section>` : ""}
     <section class="brief-section">
       <div id="brief-ai" class="markdown brief-ai"></div>
     </section>
@@ -353,8 +477,48 @@ function renderBrief(repo, issue, brief) {
       <h2 class="section-title">Run before opening a PR</h2>
       ${commands}
     </section>`;
+  if (brief.attempts) renderBriefAttempts(brief.attempts);
   if (brief.ai) renderBriefAI(repo, brief);
   if (brief.people) renderBriefPeople(brief.people);
+}
+
+// Loads the failed PRs' timelines; on failure (e.g. rate limit) the brief goes
+// on without them and they're retried the next time the brief opens.
+async function loadBriefAttempts(repo, brief, live) {
+  if (!brief.attemptCount) { brief.attempts = []; return; }
+  try {
+    const attempts = await loadAttempts(repo, brief.timeline);
+    brief.attempts = attempts;
+    if (live()) renderBriefAttempts(attempts);
+  } catch (err) {
+    if (live()) document.getElementById("brief-attempts").innerHTML =
+      `<p class="brief-note">Couldn't load the earlier pull requests${err.rateLimited ? " — the GitHub rate limit is used up" : ""}. They'll be retried next time you open this brief.</p>`;
+  }
+}
+
+const ATTEMPT_TONES = { superseded: "info", stale: "warn", withdrawn: "warn", declined: "bad", closed: "bad", unknown: "info" };
+
+function renderBriefAttempts(attempts) {
+  const el = document.getElementById("brief-attempts");
+  if (!el) return;
+  el.innerHTML = `<ul class="attempt-list">${attempts.map(a => {
+    const tone = ATTEMPT_TONES[a.outcome.kind] || "info";
+    const quotes = a.feedback.slice(0, 2).map(f => `
+      <blockquote class="attempt-quote">
+        ${f.body ? `<p>${escapeHtml(f.body.replace(/\s+/g, " ").slice(0, 280))}${f.body.length > 280 ? "…" : ""}</p>` : ""}
+        <footer><a href="${escapeHtml(f.url)}" target="_blank">@${escapeHtml(f.login)}</a> · ${ROLE_NAMES[f.role] || escapeHtml(f.role)}${f.state === "CHANGES_REQUESTED" ? " · requested changes" : ""}</footer>
+      </blockquote>`).join("");
+    return `<li class="attempt">
+      <a href="${escapeHtml(a.url)}" target="_blank" class="attempt-title"><span class="issue-number">#${a.number}</span> ${escapeHtml(a.title)}</a>
+      <div class="person-sub">by @${escapeHtml(a.author || "unknown")}${a.closedAt ? ` · closed ${daysAgo(a.closedAt)}` : ""}</div>
+      <ul class="reason-list">
+        <li class="reason reason-${tone}">${icon(REASON_ICONS[tone], "icon-sm")}<span>${escapeHtml(a.outcome.text)}</span></li>
+        ${a.notes.map(n => `<li class="reason reason-info">${icon("inbox", "icon-sm")}<span>${escapeHtml(n)}</span></li>`).join("")}
+      </ul>
+      ${quotes}
+    </li>`;
+  }).join("")}</ul>
+  <p class="brief-note">Read why these didn't land before you start — the maintainers' objections usually still apply.</p>`;
 }
 
 async function generateBriefAI(repo, issue, brief, live) {
@@ -377,7 +541,7 @@ async function generateBriefAI(repo, issue, brief, live) {
     const { context, sources, ref } = await buildChatContext(repo, `${issue.title}\n${(issue.body || "").slice(0, 600)}`, null, setStatus);
     if (!live()) return;
     setStatus("Writing the brief…");
-    const { system, user } = issueBriefPrompt(repo, issue, brief.comments, brief.availability, context);
+    const { system, user } = issueBriefPrompt(repo, issue, brief.comments, brief.availability, context, brief.attempts || []);
     const text = await callAIStreaming([{ role: "user", parts: [{ text: user }] }], (partial) => {
       if (live()) aiEl().innerHTML = renderMarkdown(partial) + '<span class="streaming-cursor"></span>';
     }, { system });

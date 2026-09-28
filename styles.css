@@ -1093,6 +1093,15 @@ a.cite:hover code { background: var(--accent-subtle); }
 .reason-info .icon { color: var(--fg-subtle); }
 
 .brief-section { margin-bottom: 18px; }
+.attempt-list { display: flex; flex-direction: column; gap: 12px; }
+.attempt { padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+.attempt-title { display: block; color: var(--fg); font-size: 13px; font-weight: 600; line-height: 1.35; }
+.attempt-title:hover { color: var(--accent); text-decoration: none; }
+.attempt .person-sub { margin: 2px 0 8px; }
+.attempt .reason-list { margin-bottom: 0; }
+.attempt-quote { margin: 8px 0 0; padding: 4px 0 4px 10px; border-left: 3px solid var(--border); font-size: 12.5px; color: var(--fg); }
+.attempt-quote p { margin: 0 0 3px; overflow-wrap: anywhere; }
+.attempt-quote footer { font-size: 11.5px; color: var(--fg-muted); }
 .brief-note { margin: 6px 0 0; font-size: 12px; color: var(--fg-muted); }
 .brief-note code { font-size: 11px; padding: 0 4px; border-radius: 4px; background: var(--bg-subtle); }
 .brief-ai h3 { font-size: 12px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--fg-muted); margin: 18px 0 6px; }
