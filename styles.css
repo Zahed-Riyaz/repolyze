@@ -1271,3 +1271,30 @@ a.cite:hover code { background: var(--accent-subtle); }
 .repo-identity-owner a { color: var(--fg); font-weight: 500; }
 .repo-homepage { display: inline-flex; align-items: center; gap: 4px; margin-top: 10px; font-size: 12.5px; overflow-wrap: anywhere; }
 .repo-identity .issue-labels { margin-top: 10px; }
+
+/* ── Settings: GitHub account & sign-in ─────────────────────────────────── */
+.gh-account { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.gh-account[hidden], #sp-gh-signin[hidden], .signin-flow[hidden] { display: none; }
+.gh-account-who { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12.5px; }
+.gh-account-who a { color: var(--fg); font-weight: 600; }
+.gh-account-avatar { width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0; }
+#sp-signin-btn .icon { stroke-width: 1.8; }
+.signin-flow { margin-top: 12px; padding: 12px; border-radius: var(--r-md); background: var(--bg-elev); }
+.signin-step { margin: 0 0 8px; font-size: 12.5px; color: var(--fg-muted); }
+.signin-code { display: flex; align-items: center; gap: 8px; }
+.signin-code code {
+  flex: 1;
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-align: center;
+  user-select: all;
+}
+.signin-wait { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: var(--fg-muted); }
+.sp-token-details { margin-top: 12px; }
+.sp-token-details summary { cursor: pointer; font-size: 12px; color: var(--fg-muted); margin-bottom: 10px; }
+.sp-token-details summary:hover { color: var(--fg); }

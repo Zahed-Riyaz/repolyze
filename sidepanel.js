@@ -108,8 +108,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // Load saved settings — also migrate legacy geminiApiKey → aiApiKey
-  const stored = await chrome.storage.local.get(["githubToken", "aiProvider", "aiApiKey", "ollamaModel", "geminiApiKey"]);
+  const stored = await chrome.storage.local.get(["githubToken", "githubUser", "aiProvider", "aiApiKey", "ollamaModel", "geminiApiKey"]);
   githubToken  = stored.githubToken  || "";
+  githubUser   = stored.githubUser   || null;
   aiProvider   = stored.aiProvider   || "groq";
   aiApiKey     = stored.aiApiKey     || "";
   ollamaModel  = stored.ollamaModel  || "llama3.2";
@@ -124,7 +125,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   initSettingsTab();
 
-  document.getElementById("rate-banner-btn").addEventListener("click", getGitHubToken);
+  document.getElementById("rate-banner-btn").addEventListener("click", signInOrGetToken);
+  document.getElementById("sp-gh-card").addEventListener("click", handleGitHubCardClick);
   document.getElementById("sp-get-token-link").addEventListener("click", (e) => {
     e.preventDefault(); // open via getGitHubToken so the paste hint shows too
     getGitHubToken();
@@ -605,26 +607,27 @@ function renderRateLimit() {
   const limited = isRateLimited();
   const low = !limited && remaining !== null && remaining <= Math.max(10, limit * 0.05);
   badge.classList.toggle("rate-limit-low", limited || low);
+  const fix = signInAvailable() ? "Signing in" : "A free token";
   badge.title = githubToken
     ? "GitHub API requests left this hour"
-    : "GitHub API requests left this hour — click to add a token for 5,000/hour";
+    : `GitHub API requests left this hour — click to ${signInAvailable() ? "sign in" : "add a token"} for 5,000/hour`;
 
   const banner = document.getElementById("rate-banner");
   let title = "", sub = "", action = "";
   if (badToken) {
     title = "GitHub rejected your token";
-    sub = "It may have expired or been revoked — generate a new one on GitHub.";
-    action = "Get new token";
+    sub = signInAvailable() ? "It may have expired or been revoked — sign in again." : "It may have expired or been revoked — generate a new one on GitHub.";
+    action = signInAvailable() ? "Sign in again" : "Get new token";
   } else if (limited) {
     const mins = Math.max(1, Math.ceil((ghState.resetAt - Date.now()) / 60000));
     title = "GitHub's hourly limit is used up";
     sub = `Resumes at ${formatTime(ghState.resetAt)} (in ${mins} min).` +
-      (githubToken ? " Anything already loaded still works." : " A free token raises the limit to 5,000/hour.");
-    action = githubToken ? "" : "Get token";
+      (githubToken ? " Anything already loaded still works." : ` ${fix} raises the limit to 5,000/hour.`);
+    action = githubToken ? "" : signInAvailable() ? "Sign in" : "Get token";
   } else if (low && !githubToken) {
     title = `${remaining} GitHub request${remaining === 1 ? "" : "s"} left this hour`;
-    sub = "A free token raises the limit to 5,000/hour.";
-    action = "Get token";
+    sub = `${fix} raises the limit to 5,000/hour.`;
+    action = signInAvailable() ? "Sign in" : "Get token";
   }
   banner.hidden = !title;
   banner.classList.toggle("is-warn", !!title && !badToken && !limited);
@@ -647,9 +650,13 @@ function renderRateLimit() {
 
 const GITHUB_TOKEN_URL = "https://github.com/settings/tokens";
 
+// Settings, scrolled to the GitHub card: the sign-in button when sign-in is set
+// up and nobody's signed in, else the token field
 function openTokenSettings() {
   switchTab("settings");
-  const input = document.getElementById("sp-gh-token");
+  const useSignIn = signInAvailable() && !githubToken;
+  if (!useSignIn) document.getElementById("sp-token-details").open = true;
+  const input = document.getElementById(useSignIn ? "sp-signin-btn" : "sp-gh-token");
   input.scrollIntoView({ block: "center", behavior: "smooth" });
   input.focus();
   // Draw the eye to where the new token goes
@@ -659,11 +666,19 @@ function openTokenSettings() {
   card.classList.add("attention");
 }
 
+// The limit banner's button: sign in when that's set up, else fetch a token
+function signInOrGetToken() {
+  if (!signInAvailable()) { getGitHubToken(); return; }
+  openTokenSettings();
+  startGitHubSignIn();
+}
+
 // Straight to GitHub's token page in a new tab, with the panel already waiting
 // on the token field — the side panel stays open, so the user just pastes on return.
 function getGitHubToken() {
   chrome.tabs.create({ url: GITHUB_TOKEN_URL });
   openTokenSettings();
+  document.getElementById("sp-token-details").open = true;
   // Stays put while the user is off on GitHub generating the token
   showSpStatus("sp-gh-status", "Paste your new token here and press Save token.", false, 0);
 }
@@ -2108,6 +2123,7 @@ function initSettingsTab() {
   if (aiApiKey) document.getElementById("sp-api-key").placeholder = maskApiKey(aiApiKey);
   if (ollamaModel) document.getElementById("sp-ollama-model").value = ollamaModel;
   if (githubToken) document.getElementById("sp-gh-token").placeholder = maskApiKey(githubToken);
+  renderGitHubAccount();
   refreshBadge();
 
   // Provider pill clicks
@@ -2172,10 +2188,13 @@ function initSettingsTab() {
       // /rate_limit is free, so check the token before trusting it
       const { valid, core } = await checkRateLimit(token);
       if (!valid) { showSpStatus("sp-gh-status", "GitHub rejected this token — check you copied all of it, or generate a new one above.", true); return; }
-      await chrome.storage.local.set({ githubToken: token });
+      const user = await fetchGitHubUser(token).catch(() => null);
+      await chrome.storage.local.set({ githubToken: token, githubUser: user });
       githubToken = token;
+      githubUser = user;
       document.getElementById("sp-gh-token").value       = "";
       document.getElementById("sp-gh-token").placeholder = maskApiKey(token);
+      renderGitHubAccount();
       showSpStatus("sp-gh-status", `Token saved — ${(core?.limit ?? 5000).toLocaleString()} requests/hour.`);
       onGitHubTokenChanged();
     } catch {
@@ -2187,12 +2206,9 @@ function initSettingsTab() {
 
   // Clear GitHub token
   document.getElementById("sp-clear-gh-btn").addEventListener("click", async () => {
-    await chrome.storage.local.remove(["githubToken"]);
-    githubToken = "";
-    document.getElementById("sp-gh-token").value       = "";
-    document.getElementById("sp-gh-token").placeholder = "ghp_...";
+    document.getElementById("sp-gh-token").value = "";
+    await signOutOfGitHub();
     showSpStatus("sp-gh-status", "Token cleared.");
-    onGitHubTokenChanged();
   });
 
   // Settings saved from the standalone options page must reach an open panel
@@ -2201,11 +2217,15 @@ function initSettingsTab() {
     if (changes.aiProvider)  aiProvider  = changes.aiProvider.newValue  || "groq";
     if (changes.aiApiKey)    aiApiKey    = changes.aiApiKey.newValue    || "";
     if (changes.ollamaModel) ollamaModel = changes.ollamaModel.newValue || "llama3.2";
+    // A token saved elsewhere (options page) without its account → no stale name
+    if (changes.githubUser) githubUser = changes.githubUser.newValue || null;
+    else if (changes.githubToken) githubUser = null;
     if (changes.githubToken && (changes.githubToken.newValue || "") !== githubToken) {
       githubToken = changes.githubToken.newValue || "";
       document.getElementById("sp-gh-token").placeholder = githubToken ? maskApiKey(githubToken) : "ghp_...";
       onGitHubTokenChanged();
     }
+    if (changes.githubToken || changes.githubUser) renderGitHubAccount();
     if (changes.aiProvider || changes.aiApiKey || changes.ollamaModel) {
       settingsProvider = aiProvider;
       updateSettingsUI(aiProvider);
