@@ -237,7 +237,7 @@ test("Start this issue buttons are on every card and open the brief", async () =
   const panel = loadPanel({ fetch: gh.fetch });
   panel.setRepo();
   await panel.fn.fetchIssues();
-  assert.match(panel.el("issues-list").innerHTML, /class="start-issue-btn" data-issue="7"/);
+  assert.match(panel.el("issues-list").innerHTML, /class="row-open start-issue-btn" data-issue="7"/);
   panel.fn.openIssueBriefFromList("7");
   await tick(20);
   assert.equal(panel.el("contribute-browse").hidden, true);

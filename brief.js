@@ -320,8 +320,7 @@ async function showIssueBrief(issueOrNumber, { auto = false } = {}) {
 }
 
 function briefHeaderHtml(issue) {
-  const labels = issue.labels
-    .map(l => `<span class="label-chip" style="--lc:#${/^[0-9a-f]{6}$/i.test(l.color) ? l.color : "8b949e"}">${escapeHtml(l.name)}</span>`).join("");
+  const labels = issue.labels.map(labelDotHtml).join("");
   return `
     <div class="brief-head">
       <a href="${issue.html_url}" target="_blank" class="brief-title"><span class="issue-number">#${issue.number}</span> ${escapeHtml(issue.title)}</a>

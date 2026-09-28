@@ -37,11 +37,14 @@
     <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></symbol>
     <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
     <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
   </svg>
 
   <div id="container">
     <header id="app-header">
       <div id="header-brand">
+        <img id="repo-avatar" class="header-avatar" alt="" hidden>
         <svg id="ext-logo" xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 34 34" aria-hidden="true">
           <rect width="34" height="34" rx="8" fill="#161b22"/>
           <rect width="34" height="11" rx="8" fill="#21262d"/>
@@ -151,29 +154,31 @@
             <section id="issues-section" class="work-section">
               <div class="pane-head">
                 <h2 class="section-title">Issues you can pick up</h2>
+              </div>
+              <form id="issue-find" class="find-field" autocomplete="off" role="search">
+                <svg class="icon icon-sm" aria-hidden="true"><use href="#i-search"/></svg>
+                <input id="issue-find-input" class="input" placeholder="Search issues, or paste a number or link" aria-label="Find an issue">
+              </form>
+              <div class="list-controls">
                 <div class="segmented filter-bar" role="group" aria-label="Filter issues">
                   <button class="filter-btn active" data-label="">All</button>
                   <button class="filter-btn" data-label="good-first-issue">Good first</button>
                   <button class="filter-btn" data-label="help-wanted">Help wanted</button>
                 </div>
+                <div class="issue-controls">
+                  <select id="issue-sort" class="select select-quiet" aria-label="Sort issues">
+                    <option value="comments">Most discussed</option>
+                    <option value="created">Newest</option>
+                    <option value="updated">Recently updated</option>
+                  </select>
+                  <label class="switch" title="Hide issues that are assigned (and, for label filters, ones with a linked PR)">
+                    <input type="checkbox" id="issue-unclaimed" checked><span class="switch-track"></span>Unclaimed
+                  </label>
+                </div>
               </div>
-              <div class="issue-controls">
-                <select id="issue-sort" class="select" aria-label="Sort issues">
-                  <option value="comments">Most discussed</option>
-                  <option value="created">Newest</option>
-                  <option value="updated">Recently updated</option>
-                </select>
-                <label class="switch" title="Hide issues that are assigned (and, for label filters, ones with a linked PR)">
-                  <input type="checkbox" id="issue-unclaimed" checked><span class="switch-track"></span>Unclaimed
-                </label>
-              </div>
-              <form id="issue-find" class="pr-find" autocomplete="off">
-                <input id="issue-find-input" class="input" placeholder="Issue number, link or keywords" aria-label="Find an issue">
-                <button class="btn" type="submit">Find</button>
-              </form>
               <p id="issues-summary" class="issues-summary"></p>
-              <ul id="issues-list" class="card-list"></ul>
-              <button id="issues-more" class="btn btn-block issues-more" hidden>Load more</button>
+              <ul id="issues-list" class="row-list"></ul>
+              <button id="issues-more" class="btn btn-ghost btn-block issues-more" hidden>Load more</button>
             </section>
 
             <section id="open-prs-section" class="work-section">
@@ -184,13 +189,13 @@
                   <button class="pr-state-btn" data-state="closed">Closed</button>
                 </div>
               </div>
-              <form id="pr-find" class="pr-find" autocomplete="off">
-                <input id="pr-find-input" class="input" placeholder="PR number, link or keywords" aria-label="Find a pull request">
-                <button class="btn" type="submit">Find</button>
+              <form id="pr-find" class="find-field" autocomplete="off" role="search">
+                <svg class="icon icon-sm" aria-hidden="true"><use href="#i-search"/></svg>
+                <input id="pr-find-input" class="input" placeholder="Search PRs, or paste a number or link" aria-label="Find a pull request">
               </form>
               <p id="prs-summary" class="issues-summary"></p>
-              <ul id="prs-list" class="card-list"></ul>
-              <button id="prs-more" class="btn btn-block issues-more" hidden>Load more</button>
+              <ul id="prs-list" class="row-list"></ul>
+              <button id="prs-more" class="btn btn-ghost btn-block issues-more" hidden>Load more</button>
             </section>
             <p class="brief-note pr-follow-note">Tip: open any issue or pull request on GitHub and its brief opens here.</p>
           </div>

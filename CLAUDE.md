@@ -142,7 +142,7 @@ Where it's used:
 | **AI answer quality** | Grounded answers with citations; per-provider context budgets (Groq/Ollama smaller); Ollama `num_ctx` sized to the request; temperature 0.2 (0 for file picking); history has its own budget. |
 | **Performance** | Local ranking of 100k paths ≈ 150 ms; file reads in parallel; skeletons instead of layout jumps; streaming AI output. |
 | **Accessibility** | Keyboard-reachable controls with visible focus rings, ARIA roles on tabs/status, `prefers-reduced-motion` respected, theme-aware label contrast. |
-| **Compatibility** | Chrome with the Side Panel API (MV3); works at narrow panel widths (three tabs; icons hide below 480px via a container query); light and dark themes follow the OS. |
+| **Compatibility** | Chrome with the Side Panel API (MV3); works at narrow panel widths (three text-only tabs); light and dark themes follow the OS. |
 | **Maintainability** | Plain JS, no build step; pure logic separated from rendering and unit-tested; 169 tests (`npm test`, ~3s) run in CI on every push. |
 | **Cost** | Zero infrastructure cost; users bring their own AI key (free tiers on Groq/Gemini, free local Ollama). |
 
@@ -204,8 +204,8 @@ Where it's used:
 - **Evidence over assertion.** Every verdict shows its reasons; every metric shows the numbers behind it; every AI claim about code cites `path:line` and links to it. Unlinked citations visibly mean "not verified".
 - **Deterministic first, AI second.** Anything computable (availability, PR status, owners, CI commands, health signals) renders instantly and works without an AI key; AI lives in one place (Ask) and adds summaries and answers on top, grounded in the item you came from.
 - **Honest states.** Skeletons instead of spinners-and-jumps; "n/a" instead of fake zeros; "Paused until 19:13" instead of raw 403s; "all 18 are already claimed" instead of an empty list.
-- **Fit a narrow panel.** A fixed header and tab bar with independently scrolling panes; a pinned chat composer; tab icons drop out below 480px; lists page instead of growing unbounded.
-- **Calm, native look.** GitHub-adjacent (Primer-like) tokens, system font, light and dark from the OS, subtle motion (≤250 ms) that respects reduced-motion.
+- **Fit a narrow panel.** A fixed header and tab bar with independently scrolling panes; a pinned chat composer; a one-line header with the owner's avatar; lists page instead of growing unbounded.
+- **Calm, native look.** GitHub-adjacent (Primer-like) tokens, system font at 13px, light and dark from the OS, subtle motion (≤250 ms) that respects reduced-motion. Hairlines over boxes: lists are hairline-separated rows (the row opens the brief, ↗ opens GitHub), labels are coloured dots, statuses are a thin tone rule, section titles are sentence case, and colour is saved for meaning (status, links, the active control).
 - **Guide to the next action.** Banners and briefs end with what to do ("Get token", "comment before you start", "tag the code owner", commands to copy).
 
 ---

@@ -192,7 +192,7 @@ test("issues open as a short preview; Show all expands from cache, then Load mor
       : json([issue(99)])),
   } });
   await panel.fn.fetchIssues();
-  const shown = () => (panel.el("issues-list").innerHTML.match(/class="list-card"/g) || []).length;
+  const shown = () => (panel.el("issues-list").innerHTML.match(/class="list-row"/g) || []).length;
   assert.equal(shown(), 5);
   assert.equal(panel.el("issues-more").textContent, "Show all issues");
   const calls = gh.apiCalls.length;

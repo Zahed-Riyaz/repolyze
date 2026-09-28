@@ -329,6 +329,8 @@ async function updateRepoInfo() {
   document.getElementById("repo-forks").textContent = "—";
   document.getElementById("repo-license-wrap").hidden = true;
   document.getElementById("repo-fork-badge").style.display = "none";
+  document.getElementById("repo-avatar").hidden = true;
+  document.getElementById("ext-logo").style.display = "";
   document.getElementById("repo-identity").innerHTML =
     `<div class="repo-identity-main"><span class="sk repo-avatar"></span><span class="sk-lines" style="flex:1;display:flex;flex-direction:column;gap:8px"><span class="sk sk-line short"></span><span class="sk sk-line"></span></span></div>`;
 
@@ -705,6 +707,14 @@ function applyRepoData(data) {
     forkBadge.style.display = "none";
   }
   document.getElementById("repo-identity").innerHTML = repoIdentityHtml(data);
+  // The owner's avatar replaces the generic logo in the header
+  const avatar = document.getElementById("repo-avatar");
+  if (data.owner?.avatar_url) {
+    avatar.src = avatarUrl(data.owner.avatar_url, 64);
+    avatar.classList.toggle("is-org", data.owner.type === "Organization");
+    avatar.hidden = false;
+    document.getElementById("ext-logo").style.display = "none";
+  }
 }
 
 // Top of the Repo tab: whose project this is. The owner's avatar stands in for
@@ -876,24 +886,32 @@ function showMoreIssues() {
   fetchIssues(); // served from cache
 }
 
+// GitHub label → a coloured dot and its name (colours validated, text escaped)
+function labelDotHtml(l) {
+  const color = /^[0-9a-f]{6}$/i.test(l.color || "") ? l.color : "8b949e";
+  return `<span class="label-dot" style="--lc:#${color}">${escapeHtml(l.name)}</span>`;
+}
+
+// The whole row opens the brief; ↗ opens the issue on GitHub
 function issueCard(issue) {
-  const labelsHtml = issue.labels
-    .map(l => `<span class="label-chip" style="--lc:#${/^[0-9a-f]{6}$/i.test(l.color) ? l.color : "8b949e"}">${escapeHtml(l.name)}</span>`)
-    .join("");
+  const labels = issue.labels.slice(0, 3).map(labelDotHtml).join("") +
+    (issue.labels.length > 3 ? `<span class="label-more" title="${escapeHtml(issue.labels.slice(3).map(l => l.name).join(", "))}">+${issue.labels.length - 3}</span>` : "");
   const reactions = issue.reactions?.total_count || 0;
   const assignee = issue.assignees?.[0] || issue.assignee;
   return `
-    <li class="list-card">
-      <a href="${issue.html_url}" target="_blank" class="issue-link"><span class="issue-number">#${issue.number}</span> ${escapeHtml(issue.title)}</a>
-      <div class="issue-meta">
-        <span title="Comments">${icon("comment", "icon-sm")}${issue.comments}</span>
-        ${reactions ? `<span title="Reactions">${icon("heart", "icon-sm")}${reactions}</span>` : ""}
-        ${issue.state === "closed" ? `<span class="chip chip-closed">Closed</span>` : ""}
-        ${assignee ? `<span title="Assigned to ${escapeHtml(assignee.login)}"><img src="${avatarUrl(assignee.avatar_url, 32)}" class="avatar-sm" alt="">assigned</span>` : ""}
-        <span class="issue-age">${daysAgo(issue.created_at)}</span>
-      </div>
-      ${labelsHtml ? `<div class="issue-labels">${labelsHtml}</div>` : ""}
-      <button class="start-issue-btn" data-issue="${issue.number}">${icon("bolt", "icon-sm")}Start this issue${icon("arrow-right", "icon-sm")}</button>
+    <li class="list-row">
+      <button class="row-open start-issue-btn" data-issue="${issue.number}" title="Start this issue">
+        <span class="row-title"><span class="issue-number">#${issue.number}</span> ${escapeHtml(issue.title)}</span>
+        <span class="row-meta">
+          ${issue.state === "closed" ? `<span class="chip chip-closed">Closed</span>` : ""}
+          <span title="${issue.comments} comments">${icon("comment", "icon-xs")}${issue.comments}</span>
+          ${reactions ? `<span title="${reactions} reactions">${icon("heart", "icon-xs")}${reactions}</span>` : ""}
+          ${assignee ? `<span title="Assigned to ${escapeHtml(assignee.login)}"><img src="${avatarUrl(assignee.avatar_url, 32)}" class="avatar-sm" alt="">assigned</span>` : ""}
+          ${labels}
+          <span class="row-age">${daysAgo(issue.created_at)}</span>
+        </span>
+      </button>
+      <a class="row-external" href="${issue.html_url}" target="_blank" title="Open on GitHub" aria-label="Open #${issue.number} on GitHub">${icon("external", "icon-sm")}</a>
     </li>`;
 }
 

@@ -213,7 +213,7 @@ test("with a token, long timelines are paged so no conversation is missed", asyn
 test("Understand this PR buttons are on the Contribute list and open the brief", async () => {
   const { panel } = prPanel({ routes: { "/pulls?state=open&sort=created&direction=desc&per_page=15&page=1": [basePr] } });
   await panel.fn.fetchPrList();
-  assert.match(panel.el("prs-list").innerHTML, /class="start-issue-btn pr-brief-btn" data-pr="42"/);
+  assert.match(panel.el("prs-list").innerHTML, /class="row-open pr-brief-btn" data-pr="42"/);
   panel.fn.openPrBriefFromList("42");
   await tick(20);
   assert.equal(panel.el("contribute-browse").hidden, true);

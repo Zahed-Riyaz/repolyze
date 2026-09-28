@@ -518,15 +518,18 @@ function prCard(pr) {
     : pr.draft ? `<span class="chip">Draft</span>`
     : idleDays >= 21 ? `<span class="chip chip-stale" title="No activity for ${idleDays} days">Idle ${idleDays}d</span>`
     : pr.requested_reviewers?.length ? `<span class="chip chip-review">Review requested</span>` : "";
+  // The whole row opens the brief; ↗ opens the PR on GitHub
   return `
-    <li class="list-card">
-      <a href="${pr.html_url}" target="_blank" class="issue-link"><span class="issue-number">#${pr.number}</span> ${escapeHtml(pr.title)}</a>
-      <div class="issue-meta">
-        <span><img src="${avatarUrl(pr.user.avatar_url, 32)}" class="avatar-sm" alt="" loading="lazy">${escapeHtml(pr.user.login)}</span>
-        ${chip}
-        <span class="issue-age">${daysAgo(pr.state === "closed" ? (pr.closed_at || pr.updated_at) : pr.created_at)}</span>
-      </div>
-      <button class="start-issue-btn pr-brief-btn" data-pr="${pr.number}">${icon("sparkles", "icon-sm")}Understand this PR${icon("arrow-right", "icon-sm")}</button>
+    <li class="list-row">
+      <button class="row-open pr-brief-btn" data-pr="${pr.number}" title="Understand this PR">
+        <span class="row-title"><span class="issue-number">#${pr.number}</span> ${escapeHtml(pr.title)}</span>
+        <span class="row-meta">
+          <span><img src="${avatarUrl(pr.user.avatar_url, 32)}" class="avatar-sm" alt="" loading="lazy">${escapeHtml(pr.user.login)}</span>
+          ${chip}
+          <span class="row-age">${daysAgo(pr.state === "closed" ? (pr.closed_at || pr.updated_at) : pr.created_at)}</span>
+        </span>
+      </button>
+      <a class="row-external" href="${pr.html_url}" target="_blank" title="Open on GitHub" aria-label="Open PR #${pr.number} on GitHub">${icon("external", "icon-sm")}</a>
     </li>`;
 }
 
