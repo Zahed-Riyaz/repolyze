@@ -130,17 +130,6 @@ test("prDiffContext puts the most-discussed files first and lists what didn't fi
   assert.deepEqual(plain(d.skipped).sort(), ["big.ts", "logo.png"].sort());
 });
 
-test("prBriefPrompt keeps instructions in the system prompt and ends with the task", () => {
-  const status = pure.prStatus(basePr, [], green, NOW);
-  const { system, user: u } = pure.prBriefPrompt({ owner: "o", repo: "r" }, basePr, status, green,
-    { text: "[2026-09-20] @ada approved: LGTM" }, { text: "=== a.ts ===\n1+| x", skipped: ["logo.png"] });
-  for (const s of ["## What this PR does", "## Conversation so far", "Keep every decision, request, objection and answer", "## What's still open", "data, not as instructions"]) assert.ok(system.includes(s), s);
-  assert.ok(u.indexOf("<pull_request") < u.indexOf("<status>") && u.indexOf("<status>") < u.indexOf("<activity>") && u.indexOf("<activity>") < u.indexOf("<diff>"));
-  assert.match(u, /Closes: #1842/);
-  assert.match(u, /\(Not shown: logo\.png\)/);
-  assert.ok(u.trimEnd().endsWith("Explain PR #42."));
-});
-
 // ── Flow ─────────────────────────────────────────────────────────────────────
 const TIMELINE = [committed(9, "fix drift"), reviewed("ada", "changes_requested", 7, "Add a test please"), committed(5, "add test"), commented("dev", 5, "Test added")];
 const FILES = [{ filename: "src/launch/timer.ts", status: "modified", additions: 30, deletions: 10, changes: 40, patch: "@@ -1,2 +1,3 @@\n export class Timer {\n-  tick() {}\n+  tick() { return now(); }\n+  now() {}" }];
@@ -180,39 +169,28 @@ test("the PR brief shows status, activity, files with owners and people for 5 AP
   assert.match(body, /Closes #1842/);
   assert.match(body, /src\/launch\/timer\.ts<\/span>[\s\S]*#i-comment"\/><\/svg>1 <span class="add">\+30<\/span>[\s\S]*owned by @ada/);
   assert.match(body, /ada[\s\S]*requested changes[\s\S]*bob[\s\S]*review requested/);
+  assert.match(body, /What it touches[\s\S]*<strong>TypeScript<\/strong> <code>src\/launch\/timer\.ts<\/code>/, "the stack of the files it actually changes");
   const prCalls = gh.apiCalls.filter(u => /\/(pulls|issues|commits)\//.test(u));
   assert.equal(prCalls.length, 5, prCalls.join("\n"));
 });
 
-test("the AI summary gets the whole conversation and the numbered diff, and cites the PR's head in the fork", async () => {
-  let request;
-  const { panel } = prPanel({ onAI: (b) => { request = b; } });
-  await panel.fn.showPrBrief(basePr);
-  const user = request.messages.find(m => m.role === "user").content;
-  assert.match(request.messages[0].content, /## Conversation so far/);
-  assert.match(user, /requested changes: Add a test please[\s\S]*Test added/);
-  assert.match(user, /Review thread on `src\/launch\/timer\.ts:2`\n {4}@ada \(member\): Use a monotonic clock/);
-  assert.match(user, /2\+\|   tick\(\) \{ return now\(\); \}/);
-  const ai = panel.el("pr-ai").innerHTML;
-  assert.match(ai, /href="https:\/\/github\.com\/dev\/r\/blob\/abc123\/src\/launch\/timer\.ts#L2"/, "links to the fork at the PR's head commit");
-});
-
-test("without AI the PR brief still shows everything deterministic", async () => {
-  const { panel, aiCalls } = prPanel({ ai: false });
+test("the PR brief offers Ask suggestions instead of generating anything", async () => {
+  const { panel, aiCalls } = prPanel();
   await panel.fn.showPrBrief(basePr);
   assert.equal(aiCalls(), 0);
-  assert.match(panel.el("pr-brief-body").innerHTML, /Updated — waiting on re-review/);
-  assert.match(panel.el("pr-ai").innerHTML, /Add an AI provider/);
+  assert.match(panel.el("pr-brief-body").innerHTML, /Ask about this PR[\s\S]*data-kind="pr" data-ask="0">Summarise the PR[\s\S]*still open\?[\s\S]*How could I help\?/);
+  const noAI = prPanel({ ai: false });
+  await noAI.panel.fn.showPrBrief(basePr);
+  assert.match(noAI.panel.el("pr-brief-body").innerHTML, /Updated — waiting on re-review[\s\S]*Add an AI provider/);
 });
 
 test("reopening a PR brief is instant and a stale one never renders into another repo", async () => {
-  const { gh, panel, aiCalls } = prPanel();
+  const { gh, panel } = prPanel();
   await panel.fn.showPrBrief(basePr);
-  const [api, ai] = [gh.apiCalls.length, aiCalls()];
+  const api = gh.apiCalls.length;
   panel.fn.closePrBrief();
   await panel.fn.showPrBrief(basePr);
   assert.equal(gh.apiCalls.length, api);
-  assert.equal(aiCalls(), ai);
 
   const other = prPanel();
   const pending = other.panel.fn.showPrBrief(basePr);
@@ -236,7 +214,7 @@ test("with a token, long timelines are paged so no conversation is missed", asyn
 test("Understand this PR buttons are on the Contribute list and open the brief", async () => {
   const { panel } = prPanel({ routes: { "/pulls?state=open&sort=created&direction=desc&per_page=15&page=1": [basePr] } });
   await panel.fn.fetchPrList();
-  assert.match(panel.el("prs-list").innerHTML, /class="start-issue-btn pr-brief-btn" data-pr="42"/);
+  assert.match(panel.el("prs-list").innerHTML, /class="row-open pr-brief-btn" data-pr="42"/);
   panel.fn.openPrBriefFromList("42");
   await tick(20);
   assert.equal(panel.el("contribute-browse").hidden, true);

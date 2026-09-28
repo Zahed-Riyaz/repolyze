@@ -48,7 +48,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   document.getElementById("issue-sort").addEventListener("change", (e) => { issueView.sort = e.target.value; fetchIssues(); });
   document.getElementById("issue-unclaimed").addEventListener("change", (e) => setUnclaimed(e.target.checked));
-  document.getElementById("issues-more").addEventListener("click", () => fetchIssues({ append: true }));
+  document.getElementById("issues-more").addEventListener("click", () => showMoreIssues());
+  document.getElementById("issue-find").addEventListener("submit", (e) => {
+    e.preventDefault();
+    findIssue(document.getElementById("issue-find-input").value);
+  });
+  document.getElementById("issues-summary").addEventListener("click", (e) => {
+    if (e.target.closest?.(".fit-sign-in")) { e.preventDefault(); openTokenSettings(); return; }
+    if (e.target.closest?.(".issue-clear-search")) clearIssueSearch();
+  });
 
   // "Start this issue" brief
   document.getElementById("issues-list").addEventListener("click", (e) => {
@@ -57,7 +65,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   document.getElementById("brief-back").addEventListener("click", closeIssueBrief);
   document.getElementById("brief-copy").addEventListener("click", copyBrief);
-  document.getElementById("brief-ask").addEventListener("click", askAboutIssue);
   document.getElementById("brief-body").addEventListener("click", handleBriefClick);
 
   // "Understand this PR" brief
@@ -67,15 +74,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   document.getElementById("pr-brief-back").addEventListener("click", closePrBrief);
   document.getElementById("pr-brief-copy").addEventListener("click", copyPrBrief);
-  document.getElementById("pr-brief-ask").addEventListener("click", askAboutPr);
   document.getElementById("pr-brief-body").addEventListener("click", handlePrBriefClick);
+
   document.querySelectorAll(".pr-state-btn").forEach(btn => btn.addEventListener("click", () => setPrState(btn.dataset.state)));
   document.getElementById("pr-find").addEventListener("submit", (e) => {
     e.preventDefault();
     findPr(document.getElementById("pr-find-input").value);
   });
-  document.getElementById("prs-more").addEventListener("click", () => fetchPrList({ append: true }));
+  document.getElementById("prs-more").addEventListener("click", () => showMorePrs());
+  document.getElementById("pr-sort").addEventListener("change", (e) => { prView.sort = e.target.value; fetchPrList(); });
   document.getElementById("prs-summary").addEventListener("click", (e) => {
+    if (e.target.closest?.(".fit-sign-in")) { e.preventDefault(); openTokenSettings(); return; }
     if (e.target.closest?.(".pr-clear-search")) setPrState(prView.state);
   });
 
@@ -83,14 +92,28 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("send-btn").addEventListener("click", () => { handleChat(); });
   const chatInput = document.getElementById("chat-input");
   chatInput.addEventListener("keydown", (e) => {
+    if (fileSuggestKeydown(e)) return;
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); handleChat(); }
   });
-  chatInput.addEventListener("input", autosizeChatInput);
+  chatInput.addEventListener("input", () => { autosizeChatInput(); updateFileSuggest(); });
+  chatInput.addEventListener("blur", () => setTimeout(closeFileSuggest, 150));
+  document.getElementById("file-suggest").addEventListener("mousedown", (e) => {
+    const item = e.target.closest?.(".file-suggest-item");
+    if (item) { e.preventDefault(); chooseFileSuggestion(item.dataset.path); }
+  });
+  // "Read N files" under an answer: remove / add files, then re-run
+  const chatHistory = document.getElementById("chat-history");
+  chatHistory.addEventListener("click", handleSourcesClick);
+  chatHistory.addEventListener("keydown", handleSourcesKeydown);
   document.getElementById("clear-chat-btn").addEventListener("click", clearChat);
+  document.getElementById("chat-focus").addEventListener("click", (e) => {
+    if (e.target.closest?.(".chat-focus-clear")) setChatFocus(null);
+  });
 
   // Load saved settings — also migrate legacy geminiApiKey → aiApiKey
-  const stored = await chrome.storage.local.get(["githubToken", "aiProvider", "aiApiKey", "ollamaModel", "geminiApiKey"]);
+  const stored = await chrome.storage.local.get(["githubToken", "githubUser", "aiProvider", "aiApiKey", "ollamaModel", "geminiApiKey"]);
   githubToken  = stored.githubToken  || "";
+  githubUser   = stored.githubUser   || null;
   aiProvider   = stored.aiProvider   || "groq";
   aiApiKey     = stored.aiApiKey     || "";
   ollamaModel  = stored.ollamaModel  || "llama3.2";
@@ -105,7 +128,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   initSettingsTab();
 
-  document.getElementById("rate-banner-btn").addEventListener("click", getGitHubToken);
+  document.getElementById("rate-banner-btn").addEventListener("click", signInOrGetToken);
+  document.getElementById("sp-gh-card").addEventListener("click", handleGitHubCardClick);
   document.getElementById("sp-get-token-link").addEventListener("click", (e) => {
     e.preventDefault(); // open via getGitHubToken so the paste hint shows too
     getGitHubToken();
@@ -116,6 +140,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openTokenSettings(); }
   });
   refreshRateLimit();
+  loadAccountAndStack();
 
   if (aiProvider !== "ollama" && !aiApiKey) {
     document.querySelector('.tab-btn[data-tab="settings"]')?.click();
@@ -142,9 +167,22 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (activeTab?.url) handleRepoRefresh(activeTab.url);
 });
 
+// Signed in (or a pasted token from before sign-in existed): know who, then
+// load their stack so issues can be scored by fit
+async function loadAccountAndStack() {
+  if (githubToken && !githubUser) {
+    githubUser = await fetchGitHubUser(githubToken).catch(() => null);
+    if (githubUser) await chrome.storage.local.set({ githubUser });
+    renderGitHubAccount();
+  }
+  const profile = await loadStackProfile();
+  renderStackCard();
+  if (profile) onStackChanged();
+}
+
 // ── View & tab state ──────────────────────────────────────────────────────────
 let onRepoPage = false;
-let lastContentTab = "issues";
+let lastContentTab = "contribute"; // a repo opens on what's available to work on
 
 function switchTab(name) {
   document.querySelectorAll(".tab-btn").forEach(t => {
@@ -227,7 +265,7 @@ function handleRepoRefresh(url) {
 
   if (urlObj.hostname !== "github.com" && urlObj.hostname !== "www.github.com") {
     showNotRepoMessage();
-    syncPrBriefWithPage(null);
+    syncBriefWithPage(null);
     return;
   }
 
@@ -243,7 +281,7 @@ function handleRepoRefresh(url) {
   ];
   if (pathParts.length < 2 || nonRepoPaths.includes(pathParts[0].toLowerCase())) {
     showNotRepoMessage();
-    syncPrBriefWithPage(null);
+    syncBriefWithPage(null);
     return;
   }
 
@@ -254,8 +292,37 @@ function handleRepoRefresh(url) {
     currentRepo = newRepo;
     updateRepoInfo();
   }
-  // On a PR page (…/pull/123, including its Files/Commits tabs)? Open its brief.
-  syncPrBriefWithPage(prNumberFromPath(pathParts));
+  // On an issue or PR page (…/issues/12, …/pull/123 and its tabs)? Open its brief.
+  syncBriefWithPage(briefPageFromPath(pathParts));
+}
+
+// ── Following the issue / PR page the user is on ─────────────────────────────
+// Opening github.com/o/r/issues/12 or github.com/o/r/pull/123 (or its
+// Files/Commits tabs) opens that item's brief on Contribute. Only the
+// deterministic parts load; AI questions go through Ask.
+// Moving between the same PR's tabs doesn't reopen or reload it (so closing it
+// sticks), and leaving the page closes a brief that was opened this way.
+let pageBrief = null; // "pr:owner/repo#123" / "issue:owner/repo#12" of the active tab
+
+function briefPageFromPath(pathParts) {
+  if (!/^\d+$/.test(pathParts[3] || "")) return null;
+  const kind = { pull: "pr", issues: "issue" }[pathParts[2]];
+  return kind ? { kind, number: Number(pathParts[3]) } : null;
+}
+
+function syncBriefWithPage(page) {
+  const pageKey = page && currentRepo ? `${page.kind}:${repoKey()}#${page.number}` : null;
+  if (pageKey === pageBrief) return;
+  const leaving = pageBrief;
+  pageBrief = pageKey;
+  if (page) {
+    switchTab("contribute");
+    if (page.kind === "pr") showPrBrief(page.number, { auto: true });
+    else showIssueBrief(page.number, { auto: true });
+  }
+  if (!leaving) return;
+  if (activePrBrief?.auto && `pr:${activePrBrief.key}#${activePrBrief.number}` === leaving) closePrBrief();
+  if (activeBrief?.auto && `issue:${activeBrief.key}#${activeBrief.number}` === leaving) closeIssueBrief();
 }
 
 function showNotRepoMessage() {
@@ -281,19 +348,29 @@ async function updateRepoInfo() {
   document.getElementById("repo-forks").textContent = "—";
   document.getElementById("repo-license-wrap").hidden = true;
   document.getElementById("repo-fork-badge").style.display = "none";
+  document.getElementById("repo-avatar").hidden = true;
+  document.getElementById("ext-logo").style.display = "";
+  document.getElementById("repo-identity").innerHTML =
+    `<div class="repo-identity-main"><span class="sk repo-avatar"></span><span class="sk-lines" style="flex:1;display:flex;flex-direction:column;gap:8px"><span class="sk sk-line short"></span><span class="sk sk-line"></span></span></div>`;
 
   // A brief belongs to the repo it was opened on
   closeIssueBrief();
   issueIndex.clear();
   closePrBrief();
   prIndex.clear();
+  setChatFocus(null);
 
-  // New repo starts on "All" (sort and unclaimed preferences carry over)
+  // New repo starts on "All" (sort and unclaimed preferences carry over), with
+  // both lists back to their short previews
   issueView.filter = "";
+  issueView.query = "";
+  issueView.expanded = false;
+  document.getElementById("issue-find-input").value = "";
+  prView.expanded = false;
   document.querySelectorAll(".filter-btn").forEach(b => b.classList.toggle("active", b.dataset.label === ""));
 
   // Header + the visible tab now; other tabs load the first time they're opened,
-  // which keeps a repo visit to 2 requests instead of ~13.
+  // which keeps a repo visit to 3 requests (header, issues, PRs) instead of ~13.
   loadedTabs = new Set();
   fetchRepoData();
   loadChatHistory();
@@ -302,9 +379,7 @@ async function updateRepoInfo() {
 
 // ── Lazy tab loading ──────────────────────────────────────────────────────────
 const TAB_LOADERS = {
-  issues: () => fetchIssues(),
-  tech: () => fetchTechStack(),
-  maintainers: () => fetchMaintainers(),
+  repo: () => fetchRepoTab(),
   contribute: () => fetchContributeTab(),
 };
 let loadedTabs = new Set();
@@ -549,26 +624,27 @@ function renderRateLimit() {
   const limited = isRateLimited();
   const low = !limited && remaining !== null && remaining <= Math.max(10, limit * 0.05);
   badge.classList.toggle("rate-limit-low", limited || low);
+  const fix = signInAvailable() ? "Signing in" : "A free token";
   badge.title = githubToken
     ? "GitHub API requests left this hour"
-    : "GitHub API requests left this hour — click to add a token for 5,000/hour";
+    : `GitHub API requests left this hour — click to ${signInAvailable() ? "sign in" : "add a token"} for 5,000/hour`;
 
   const banner = document.getElementById("rate-banner");
   let title = "", sub = "", action = "";
   if (badToken) {
     title = "GitHub rejected your token";
-    sub = "It may have expired or been revoked — generate a new one on GitHub.";
-    action = "Get new token";
+    sub = signInAvailable() ? "It may have expired or been revoked — sign in again." : "It may have expired or been revoked — generate a new one on GitHub.";
+    action = signInAvailable() ? "Sign in again" : "Get new token";
   } else if (limited) {
     const mins = Math.max(1, Math.ceil((ghState.resetAt - Date.now()) / 60000));
     title = "GitHub's hourly limit is used up";
     sub = `Resumes at ${formatTime(ghState.resetAt)} (in ${mins} min).` +
-      (githubToken ? " Anything already loaded still works." : " A free token raises the limit to 5,000/hour.");
-    action = githubToken ? "" : "Get token";
+      (githubToken ? " Anything already loaded still works." : ` ${fix} raises the limit to 5,000/hour.`);
+    action = githubToken ? "" : signInAvailable() ? "Sign in" : "Get token";
   } else if (low && !githubToken) {
     title = `${remaining} GitHub request${remaining === 1 ? "" : "s"} left this hour`;
-    sub = "A free token raises the limit to 5,000/hour.";
-    action = "Get token";
+    sub = `${fix} raises the limit to 5,000/hour.`;
+    action = signInAvailable() ? "Sign in" : "Get token";
   }
   banner.hidden = !title;
   banner.classList.toggle("is-warn", !!title && !badToken && !limited);
@@ -591,9 +667,13 @@ function renderRateLimit() {
 
 const GITHUB_TOKEN_URL = "https://github.com/settings/tokens";
 
+// Settings, scrolled to the GitHub card: the sign-in button when sign-in is set
+// up and nobody's signed in, else the token field
 function openTokenSettings() {
   switchTab("settings");
-  const input = document.getElementById("sp-gh-token");
+  const useSignIn = signInAvailable() && !githubToken;
+  if (!useSignIn) document.getElementById("sp-token-details").open = true;
+  const input = document.getElementById(useSignIn ? "sp-signin-btn" : "sp-gh-token");
   input.scrollIntoView({ block: "center", behavior: "smooth" });
   input.focus();
   // Draw the eye to where the new token goes
@@ -603,11 +683,19 @@ function openTokenSettings() {
   card.classList.add("attention");
 }
 
+// The limit banner's button: sign in when that's set up, else fetch a token
+function signInOrGetToken() {
+  if (!signInAvailable()) { getGitHubToken(); return; }
+  openTokenSettings();
+  startGitHubSignIn();
+}
+
 // Straight to GitHub's token page in a new tab, with the panel already waiting
 // on the token field — the side panel stays open, so the user just pastes on return.
 function getGitHubToken() {
   chrome.tabs.create({ url: GITHUB_TOKEN_URL });
   openTokenSettings();
+  document.getElementById("sp-token-details").open = true;
   // Stays put while the user is off on GitHub generating the token
   showSpStatus("sp-gh-status", "Paste your new token here and press Save token.", false, 0);
 }
@@ -650,6 +738,39 @@ function applyRepoData(data) {
   } else {
     forkBadge.style.display = "none";
   }
+  document.getElementById("repo-identity").innerHTML = repoIdentityHtml(data);
+  // The owner's avatar replaces the generic logo in the header
+  const avatar = document.getElementById("repo-avatar");
+  if (data.owner?.avatar_url) {
+    avatar.src = avatarUrl(data.owner.avatar_url, 64);
+    avatar.classList.toggle("is-org", data.owner.type === "Organization");
+    avatar.hidden = false;
+    document.getElementById("ext-logo").style.display = "none";
+  }
+}
+
+// Top of the Repo tab: whose project this is. The owner's avatar stands in for
+// a repo icon (square for organisations, round for people, as on GitHub); the
+// website and topics show when the repo has them. All from the repo response.
+function repoIdentityHtml(data) {
+  const owner = data.owner || {};
+  const isOrg = owner.type === "Organization";
+  const homepage = /^https?:\/\//i.test(data.homepage || "") ? data.homepage : null;
+  const topics = (data.topics || []).slice(0, 8);
+  return `
+    <div class="repo-identity-main">
+      ${owner.avatar_url ? `<img src="${avatarUrl(owner.avatar_url, 96)}" class="repo-avatar${isOrg ? " is-org" : ""}" alt="">` : ""}
+      <div class="repo-identity-text">
+        <a href="${data.html_url}" target="_blank" class="repo-identity-name">${escapeHtml(data.full_name || "")}</a>
+        <div class="repo-identity-owner">
+          by <a href="${owner.html_url}" target="_blank">${escapeHtml(owner.login || "")}</a>
+          <span class="chip">${isOrg ? "Organization" : "User"}</span>
+          ${data.archived ? `<span class="chip chip-closed">Archived</span>` : ""}
+        </div>
+      </div>
+    </div>
+    ${homepage ? `<a class="repo-homepage" href="${escapeHtml(homepage)}" target="_blank">${icon("arrow-right", "icon-sm")}${escapeHtml(homepage.replace(/^https?:\/\/(www\.)?/i, "").replace(/\/$/, ""))}</a>` : ""}
+    ${topics.length ? `<div class="issue-labels">${topics.map(t => `<span class="chip">${escapeHtml(t)}</span>`).join("")}</div>` : ""}`;
 }
 
 function formatNumber(n) {
@@ -660,12 +781,19 @@ function formatNumber(n) {
 // ── Issues ────────────────────────────────────────────────────────────────────
 // "All" pages through the issues API. Label filters use the search API across
 // every open issue (not just one page), matched against the repo's real label
-// names; "Unclaimed only" there also drops issues with a linked PR.
-const issueView = { filter: "", sort: "comments", unclaimed: true };
+// names; "Unassigned" there also drops issues with a linked PR. The Find box
+// takes a number or link (opens the brief) or keywords (searches every issue,
+// open and closed, best match first — filters don't apply to a search).
+// The list opens as a short preview next to the PRs; "Show all" expands it
+// (from what's already loaded), after which the button pages with "Load more".
+const issueView = { filter: "", sort: "comments", unclaimed: true, query: "", expanded: false };
 const ISSUE_PAGE = 30;
-const SORT_WORDS = { comments: "most discussed first", created: "newest first", updated: "recently updated first" };
+const LIST_PREVIEW = 5;
+const SORT_WORDS = { comments: "most discussed first", created: "newest first", updated: "recently updated first", fit: "best fit for you first" };
+// "Best fit" reorders what GitHub returns for "most discussed" (fit is scored here, not by GitHub)
+const apiSort = (view) => (view.sort === "fit" ? "comments" : view.sort);
 
-const issueViewKey = (v) => `${v.filter}|${v.sort}|${v.unclaimed}`;
+const issueViewKey = (v) => (v.query ? `q|${v.query}` : `${v.filter}|${v.sort}|${v.unclaimed}`);
 
 async function fetchIssues({ append = false } = {}) {
   const repo = currentRepo;
@@ -677,14 +805,21 @@ async function fetchIssues({ append = false } = {}) {
   const more = document.getElementById("issues-more");
   const current = () => isCurrentRepo(cacheKey) && issueViewKey(issueView) === key;
 
-  if (!append && views[key]) { renderIssueList(views[key], view); return true; }
+  if (!append && views[key]) {
+    await annotateStacks(repo, views[key].items, "issue");
+    if (current()) renderIssueList(views[key], view);
+    return true;
+  }
   if (append) { more.disabled = true; more.textContent = "Loading…"; }
   else { list.innerHTML = skeletonList(5); more.hidden = true; document.getElementById("issues-summary").textContent = ""; }
 
   try {
     const page = append ? views[key].page + 1 : 1;
-    const result = view.filter ? await searchLabelIssues(repo, view, page) : await listOpenIssues(repo, view, page);
+    const result = view.query ? await searchIssues(repo, view, page)
+      : view.filter ? await searchLabelIssues(repo, view, page)
+      : await listOpenIssues(repo, view, page);
     views[key] = append ? { ...result, items: [...views[key].items, ...result.items] } : result;
+    await annotateStacks(repo, views[key].items, "issue");
     if (current()) renderIssueList(views[key], view);
     return true;
   } catch (err) {
@@ -702,8 +837,16 @@ async function fetchIssues({ append = false } = {}) {
 
 async function listOpenIssues(repo, view, page) {
   const { data, link } = await fetchGitHubPage(
-    `/issues?state=open${view.unclaimed ? "&assignee=none" : ""}&sort=${view.sort}&direction=desc&per_page=${ISSUE_PAGE}&page=${page}`, repo);
+    `/issues?state=open${view.unclaimed ? "&assignee=none" : ""}&sort=${apiSort(view)}&direction=desc&per_page=${ISSUE_PAGE}&page=${page}`, repo);
   return { items: data.filter(i => !i.pull_request), page, total: null, hasMore: /rel="next"/.test(link || "") };
+}
+
+// Keywords → every issue in the repo that matches (open and closed), best match first
+async function searchIssues(repo, view, page) {
+  const q = `repo:${repo.owner}/${repo.repo} is:issue ${view.query}`;
+  const res = await fetchGitHub(`https://api.github.com/search/issues?q=${encodeURIComponent(q)}&per_page=${ISSUE_PAGE}&page=${page}`, repo);
+  const total = res.total_count ?? 0;
+  return { items: res.items || [], page, total, hasMore: page * ISSUE_PAGE < Math.min(total, 1000) };
 }
 
 async function searchLabelIssues(repo, view, page) {
@@ -711,7 +854,7 @@ async function searchLabelIssues(repo, view, page) {
   if (!labels.length) return { items: [], page, total: 0, hasMore: false, labels, noLabel: true };
   const search = (unclaimed, perPage, p) => fetchGitHub(
     `https://api.github.com/search/issues?q=${encodeURIComponent(beginnerSearchQuery(repo, labels, { unclaimed }))}` +
-    `&sort=${view.sort}&order=desc&per_page=${perPage}&page=${p}`, repo);
+    `&sort=${apiSort(view)}&order=desc&per_page=${perPage}&page=${p}`, repo);
   const res = await search(view.unclaimed, ISSUE_PAGE, page);
   const total = res.total_count ?? 0;
   const result = { items: res.items || [], page, total, labels, hasMore: page * ISSUE_PAGE < Math.min(total, 1000) };
@@ -728,18 +871,28 @@ function renderIssueList(state, view) {
   const summary = document.getElementById("issues-summary");
   const filterName = { "good-first-issue": "good first", "help-wanted": "help wanted" }[view.filter];
 
-  if (view.filter) {
+  if (view.query) {
+    summary.innerHTML = `<strong>${state.total.toLocaleString()}</strong> issue${state.total === 1 ? "" : "s"} matching “${escapeHtml(view.query)}” · open and closed, best match first ` +
+      `<button class="btn btn-ghost btn-xs issue-clear-search">Clear</button>`;
+  } else if (view.filter) {
     summary.innerHTML = state.noLabel ? "" :
       `<strong>${state.total.toLocaleString()}</strong> ${filterName} issue${state.total === 1 ? "" : "s"}` +
       `${view.unclaimed ? " · unassigned, no linked PR" : ""} · ${SORT_WORDS[view.sort]}` +
       `<span class="issues-labels" title="Matched labels">Labels: ${state.labels.map(l => escapeHtml(l)).join(", ")}</span>`;
   } else {
-    summary.textContent = `${view.unclaimed ? "Unassigned open issues" : "All open issues"}, ${SORT_WORDS[view.sort]}`;
+    summary.textContent = ""; // the controls already say what's shown
+  }
+  // Best fit without a profile can't sort — say how to get one
+  if (view.sort === "fit" && !view.query && !stackProfile) {
+    summary.insertAdjacentHTML("beforeend",
+      `<span class="issues-labels">${signInAvailable() || githubToken ? "Sign in to sort by fit with your own repos." : "Add a GitHub token in Settings to sort by fit with your repos."} <a href="#" class="fit-sign-in">Set up</a></span>`);
   }
 
   if (!state.items.length) {
     more.hidden = true;
-    if (state.noLabel) {
+    if (view.query) {
+      list.innerHTML = stateItem("No issues match that search.");
+    } else if (state.noLabel) {
       list.innerHTML = stateItem(`This repo doesn't use a <strong>${filterName}</strong> label. Browse <strong>All</strong> and look for small, clearly described issues.`);
     } else if (state.claimedTotal) {
       list.innerHTML = stateItem(`All <strong>${state.claimedTotal}</strong> ${filterName} issues are already assigned or have a linked PR.` +
@@ -748,47 +901,106 @@ function renderIssueList(state, view) {
     } else {
       list.innerHTML = stateItem(view.filter
         ? `No open <strong>${filterName}</strong> issues right now.`
-        : `No open${view.unclaimed ? ", unassigned" : ""} issues. The <strong>Contribute</strong> tab has other ways to help.`);
+        : `No open${view.unclaimed ? ", unassigned" : ""} issues. The pull requests below are another way to help.`);
     }
     return;
   }
 
   state.items.forEach(i => issueIndex.set(i.number, i));
-  list.innerHTML = state.items.map(issueCard).join("");
-  more.hidden = !state.hasMore;
+  // Best fit: highest score first; ties keep GitHub's "most discussed" order
+  const items = view.sort === "fit" && stackProfile && !view.query
+    ? sortByFit(state.items, "issue")
+    : state.items;
+  // A search is something the user asked for, so show all its results
+  const preview = listPreview({ ...state, items }, issueView.expanded || !!view.query);
+  list.innerHTML = preview.items.map(issueCard).join("");
+  more.hidden = !preview.button;
   more.disabled = false;
-  more.textContent = "Load more";
+  more.textContent = preview.button === "all" ? `Show all${state.total ? ` ${state.total.toLocaleString()}` : ""} issues` : "Load more";
 }
 
+// Collapsed lists show the first few; the button either expands ("all") or pages ("more")
+function listPreview(state, expanded) {
+  const collapsed = !expanded && (state.items.length > LIST_PREVIEW || state.hasMore);
+  return {
+    items: collapsed ? state.items.slice(0, LIST_PREVIEW) : state.items,
+    button: collapsed ? "all" : state.hasMore ? "more" : null,
+  };
+}
+
+function showMoreIssues() {
+  if (issueView.expanded || issueView.query) { fetchIssues({ append: true }); return; }
+  issueView.expanded = true;
+  fetchIssues(); // served from cache
+}
+
+// GitHub label → a coloured dot and its name (colours validated, text escaped)
+function labelDotHtml(l) {
+  const color = /^[0-9a-f]{6}$/i.test(l.color || "") ? l.color : "8b949e";
+  return `<span class="label-dot" style="--lc:#${color}">${escapeHtml(l.name)}</span>`;
+}
+
+// The whole row opens the brief; ↗ opens the issue on GitHub
 function issueCard(issue) {
-  const labelsHtml = issue.labels
-    .map(l => `<span class="label-chip" style="--lc:#${/^[0-9a-f]{6}$/i.test(l.color) ? l.color : "8b949e"}">${escapeHtml(l.name)}</span>`)
-    .join("");
+  const labels = issue.labels.slice(0, 3).map(labelDotHtml).join("") +
+    (issue.labels.length > 3 ? `<span class="label-more" title="${escapeHtml(issue.labels.slice(3).map(l => l.name).join(", "))}">+${issue.labels.length - 3}</span>` : "");
   const reactions = issue.reactions?.total_count || 0;
   const assignee = issue.assignees?.[0] || issue.assignee;
   return `
-    <li class="list-card">
-      <a href="${issue.html_url}" target="_blank" class="issue-link"><span class="issue-number">#${issue.number}</span> ${escapeHtml(issue.title)}</a>
-      <div class="issue-meta">
-        <span title="Comments">${icon("comment", "icon-sm")}${issue.comments}</span>
-        ${reactions ? `<span title="Reactions">${icon("heart", "icon-sm")}${reactions}</span>` : ""}
-        ${assignee ? `<span title="Assigned to ${escapeHtml(assignee.login)}"><img src="${avatarUrl(assignee.avatar_url, 32)}" class="avatar-sm" alt="">assigned</span>` : ""}
-        <span class="issue-age">${daysAgo(issue.created_at)}</span>
-      </div>
-      ${labelsHtml ? `<div class="issue-labels">${labelsHtml}</div>` : ""}
-      <button class="start-issue-btn" data-issue="${issue.number}">${icon("bolt", "icon-sm")}Start this issue${icon("arrow-right", "icon-sm")}</button>
+    <li class="list-row">
+      <button class="row-open start-issue-btn" data-issue="${issue.number}" title="Start this issue">
+        <span class="row-title"><span class="issue-number">#${issue.number}</span> ${escapeHtml(issue.title)}</span>
+        <span class="row-meta">
+          ${issue.state === "closed" ? `<span class="chip chip-closed">Closed</span>` : ""}
+          <span title="${issue.comments} comments">${icon("comment", "icon-xs")}${issue.comments}</span>
+          ${reactions ? `<span title="${reactions} reactions">${icon("heart", "icon-xs")}${reactions}</span>` : ""}
+          ${assignee ? `<span title="Assigned to ${escapeHtml(assignee.login)}"><img src="${avatarUrl(assignee.avatar_url, 32)}" class="avatar-sm" alt="">assigned</span>` : ""}
+          ${labels}
+          <span class="row-age">${daysAgo(issue.created_at)}</span>
+        </span>
+        ${stackLineHtml(stackFor(issue.number, "issue"))}
+      </button>
+      <a class="row-external" href="${issue.html_url}" target="_blank" title="Open on GitHub" aria-label="Open #${issue.number} on GitHub">${icon("external", "icon-sm")}</a>
     </li>`;
 }
 
 function setIssueFilter(filter) {
+  resetIssueSearch();
   issueView.filter = filter;
   document.querySelectorAll(".filter-btn").forEach(b => b.classList.toggle("active", b.dataset.label === filter));
   fetchIssues();
 }
 
 function setUnclaimed(on) {
+  resetIssueSearch();
   issueView.unclaimed = on;
   document.getElementById("issue-unclaimed").checked = on;
+  fetchIssues();
+}
+
+// Find box: a number or issue link opens the brief (a PR link opens the PR's);
+// words search every issue in the repo
+function findIssue(text) {
+  const q = parseFindQuery(text, currentRepo);
+  if (!q) { clearIssueSearch(); return; }
+  if (q.number && !q.sameRepo) {
+    document.getElementById("issues-summary").innerHTML =
+      `That ${q.kind === "pr" ? "PR" : "issue"} is in <strong>${escapeHtml(q.owner)}/${escapeHtml(q.repo)}</strong> — open it on GitHub and the panel will follow.`;
+    return;
+  }
+  if (q.kind === "pr") { showPrBrief(q.number); return; }
+  if (q.number) { showIssueBrief(q.number); return; }
+  issueView.query = q.terms;
+  fetchIssues();
+}
+
+function resetIssueSearch() {
+  issueView.query = "";
+  document.getElementById("issue-find-input").value = "";
+}
+
+function clearIssueSearch() {
+  resetIssueSearch();
   fetchIssues();
 }
 
@@ -1186,18 +1398,19 @@ function renderPeople({ maintainers, partialSample, contributors }) {
     </li>`).join("");
 }
 
-// ── Contribute Tab ────────────────────────────────────────────────────────────
+// ── Contribute & Repo tabs ────────────────────────────────────────────────────
+// Contribute: issues and PRs side by side (each serves from cache when it can).
 async function fetchContributeTab() {
-  const cacheKey = repoKey();
+  return (await Promise.all([fetchIssues(), fetchPrList()])).every(Boolean);
+}
 
-  let health = Promise.resolve(true);
-  if (repoCache[cacheKey]?.health) {
-    renderHealthCard(repoCache[cacheKey].health);
-  } else {
-    health = fetchRepoHealth();
-  }
-  const prs = fetchPrList(); // serves the current view from cache when it can
-  return (await Promise.all([health, prs])).every(Boolean);
+// Repo: health score, stack and maintainers — context about the project
+async function fetchRepoTab() {
+  const cacheKey = repoKey();
+  const health = repoCache[cacheKey]?.health
+    ? (renderHealthCard(repoCache[cacheKey].health), true)
+    : fetchRepoHealth();
+  return (await Promise.all([health, fetchTechStack(), fetchMaintainers()])).every(Boolean);
 }
 
 async function fetchRepoHealth() {
@@ -1276,7 +1489,8 @@ function renderHealthCard({ score, factors, measured, signals }) {
 }
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
-async function handleChat() {
+// `files` (from editing an answer's file list) replaces file selection for this question
+async function handleChat({ files = null } = {}) {
   const input = document.getElementById("chat-input");
   const query = input.value.trim();
   if (!query) return;
@@ -1292,11 +1506,14 @@ async function handleChat() {
   const repo = currentRepo;
   const messages = chatMessages;
   const isStale = () => currentRepo !== repo;
+  // Focused on an issue/PR from its brief? Answers are grounded in it (ask-focus.js)
+  const item = focusedItem();
+  const tag = item ? { kind: item.kind, number: item.number } : null;
 
   document.getElementById("chat-starters")?.remove();
   const userTime = Date.now();
-  messages.push({ role: "user", text: query, time: userTime });
-  appendChatMessage("user", query, false, true, userTime);
+  messages.push({ role: "user", text: query, time: userTime, ...(tag ? { focus: tag } : {}) });
+  appendChatMessage("user", query, false, true, userTime, null, { focus: tag });
   input.value = "";
   autosizeChatInput();
 
@@ -1309,6 +1526,8 @@ async function handleChat() {
   document.getElementById("typing-status").textContent = "Reading the repo…";
   typingEl.style.display = "flex";
   typingEl.classList.add("typing-anim");
+  const typingFiles = document.getElementById("typing-files");
+  typingFiles.hidden = true;
   chatHistEl.classList.add("responding");
   document.getElementById("send-btn").disabled = true;
 
@@ -1329,10 +1548,22 @@ async function handleChat() {
     const previousQuestion = messages.slice(0, -1).reverse().find(m => m.role === "user")?.text;
     const setStatus = (t) => { if (!isStale()) document.getElementById("typing-status").textContent = t; };
     // Files behind the previous answer stay in play for follow-up questions
-    const previousFiles = [...new Set((messages.slice(0, -1).reverse().find(m => m.role === "bot" && m.sources)?.sources || []).map(s => s.path))];
-    const { context, sources, ref } = await buildChatContext(repo, query, previousQuestion, setStatus, { previousFiles });
+    // about the same thing (not a PR's files, which may not exist on the default branch)
+    const lastBot = messages.slice(0, -1).reverse().find(m => m.role === "bot" && m.sources);
+    const sameFocus = lastBot && !lastBot.cite && lastBot.focus?.kind === tag?.kind && lastBot.focus?.number === tag?.number;
+    const previousFiles = sameFocus ? [...new Set(lastBot.sources.map(s => s.path))] : [];
+    // The files being read show as chips while the answer is prepared
+    const onFiles = (list) => {
+      if (isStale() || !list.length) return;
+      typingFiles.innerHTML = `<span class="msg-sources-label">Reading ${list.length} file${list.length === 1 ? "" : "s"}</span>` +
+        list.map(f => `<span class="source-chip${FOLLOWED.has(f.via) ? " source-followed" : ""}" title="${escapeHtml(f.path)} — ${VIA_LABEL[f.via] || ""}">${icon("file", "icon-sm")}<span>${escapeHtml(f.path.split("/").pop())}</span></span>`).join("");
+      typingFiles.hidden = false;
+    };
+    const { context, sources, ref, cite = null, focus = "" } = item
+      ? await buildFocusedContext(repo, item, query, previousQuestion, setStatus, previousFiles, { files, onFiles })
+      : await buildChatContext(repo, query, previousQuestion, setStatus, { previousFiles, files, onFiles });
     const { system, contents } = buildChatPrompt({
-      repo, context, question: query,
+      repo, context, question: query, focus,
       history: messages.slice(0, -1),
       historyBudget: Math.floor((CONTEXT_BUDGET[aiProvider] || 20000) * 0.25),
     });
@@ -1344,6 +1575,7 @@ async function handleChat() {
       if (!streamStarted) {
         streamStarted = true;
         typingEl.style.display = "none";
+        typingFiles.hidden = true;
         // Animate in + show streaming glow on left border
         botBubble.classList.add("msg-entering", "streaming");
         chatHistEl.appendChild(botWrap);
@@ -1353,15 +1585,16 @@ async function handleChat() {
     }, { system });
 
     const botTime = Date.now();
-    messages.push({ role: "bot", text: fullReply, time: botTime, sources, ref });
+    const meta = { sources, ref, ...(cite ? { cite } : {}), ...(tag ? { focus: tag } : {}) };
+    messages.push({ role: "bot", text: fullReply, time: botTime, ...meta });
     saveChatHistory(repo, messages);
     if (isStale()) return;
 
     // Streaming done — remove glow, stamp time, render final content
     botBubble.classList.remove("streaming");
-    botBubble.innerHTML = linkifyCitations(renderMarkdown(fullReply), repo, ref, sources);
+    botBubble.innerHTML = linkifyCitations(renderMarkdown(fullReply), cite || repo, ref, sources);
     if (!streamStarted) chatHistEl.appendChild(botWrap); // empty reply: no chunk ever arrived
-    appendBotFooter(botWrap, botTime, query, { sources, ref });
+    appendBotFooter(botWrap, botTime, query, { ...meta, text: fullReply });
     if (isNearBottom(chatHistEl)) chatHistEl.scrollTop = chatHistEl.scrollHeight;
   } catch (err) {
     const ollamaErr = err.message === "OLLAMA_NOT_RUNNING" || err.message === "OLLAMA_CORS";
@@ -1387,12 +1620,14 @@ async function handleChat() {
     }
   } finally {
     typingEl.style.display = "none";
+    typingFiles.hidden = true;
     chatHistEl.classList.remove("responding");
     document.getElementById("send-btn").disabled = false;
   }
 }
 
-async function regenerateResponse(botWrap, query) {
+// Re-asks the question behind `botWrap`; `opts.files` re-runs it on an edited file list
+async function regenerateResponse(botWrap, query, opts = {}) {
   if (document.getElementById("send-btn").disabled) return; // a reply is already streaming
 
   const chatHistEl = document.getElementById("chat-history");
@@ -1412,7 +1647,7 @@ async function regenerateResponse(botWrap, query) {
   // Re-send the original query
   const input = document.getElementById("chat-input");
   input.value = query;
-  handleChat();
+  return handleChat(opts);
 }
 
 function isNearBottom(el, threshold = 80) {
@@ -1433,11 +1668,19 @@ function appendChatMessage(role, text, save = true, animate = true, time = null,
     wrap.appendChild(label);
   }
 
+  // Questions asked about an issue/PR carry its number
+  if (role === "user" && meta.focus) {
+    const tag = document.createElement("span");
+    tag.className = "msg-focus";
+    tag.textContent = `About ${focusLabel(meta.focus)}`;
+    wrap.appendChild(tag);
+  }
+
   const msg = document.createElement("div");
   msg.className = `chat-msg chat-msg-${role}${animate ? " msg-entering" : ""}`;
   if (role === "bot") {
     msg.innerHTML = currentRepo && meta.sources?.length
-      ? linkifyCitations(renderMarkdown(text), currentRepo, meta.ref, meta.sources)
+      ? linkifyCitations(renderMarkdown(text), meta.cite || currentRepo, meta.ref, meta.sources)
       : renderMarkdown(text);
   } else {
     msg.textContent = text;
@@ -1445,7 +1688,7 @@ function appendChatMessage(role, text, save = true, animate = true, time = null,
   wrap.appendChild(msg);
 
   if (role === "bot") {
-    appendBotFooter(wrap, time, query, meta);
+    appendBotFooter(wrap, time, query, { ...meta, text });
   } else if (time) {
     const t = document.createElement("span");
     t.className = "msg-time";
@@ -1460,38 +1703,227 @@ function appendChatMessage(role, text, save = true, animate = true, time = null,
 
 const BOT_LABEL_HTML = `${icon("sparkles", "icon-sm")}Assistant`;
 
-// Files the answer was grounded in, linked to the exact lines on GitHub
-function sourcesHtml(sources, ref) {
+// How each file came to be read (retrieval.js sets `via`)
+const VIA_LABEL = {
+  named: "named in the question", picked: "chosen for the question", chosen: "chosen by you",
+  import: "imported by a file that was read", search: "found by code search",
+};
+const FOLLOWED = new Set(["import", "search"]);
+
+// Files the answer was grounded in, linked to the exact lines on GitHub. When
+// `editable`, each file can be left out (✕) or another added, then re-run.
+function sourcesHtml(sources, ref, { editable = false } = {}) {
   if (!sources?.length || !currentRepo) return "";
   const byFile = new Map();
   for (const s of sources) {
     if (!byFile.has(s.path)) byFile.set(s.path, []);
     byFile.get(s.path).push(s);
   }
-  const chips = [...byFile].map(([path, ranges]) => {
-    const r = ranges[0];
-    const lines = ranges.map(x => (x.start === 1 && ranges.length === 1 ? "" : `L${x.start}–${x.end}`)).filter(Boolean).join(", ");
-    return `<a class="source-chip" href="${sourceUrl(currentRepo, ref, path, r.start, r.end)}" target="_blank" title="${escapeHtml(path)}${lines ? ` (${lines})` : ""}">` +
-      `${icon("file", "icon-sm")}<span>${escapeHtml(path.split("/").pop())}</span>${lines ? `<em>${lines}</em>` : ""}</a>`;
-  }).join("");
-  return `<div class="msg-sources"><span class="msg-sources-label">Read ${byFile.size} file${byFile.size === 1 ? "" : "s"}</span>${chips}</div>`;
+  const chips = [...byFile].map(([path, ranges]) => sourceChipHtml(path, ranges, ref, editable)).join("");
+  const edit = editable
+    ? `<button class="source-add" title="Add a file and re-run">${icon("file", "icon-sm")}Add file</button>` +
+      `<button class="btn btn-primary btn-xs source-rerun" hidden>${icon("refresh", "icon-sm")}Re-run with these files</button>`
+    : "";
+  return `<div class="msg-sources"${editable ? ' data-editable="1"' : ""}><span class="msg-sources-label">Read ${byFile.size} file${byFile.size === 1 ? "" : "s"}</span>${chips}${edit}</div>`;
 }
 
-// Turn `path:line` citations that point at files we actually read into links
+function sourceChipHtml(path, ranges, ref, editable, extraClass = "") {
+  const r = ranges[0] || {};
+  const via = r.via;
+  const lines = ranges.map(x => (!x.start || (x.start === 1 && ranges.length === 1) ? "" : `L${x.start}–${x.end}`)).filter(Boolean).join(", ");
+  const name = path.split("/").pop();
+  const title = `${path}${lines ? ` (${lines})` : ""}${VIA_LABEL[via] ? ` — ${VIA_LABEL[via]}` : ""}`;
+  return `<span class="source-chip${FOLLOWED.has(via) ? " source-followed" : ""}${extraClass}" data-path="${escapeHtml(path)}">` +
+    `<a class="source-link" href="${sourceUrl(currentRepo, ref, path, r.start, r.end)}" target="_blank" title="${escapeHtml(title)}">` +
+    `${icon("file", "icon-sm")}<span>${escapeHtml(name)}</span>${lines ? `<em>${lines}</em>` : ""}</a>` +
+    (editable ? `<button class="source-remove" title="Leave ${escapeHtml(name)} out" aria-label="Leave ${escapeHtml(path)} out">${icon("x", "icon-sm")}</button>` : "") +
+    `</span>`;
+}
+
+// Turn `path:line` citations into links, checked against what was read: a line
+// outside the excerpts is linked but marked unverified; a file that wasn't
+// read at all is marked and not linked.
 function linkifyCitations(html, repo, ref, sources) {
-  const known = new Set((sources || []).map(s => s.path));
-  if (!known.size) return html;
-  const byName = new Map([...known].map(p => [p.split("/").pop(), p]));
+  const list = sources || [];
+  if (!list.length) return html;
   return html.replace(/<code>([^<\s]+?)(?::(\d+)(?:[-–](\d+))?)?<\/code>/g, (m, rawPath, start, end) => {
-    const path = known.has(rawPath) ? rawPath : byName.get(rawPath);
-    if (!path) return m;
-    return `<a class="cite" href="${sourceUrl(repo, ref, path, start && +start, end && +end)}" target="_blank">${m}</a>`;
+    const path = resolveCitedPath(rawPath, list);
+    if (!path) {
+      return start && /[./]/.test(rawPath) && !/^https?:/.test(rawPath)
+        ? `<span class="cite-unread" title="This file wasn't read for this answer — check it before relying on it">${m}</span>`
+        : m;
+    }
+    const ok = citationInRange(list, path, start && +start, end ? +end : start && +start);
+    return `<a class="cite${ok ? "" : " cite-unverified"}" href="${sourceUrl(repo, ref, path, start && +start, end && +end)}" target="_blank"` +
+      `${ok ? "" : ` title="Line ${start} wasn't in the code read for this answer — check it"`}>${m}</a>`;
   });
 }
 
+// A note under answers that cite code which wasn't sent to the model
+function citationNoteHtml(text, sources) {
+  const { outOfRange, unread } = checkCitations(text, sources || []);
+  const n = outOfRange.length + unread.length;
+  if (!n) return "";
+  return `<p class="citation-note">${icon("alert", "icon-sm")}<span>${n} citation${n === 1 ? "" : "s"} point${n === 1 ? "s" : ""} to code that wasn't read for this answer ` +
+    `(${[...outOfRange, ...unread].slice(0, 3).map(c => `<code>${escapeHtml(c)}</code>`).join(", ")}${n > 3 ? "…" : ""}). Open ${n === 1 ? "it" : "them"} to check before relying on ${n === 1 ? "it" : "them"}.</span></p>`;
+}
+
+// ── Editing an answer's files ────────────────────────────────────────────────
+function editedFiles(row) {
+  return [...row.querySelectorAll(".source-chip")].filter(c => !c.classList.contains("is-removed")).map(c => c.dataset.path);
+}
+
+function markSourcesEdited(row) {
+  const rerun = row.querySelector(".source-rerun");
+  if (rerun) rerun.hidden = false;
+}
+
+function handleSourcesClick(e) {
+  const row = e.target.closest?.('.msg-sources[data-editable="1"]');
+  if (!row) return;
+  const remove = e.target.closest(".source-remove");
+  if (remove) {
+    e.preventDefault();
+    remove.closest(".source-chip").classList.toggle("is-removed");
+    markSourcesEdited(row);
+    return;
+  }
+  if (e.target.closest(".source-add")) { showAddFileInput(row); return; }
+  if (e.target.closest(".source-rerun")) {
+    const wrap = row.closest(".msg-wrap-bot");
+    if (wrap?.dataset.query) regenerateResponse(wrap, wrap.dataset.query, { files: editedFiles(row) });
+  }
+}
+
+// Add file: an input with the repo's files as suggestions; Enter adds the chip
+async function showAddFileInput(row) {
+  if (row.querySelector(".source-add-input")) { row.querySelector(".source-add-input").focus(); return; }
+  row.querySelector(".source-add").insertAdjacentHTML("beforebegin",
+    `<input class="input source-add-input" list="repo-files" placeholder="path/to/file" aria-label="File to add">`);
+  const input = row.querySelector(".source-add-input");
+  input.focus();
+  const list = document.getElementById("repo-files");
+  if (currentRepo && list.dataset.repo !== repoKey()) {
+    const key = repoKey();
+    const tree = await getRepoTree().catch(() => null);
+    if (tree && isCurrentRepo(key)) {
+      list.dataset.repo = key;
+      list.innerHTML = tree.entries.filter(isCodeCandidate).slice(0, 3000).map(e => `<option value="${escapeHtml(e.path)}">`).join("");
+    }
+  }
+}
+
+async function addFileToSources(row, value) {
+  if (!currentRepo || !value.trim()) return false;
+  const tree = await getRepoTree().catch(() => null);
+  const [path] = tree ? mentionedFiles(`@${value.trim().replace(/^@/, "")}`, tree.entries) : [];
+  const input = row.querySelector(".source-add-input");
+  if (!path) { input?.classList.add("is-invalid"); return false; }
+  input?.remove();
+  if (!editedFiles(row).includes(path)) {
+    row.querySelector(".source-add").insertAdjacentHTML("beforebegin", sourceChipHtml(path, [{ via: "chosen" }], null, true, " is-added"));
+  }
+  markSourcesEdited(row);
+  return true;
+}
+
+function handleSourcesKeydown(e) {
+  if (!e.target.classList?.contains("source-add-input")) return;
+  if (e.key === "Enter") { e.preventDefault(); addFileToSources(e.target.closest(".msg-sources"), e.target.value); }
+  if (e.key === "Escape") e.target.remove();
+}
+
+// ── @file mentions ───────────────────────────────────────────────────────────
+// Typing "@" and part of a path suggests files from the tree; a chosen file is
+// read directly for that question (mentionedFiles in retrieval.js).
+let fileSuggest = { items: [], index: 0, start: -1 };
+
+// Best matches for a partial path: file name starts with it, then contains it,
+// then the path contains it; shorter paths first
+function suggestFiles(entries, query, limit = 8) {
+  const q = query.toLowerCase();
+  if (!q) return [];
+  return entries
+    .filter(e => e.type === "blob" && !NOISE_PATH.test(e.path))
+    .map(e => {
+      const p = e.path.toLowerCase();
+      const name = p.slice(p.lastIndexOf("/") + 1);
+      return { path: e.path, score: name.startsWith(q) ? 3 : name.includes(q) ? 2 : p.includes(q) ? 1 : 0 };
+    })
+    .filter(x => x.score)
+    .sort((a, b) => b.score - a.score || a.path.length - b.path.length || a.path.localeCompare(b.path))
+    .slice(0, limit)
+    .map(x => x.path);
+}
+
+async function updateFileSuggest() {
+  const input = document.getElementById("chat-input");
+  const before = input.value.slice(0, input.selectionStart ?? input.value.length);
+  const m = before.match(/(?:^|\s)@([\w./-]+)$/);
+  if (!m || !currentRepo) { closeFileSuggest(); return; }
+  const key = repoKey();
+  const tree = await getRepoTree().catch(() => null);
+  if (!tree || !isCurrentRepo(key)) { closeFileSuggest(); return; }
+  const items = suggestFiles(tree.entries, m[1]);
+  if (!items.length) { closeFileSuggest(); return; }
+  fileSuggest = { items, index: 0, start: before.length - m[1].length - 1 };
+  renderFileSuggest();
+}
+
+function renderFileSuggest() {
+  const list = document.getElementById("file-suggest");
+  list.innerHTML = fileSuggest.items.map((p, i) => {
+    const cut = p.lastIndexOf("/");
+    return `<li role="option" class="file-suggest-item${i === fileSuggest.index ? " active" : ""}" aria-selected="${i === fileSuggest.index}" data-path="${escapeHtml(p)}">` +
+      `${icon("file", "icon-sm")}<strong>${escapeHtml(p.slice(cut + 1))}</strong><span>${escapeHtml(cut > 0 ? p.slice(0, cut) : "")}</span></li>`;
+  }).join("");
+  list.hidden = false;
+}
+
+function closeFileSuggest() {
+  fileSuggest = { items: [], index: 0, start: -1 };
+  document.getElementById("file-suggest").hidden = true;
+}
+
+function chooseFileSuggestion(path) {
+  const input = document.getElementById("chat-input");
+  if (fileSuggest.start < 0) return;
+  const end = input.selectionStart ?? input.value.length;
+  const inserted = `@${path} `;
+  input.value = input.value.slice(0, fileSuggest.start) + inserted + input.value.slice(end);
+  const caret = fileSuggest.start + inserted.length;
+  closeFileSuggest();
+  input.focus();
+  input.setSelectionRange?.(caret, caret);
+  autosizeChatInput();
+}
+
+// Arrow keys move through the suggestions, Enter/Tab choose, Escape closes → true when handled
+function fileSuggestKeydown(e) {
+  if (document.getElementById("file-suggest").hidden || !fileSuggest.items.length) return false;
+  const n = fileSuggest.items.length;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    fileSuggest.index = (fileSuggest.index + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+    renderFileSuggest();
+  } else if (e.key === "Enter" || e.key === "Tab") {
+    chooseFileSuggestion(fileSuggest.items[fileSuggest.index]);
+  } else if (e.key === "Escape") {
+    closeFileSuggest();
+  } else {
+    return false;
+  }
+  e.preventDefault();
+  return true;
+}
+
 // Timestamp + (hover-revealed) regenerate action under a bot reply
+// Answers from the repo's code get an editable file list (a PR's answers read
+// the PR itself, so theirs isn't); any answer gets a note if it cites code that
+// wasn't read.
 function appendBotFooter(wrap, time, query, meta = {}) {
-  if (meta.sources?.length) wrap.insertAdjacentHTML("beforeend", sourcesHtml(meta.sources, meta.ref));
+  if (query) wrap.dataset.query = query;
+  if (meta.text && meta.sources?.length) wrap.insertAdjacentHTML("beforeend", citationNoteHtml(meta.text, meta.sources));
+  if (meta.sources?.length && !meta.cite) wrap.insertAdjacentHTML("beforeend", sourcesHtml(meta.sources, meta.ref, { editable: !!query }));
   if (!time && !query) return;
   const actions = document.createElement("div");
   actions.className = "msg-actions";
@@ -1639,7 +2071,7 @@ async function loadChatHistory() {
         if (chatMessages[j].role === "user") { query = chatMessages[j].text; break; }
       }
     }
-    appendChatMessage(m.role, m.text, false, false, m.time || null, query, { sources: m.sources, ref: m.ref });
+    appendChatMessage(m.role, m.text, false, false, m.time || null, query, { sources: m.sources, ref: m.ref, cite: m.cite, focus: m.focus });
   });
   renderChatStarters(); // shows only if chatMessages is empty
   historyEl.scrollTop = historyEl.scrollHeight;
@@ -1725,6 +2157,10 @@ function initSettingsTab() {
   if (aiApiKey) document.getElementById("sp-api-key").placeholder = maskApiKey(aiApiKey);
   if (ollamaModel) document.getElementById("sp-ollama-model").value = ollamaModel;
   if (githubToken) document.getElementById("sp-gh-token").placeholder = maskApiKey(githubToken);
+  renderGitHubAccount();
+  const stackCard = document.getElementById("sp-stack-card");
+  stackCard.addEventListener("click", handleStackCardClick);
+  stackCard.addEventListener("keydown", handleStackCardKeydown);
   refreshBadge();
 
   // Provider pill clicks
@@ -1789,10 +2225,13 @@ function initSettingsTab() {
       // /rate_limit is free, so check the token before trusting it
       const { valid, core } = await checkRateLimit(token);
       if (!valid) { showSpStatus("sp-gh-status", "GitHub rejected this token — check you copied all of it, or generate a new one above.", true); return; }
-      await chrome.storage.local.set({ githubToken: token });
+      const user = await fetchGitHubUser(token).catch(() => null);
+      await chrome.storage.local.set({ githubToken: token, githubUser: user });
       githubToken = token;
+      githubUser = user;
       document.getElementById("sp-gh-token").value       = "";
       document.getElementById("sp-gh-token").placeholder = maskApiKey(token);
+      renderGitHubAccount();
       showSpStatus("sp-gh-status", `Token saved — ${(core?.limit ?? 5000).toLocaleString()} requests/hour.`);
       onGitHubTokenChanged();
     } catch {
@@ -1804,12 +2243,9 @@ function initSettingsTab() {
 
   // Clear GitHub token
   document.getElementById("sp-clear-gh-btn").addEventListener("click", async () => {
-    await chrome.storage.local.remove(["githubToken"]);
-    githubToken = "";
-    document.getElementById("sp-gh-token").value       = "";
-    document.getElementById("sp-gh-token").placeholder = "ghp_...";
+    document.getElementById("sp-gh-token").value = "";
+    await signOutOfGitHub();
     showSpStatus("sp-gh-status", "Token cleared.");
-    onGitHubTokenChanged();
   });
 
   // Settings saved from the standalone options page must reach an open panel
@@ -1818,11 +2254,15 @@ function initSettingsTab() {
     if (changes.aiProvider)  aiProvider  = changes.aiProvider.newValue  || "groq";
     if (changes.aiApiKey)    aiApiKey    = changes.aiApiKey.newValue    || "";
     if (changes.ollamaModel) ollamaModel = changes.ollamaModel.newValue || "llama3.2";
+    // A token saved elsewhere (options page) without its account → no stale name
+    if (changes.githubUser) githubUser = changes.githubUser.newValue || null;
+    else if (changes.githubToken) githubUser = null;
     if (changes.githubToken && (changes.githubToken.newValue || "") !== githubToken) {
       githubToken = changes.githubToken.newValue || "";
       document.getElementById("sp-gh-token").placeholder = githubToken ? maskApiKey(githubToken) : "ghp_...";
       onGitHubTokenChanged();
     }
+    if (changes.githubToken || changes.githubUser) renderGitHubAccount();
     if (changes.aiProvider || changes.aiApiKey || changes.ollamaModel) {
       settingsProvider = aiProvider;
       updateSettingsUI(aiProvider);
@@ -1841,6 +2281,9 @@ async function onGitHubTokenChanged() {
   ghState.resetAt = 0;
   await refreshRateLimit();
   reloadCurrentRepo();
+  // A different account (or none) means a different stack
+  stackProfile = null;
+  loadAccountAndStack();
 }
 
 function maskApiKey(key) {

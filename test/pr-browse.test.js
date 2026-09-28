@@ -30,20 +30,24 @@ function panelWith(routes = {}, { repo = true } = {}) {
 }
 
 // ── Parsing ──────────────────────────────────────────────────────────────────
-test("parsePrQuery understands numbers, PR links and keywords", () => {
+test("parseFindQuery understands numbers, issue and PR links, and keywords", () => {
   const repo = { owner: "Acme", repo: "Rocket" };
-  assert.deepEqual(plain(pure.parsePrQuery("123", repo)), { number: 123, sameRepo: true });
-  assert.deepEqual(plain(pure.parsePrQuery(" #123 ", repo)), { number: 123, sameRepo: true });
-  assert.deepEqual(plain(pure.parsePrQuery("https://github.com/acme/rocket/pull/77/files#diff-1", repo)), { number: 77, sameRepo: true, owner: "acme", repo: "rocket" });
-  assert.equal(pure.parsePrQuery("github.com/other/thing/pull/5", repo).sameRepo, false);
-  assert.deepEqual(plain(pure.parsePrQuery("flaky timer test", repo)), { terms: "flaky timer test" });
-  assert.equal(pure.parsePrQuery("   ", repo), null);
+  assert.deepEqual(plain(pure.parseFindQuery("123", repo)), { number: 123, sameRepo: true });
+  assert.deepEqual(plain(pure.parseFindQuery(" #123 ", repo)), { number: 123, sameRepo: true });
+  assert.deepEqual(plain(pure.parseFindQuery("https://github.com/acme/rocket/pull/77/files#diff-1", repo)), { number: 77, sameRepo: true, owner: "acme", repo: "rocket", kind: "pr" });
+  assert.deepEqual(plain(pure.parseFindQuery("https://github.com/acme/rocket/issues/12#issuecomment-1", repo)), { number: 12, sameRepo: true, owner: "acme", repo: "rocket", kind: "issue" });
+  assert.equal(pure.parseFindQuery("github.com/other/thing/pull/5", repo).sameRepo, false);
+  assert.deepEqual(plain(pure.parseFindQuery("flaky timer test", repo)), { terms: "flaky timer test" });
+  assert.equal(pure.parseFindQuery("   ", repo), null);
 });
 
-test("prNumberFromPath only matches PR pages", () => {
-  assert.equal(pure.prNumberFromPath(["o", "r", "pull", "42", "files"]), 42);
-  assert.equal(pure.prNumberFromPath(["o", "r", "pull", "42"]), 42);
-  for (const parts of [["o", "r"], ["o", "r", "pulls"], ["o", "r", "issues", "42"], ["o", "r", "pull", "new"]]) assert.equal(pure.prNumberFromPath(parts), null, parts.join("/"));
+test("briefPageFromPath matches PR and issue pages only", () => {
+  assert.deepEqual(plain(pure.briefPageFromPath(["o", "r", "pull", "42", "files"])), { kind: "pr", number: 42 });
+  assert.deepEqual(plain(pure.briefPageFromPath(["o", "r", "pull", "42"])), { kind: "pr", number: 42 });
+  assert.deepEqual(plain(pure.briefPageFromPath(["o", "r", "issues", "7"])), { kind: "issue", number: 7 });
+  for (const parts of [["o", "r"], ["o", "r", "pulls"], ["o", "r", "issues"], ["o", "r", "issues", "new"], ["o", "r", "pull", "new"], ["o", "r", "discussions", "5"]]) {
+    assert.equal(pure.briefPageFromPath(parts), null, parts.join("/"));
+  }
 });
 
 test("closed PRs get honest verdicts: merged vs closed without merging", () => {
@@ -66,7 +70,7 @@ test("open PRs are listed newest first and page with Load more", async () => {
   });
   await panel.fn.fetchPrList();
   assert.ok(gh.apiCalls.includes("/pulls?state=open&sort=created&direction=desc&per_page=15&page=1"));
-  assert.equal(panel.el("prs-summary").innerHTML, "Open pull requests, newest first");
+  assert.equal(panel.el("prs-summary").innerHTML, "", "no summary line restating the controls");
   assert.equal(panel.el("prs-more").hidden, false);
   await panel.fn.fetchPrList({ append: true });
   assert.match(panel.el("prs-list").innerHTML, /#50[\s\S]*#49[\s\S]*#48/);
@@ -161,6 +165,58 @@ test("a brief you opened yourself stays when you navigate around the repo", asyn
   assert.equal(panel.run("activePrBrief.number"), 42);
 });
 
+const issue = (number, extra = {}) => ({
+  number, title: `Issue ${number}`, state: "open", user: user("reporter"), html_url: `https://github.com/o/r/issues/${number}`,
+  created_at: iso(5), updated_at: iso(1), body: "", labels: [], comments: 0, assignees: [], ...extra,
+});
+const issueRoutes = (n, extra) => ({
+  [`/issues/${n}`]: issue(n, extra),
+  [`/issues/${n}/comments?per_page=100`]: [],
+  [`/issues/${n}/timeline?per_page=100`]: [],
+});
+
+test("opening an issue page opens its brief on Contribute, fetching the issue once", async () => {
+  const { gh, panel } = panelWith(issueRoutes(7), { repo: false });
+  panel.fn.handleRepoRefresh("https://github.com/o/r/pull/42");
+  await tick(10);
+  panel.fn.handleRepoRefresh("https://github.com/o/r/issues/7");
+  await tick(10);
+  assert.equal(panel.run("lastContentTab"), "contribute");
+  assert.equal(panel.el("issue-brief").hidden, false);
+  assert.equal(panel.run("activeBrief.number"), 7);
+  assert.equal(panel.run("activeBrief.auto"), true);
+  assert.match(panel.el("brief-body").innerHTML, /Issue 7/);
+  assert.equal(panel.el("pr-brief").hidden, true, "the PR brief it left behind closes");
+  assert.equal(gh.apiCalls.filter(u => u === "/issues/7").length, 1);
+
+  panel.fn.handleRepoRefresh("https://github.com/o/r");
+  assert.equal(panel.el("issue-brief").hidden, true, "leaving the issue closes its auto-opened brief");
+});
+
+test("an issue page that turns out to be a PR, or a missing issue, gets a clear message", async () => {
+  const { panel } = panelWith({ ...issueRoutes(8, { pull_request: { url: "x" } }), "/issues/999": json({ message: "Not Found" }, { status: 404 }),
+    "/issues/999/comments?per_page=100": [], "/issues/999/timeline?per_page=100": [] });
+  await panel.fn.showIssueBrief(8);
+  assert.match(panel.el("brief-body").innerHTML, /#8 is a pull request/);
+  await panel.fn.showIssueBrief(999);
+  assert.match(panel.el("brief-body").innerHTML, /There's no issue #999 in o\/r/);
+});
+
+test("auto-opened briefs never call the AI — they offer to ask in Ask", async () => {
+  let aiCalls = 0;
+  const gh = githubMock({ "": { default_branch: "main" }, "/git/trees/HEAD?recursive=1": { tree: [] }, ...detailRoutes(42), ...issueRoutes(7) },
+    { ai: async () => { aiCalls++; throw new Error("AI must not be called"); } });
+  const panel = loadPanel({ fetch: gh.fetch });
+  panel.run(`aiProvider = "groq"; aiApiKey = "gsk_test"`);
+  panel.fn.handleRepoRefresh("https://github.com/o/r/issues/7");
+  await tick(20);
+  assert.match(panel.el("brief-body").innerHTML, /class="ask-chip" data-kind="issue"/);
+  panel.fn.handleRepoRefresh("https://github.com/o/r/pull/42");
+  await tick(20);
+  assert.match(panel.el("pr-brief-body").innerHTML, /class="ask-chip" data-kind="pr"/);
+  assert.equal(aiCalls, 0);
+});
+
 test("the same PR number in a different repo still opens", async () => {
   const gh = githubMock({ ...detailRoutes(42), "/git/trees/HEAD?recursive=1": { tree: [] } }, { repoPrefix: "/repos/x/y" });
   const panel = loadPanel({ fetch: gh.fetch });
@@ -171,4 +227,60 @@ test("the same PR number in a different repo still opens", async () => {
   await tick(10);
   assert.equal(panel.run("activePrBrief.key"), "x/y");
   assert.equal(panel.el("pr-brief").hidden, false);
+});
+
+// ── Finding issues ───────────────────────────────────────────────────────────
+test("issue keywords search every issue (open and closed), best match first, and Clear goes back", async () => {
+  const { gh, panel } = panelWith({ "/search/issues": json({ total_count: 2, items: [issue(31, { title: "Timer drifts" }), issue(12, { state: "closed", title: "Old timer bug" })] }) });
+  panel.fn.findIssue("timer drift");
+  await tick(5);
+  const search = decodeURIComponent(gh.apiCalls.find(u => u.startsWith("/search/issues")));
+  assert.match(search, /q=repo:o\/r is:issue timer drift&per_page=30&page=1$/);
+  assert.match(panel.el("issues-summary").innerHTML, /<strong>2<\/strong> issues matching “timer drift” · open and closed, best match first/);
+  const list = panel.el("issues-list").innerHTML;
+  assert.match(list, /#31[\s\S]*#12[\s\S]*chip-closed">Closed/);
+  assert.match(list, /data-issue="12"/, "closed issues can still be opened");
+
+  panel.fn.clearIssueSearch();
+  assert.equal(panel.run("issueView.query"), "");
+  assert.equal(panel.el("issue-find-input").value, "");
+});
+
+test("a label filter or the Unclaimed toggle ends a search", async () => {
+  const { panel } = panelWith({ "/search/issues": json({ total_count: 0, items: [] }) });
+  panel.fn.findIssue("anything");
+  await tick(5);
+  assert.match(panel.el("issues-list").innerHTML, /No issues match that search/);
+  panel.fn.setIssueFilter("good-first-issue");
+  assert.equal(panel.run("issueView.query"), "");
+  panel.fn.findIssue("anything");
+  panel.fn.setUnclaimed(false);
+  assert.equal(panel.run("issueView.query"), "");
+});
+
+test("an issue number or link opens its brief; a PR link opens the PR's; another repo's gets a note", async () => {
+  const { gh, panel } = panelWith(issueRoutes(7));
+  panel.fn.findIssue("#7");
+  await tick(10);
+  assert.equal(panel.el("issue-brief").hidden, false);
+  assert.ok(gh.apiCalls.includes("/issues/7"));
+
+  panel.fn.findIssue("https://github.com/o/r/pull/42");
+  await tick(10);
+  assert.equal(panel.el("pr-brief").hidden, false);
+  assert.equal(panel.run("activePrBrief.number"), 42);
+
+  panel.fn.findPr("https://github.com/o/r/issues/7");
+  await tick(10);
+  assert.equal(panel.run("activeBrief.number"), 7, "the PR box opens issue links too");
+
+  panel.fn.findIssue("https://github.com/someone/else/issues/9");
+  assert.match(panel.el("issues-summary").innerHTML, /That issue is in <strong>someone\/else<\/strong>/);
+});
+
+test("a closed issue's brief says it's closed, not free", () => {
+  const a = pure.issueAvailability(issue(5, { state: "closed", state_reason: "not_planned", closed_at: iso(3) }), [], [], Date.now());
+  assert.equal(a.verdict, "Closed");
+  assert.equal(a.status, "taken");
+  assert.equal(a.reasons[0].text, "Closed as not planned 3 days ago");
 });

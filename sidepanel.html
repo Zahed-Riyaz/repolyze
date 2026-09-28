@@ -37,11 +37,15 @@
     <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></symbol>
     <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
     <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></symbol>
+    <symbol id="i-github" viewBox="0 0 24 24"><path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12.3 12.3 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
   </svg>
 
   <div id="container">
     <header id="app-header">
       <div id="header-brand">
+        <img id="repo-avatar" class="header-avatar" alt="" hidden>
         <svg id="ext-logo" xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 34 34" aria-hidden="true">
           <rect width="34" height="34" rx="8" fill="#161b22"/>
           <rect width="34" height="11" rx="8" fill="#21262d"/>
@@ -97,19 +101,19 @@
         <div class="feature-grid">
           <div class="feature-card">
             <span class="feature-icon"><svg class="icon"><use href="#i-issue"/></svg></span>
-            <div><strong>Issues</strong>Beginner-friendly work, filtered</div>
+            <div><strong>Contribute</strong>Issues and PRs you can pick up</div>
           </div>
           <div class="feature-card">
             <span class="feature-icon"><svg class="icon"><use href="#i-chat"/></svg></span>
-            <div><strong>Chat</strong>Ask anything about the repo</div>
+            <div><strong>Ask</strong>Questions answered from the code</div>
           </div>
           <div class="feature-card">
             <span class="feature-icon"><svg class="icon"><use href="#i-pr"/></svg></span>
-            <div><strong>Health</strong>Is it worth contributing to?</div>
+            <div><strong>Briefs</strong>Is it free, where to start, who to ask</div>
           </div>
           <div class="feature-card">
             <span class="feature-icon"><svg class="icon"><use href="#i-layers"/></svg></span>
-            <div><strong>Stack &amp; maintainers</strong>Languages, tools &amp; top contributors</div>
+            <div><strong>Repo</strong>Health, stack &amp; maintainers</div>
           </div>
         </div>
       </div>
@@ -117,66 +121,27 @@
 
     <div id="main-content">
       <nav id="tabs" role="tablist">
-        <button class="tab-btn active" data-tab="issues" role="tab"><svg class="icon icon-sm"><use href="#i-issue"/></svg>Issues</button>
-        <button class="tab-btn" data-tab="tech" role="tab"><svg class="icon icon-sm"><use href="#i-layers"/></svg>Stack</button>
-        <button class="tab-btn" data-tab="maintainers" role="tab"><svg class="icon icon-sm"><use href="#i-users"/></svg>Maintainers</button>
-        <button class="tab-btn" data-tab="contribute" role="tab"><svg class="icon icon-sm"><use href="#i-pr"/></svg>Contribute</button>
-        <button class="tab-btn" data-tab="chat" role="tab"><svg class="icon icon-sm"><use href="#i-chat"/></svg>Chat</button>
+        <button class="tab-btn" data-tab="repo" role="tab"><svg class="icon icon-sm"><use href="#i-layers"/></svg>Repo</button>
+        <button class="tab-btn active" data-tab="contribute" role="tab"><svg class="icon icon-sm"><use href="#i-issue"/></svg>Contribute</button>
+        <button class="tab-btn" data-tab="chat" role="tab"><svg class="icon icon-sm"><use href="#i-chat"/></svg>Ask</button>
         <span id="tab-indicator" aria-hidden="true"></span>
       </nav>
 
       <main id="tab-content">
-        <!-- Issues Tab -->
-        <section id="issues-tab" class="tab-pane active">
-          <div id="issues-browse">
-          <div class="pane-head">
-            <div class="segmented filter-bar" role="group" aria-label="Filter issues">
-              <button class="filter-btn active" data-label="">All</button>
-              <button class="filter-btn" data-label="good-first-issue">Good first</button>
-              <button class="filter-btn" data-label="help-wanted">Help wanted</button>
-            </div>
-            <div class="issue-controls">
-              <select id="issue-sort" class="select" aria-label="Sort issues">
-                <option value="comments">Most discussed</option>
-                <option value="created">Newest</option>
-                <option value="updated">Recently updated</option>
-              </select>
-              <label class="switch" title="Hide issues that are assigned (and, for label filters, ones with a linked PR)">
-                <input type="checkbox" id="issue-unclaimed" checked><span class="switch-track"></span>Unclaimed
-              </label>
-            </div>
-          </div>
-          <p id="issues-summary" class="issues-summary"></p>
-          <ul id="issues-list" class="card-list"></ul>
-          <button id="issues-more" class="btn btn-block issues-more" hidden>Load more</button>
-          </div>
+        <!-- Repo Tab: is it worth contributing to, what's it built with, who runs it -->
+        <section id="repo-tab" class="tab-pane">
+          <!-- Owner avatar, name, website, topics — filled in by applyRepoData() -->
+          <div id="repo-identity" class="card repo-identity"></div>
+          <div id="health-card" class="card"></div>
 
-          <!-- "Start this issue" brief — filled in by brief.js -->
-          <div id="issue-brief" class="issue-brief" hidden>
-            <div class="brief-topbar">
-              <button id="brief-back" class="btn btn-ghost btn-xs"><svg class="icon icon-sm" style="transform:rotate(180deg)"><use href="#i-arrow-right"/></svg>Issues</button>
-              <div class="brief-actions">
-                <button id="brief-copy" class="btn btn-xs" title="Copy the brief as Markdown"><svg class="icon icon-sm"><use href="#i-copy"/></svg>Copy</button>
-                <button id="brief-ask" class="btn btn-xs" title="Ask a follow-up in Chat"><svg class="icon icon-sm"><use href="#i-chat"/></svg>Ask in chat</button>
-              </div>
-            </div>
-            <div id="brief-body"></div>
-          </div>
-        </section>
-
-        <!-- Tech Stack Tab -->
-        <section id="tech-tab" class="tab-pane">
           <h2 class="section-title">Languages</h2>
           <ul id="tech-list" class="lang-list"></ul>
           <div id="tools-section" style="display:none">
             <h2 class="section-title">Tools &amp; services</h2>
             <div id="tools-grid" class="tools-grid"></div>
           </div>
-        </section>
 
-        <!-- Maintainers Tab -->
-        <section id="maintainers-tab" class="tab-pane">
-          <h2 class="section-title">Active maintainers</h2>
+          <h2 class="section-title repo-people-title">Active maintainers</h2>
           <p class="tab-subtitle">People with maintainer access who replied on issues or PRs in the last 90 days — the best people to ask or tag.</p>
           <ul id="maintainers-list" class="people-list"></ul>
           <p id="maintainer-teams" class="teams-line" hidden></p>
@@ -184,12 +149,41 @@
           <ul id="contributors-list" class="people-list"></ul>
         </section>
 
-        <!-- Contribute Tab -->
-        <section id="contribute-tab" class="tab-pane">
+        <!-- Contribute Tab: what's available to work on; a brief replaces the lists -->
+        <section id="contribute-tab" class="tab-pane active">
           <div id="contribute-browse">
-            <div id="health-card" class="card"></div>
+            <section id="issues-section" class="work-section">
+              <div class="pane-head">
+                <h2 class="section-title">Issues you can pick up</h2>
+              </div>
+              <form id="issue-find" class="find-field" autocomplete="off" role="search">
+                <svg class="icon icon-sm" aria-hidden="true"><use href="#i-search"/></svg>
+                <input id="issue-find-input" class="input" placeholder="Search issues, or paste a number or link" aria-label="Find an issue">
+              </form>
+              <div class="list-controls">
+                <div class="segmented filter-bar" role="group" aria-label="Filter issues">
+                  <button class="filter-btn active" data-label="">All</button>
+                  <button class="filter-btn" data-label="good-first-issue">Good first</button>
+                  <button class="filter-btn" data-label="help-wanted">Help wanted</button>
+                </div>
+                <div class="issue-controls">
+                  <select id="issue-sort" class="select select-quiet" aria-label="Sort issues">
+                    <option value="comments">Most discussed</option>
+                    <option value="created">Newest</option>
+                    <option value="updated">Recently updated</option>
+                    <option value="fit">Best fit for you</option>
+                  </select>
+                  <label class="switch" title="Only issues nobody is assigned to (and, for label filters, without a linked PR)">
+                    <input type="checkbox" id="issue-unclaimed" checked><span class="switch-track"></span>Unassigned
+                  </label>
+                </div>
+              </div>
+              <p id="issues-summary" class="issues-summary"></p>
+              <ul id="issues-list" class="row-list"></ul>
+              <button id="issues-more" class="btn btn-ghost btn-block issues-more" hidden>Load more</button>
+            </section>
 
-            <div id="open-prs-section">
+            <section id="open-prs-section" class="work-section">
               <div class="pane-head">
                 <h2 class="section-title">Pull requests</h2>
                 <div class="segmented" role="group" aria-label="Pull request state">
@@ -197,31 +191,49 @@
                   <button class="pr-state-btn" data-state="closed">Closed</button>
                 </div>
               </div>
-              <form id="pr-find" class="pr-find" autocomplete="off">
-                <input id="pr-find-input" class="input" placeholder="PR number, link or keywords" aria-label="Find a pull request">
-                <button class="btn" type="submit">Find</button>
+              <form id="pr-find" class="find-field" autocomplete="off" role="search">
+                <svg class="icon icon-sm" aria-hidden="true"><use href="#i-search"/></svg>
+                <input id="pr-find-input" class="input" placeholder="Search PRs, or paste a number or link" aria-label="Find a pull request">
               </form>
+              <div class="list-controls">
+                <div class="issue-controls">
+                  <select id="pr-sort" class="select select-quiet" aria-label="Sort pull requests">
+                    <option value="newest">Newest</option>
+                    <option value="fit">Best fit for you</option>
+                  </select>
+                </div>
+              </div>
               <p id="prs-summary" class="issues-summary"></p>
-              <ul id="prs-list" class="card-list"></ul>
-              <button id="prs-more" class="btn btn-block issues-more" hidden>Load more</button>
-              <p class="brief-note pr-follow-note">Tip: open any pull request on GitHub and its brief opens here automatically.</p>
+              <ul id="prs-list" class="row-list"></ul>
+              <button id="prs-more" class="btn btn-ghost btn-block issues-more" hidden>Load more</button>
+            </section>
+            <p class="brief-note pr-follow-note">Tip: open any issue or pull request on GitHub and its brief opens here.</p>
+          </div>
+
+          <!-- "Start this issue" brief — filled in by brief.js -->
+          <div id="issue-brief" class="issue-brief" hidden>
+            <div class="brief-topbar">
+              <button id="brief-back" class="btn btn-ghost btn-xs"><svg class="icon icon-sm" style="transform:rotate(180deg)"><use href="#i-arrow-right"/></svg>Back</button>
+              <div class="brief-actions">
+                <button id="brief-copy" class="btn btn-xs" title="Copy the brief as Markdown"><svg class="icon icon-sm"><use href="#i-copy"/></svg>Copy</button>
+              </div>
             </div>
+            <div id="brief-body"></div>
           </div>
 
           <!-- "Understand this PR" brief — filled in by pr-brief.js -->
           <div id="pr-brief" class="issue-brief" hidden>
             <div class="brief-topbar">
-              <button id="pr-brief-back" class="btn btn-ghost btn-xs"><svg class="icon icon-sm" style="transform:rotate(180deg)"><use href="#i-arrow-right"/></svg>Contribute</button>
+              <button id="pr-brief-back" class="btn btn-ghost btn-xs"><svg class="icon icon-sm" style="transform:rotate(180deg)"><use href="#i-arrow-right"/></svg>Back</button>
               <div class="brief-actions">
                 <button id="pr-brief-copy" class="btn btn-xs" title="Copy the brief as Markdown"><svg class="icon icon-sm"><use href="#i-copy"/></svg>Copy</button>
-                <button id="pr-brief-ask" class="btn btn-xs" title="Ask a follow-up in Chat"><svg class="icon icon-sm"><use href="#i-chat"/></svg>Ask in chat</button>
               </div>
             </div>
             <div id="pr-brief-body"></div>
           </div>
         </section>
 
-        <!-- Chat Tab -->
+        <!-- Ask Tab (repo-wide chat) -->
         <section id="chat-tab" class="tab-pane">
           <div id="chat-header-bar">
             <span id="chat-context-label">Reads the repo's source to answer</span>
@@ -232,12 +244,19 @@
             <div class="typing-dots"><span></span><span></span><span></span></div>
             <span id="typing-status">Thinking…</span>
           </div>
+          <!-- The files being read for the answer on its way -->
+          <div id="typing-files" class="msg-sources typing-files" hidden></div>
+          <datalist id="repo-files"></datalist>
           <div id="chat-composer">
+            <!-- "@" file suggestions -->
+            <ul id="file-suggest" class="file-suggest" role="listbox" aria-label="Files" hidden></ul>
+            <!-- "About #123" — set from a brief; answers are grounded in that item (ask-focus.js) -->
+            <div id="chat-focus" class="chat-focus" hidden></div>
             <div id="chat-input-container">
-              <textarea id="chat-input" rows="1" placeholder="Ask about this repo…"></textarea>
+              <textarea id="chat-input" rows="1" placeholder="Ask about this repo…" aria-autocomplete="list" aria-controls="file-suggest"></textarea>
               <button id="send-btn" title="Send" aria-label="Send"><svg class="icon"><use href="#i-send"/></svg></button>
             </div>
-            <p class="composer-hint"><kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line</p>
+            <p class="composer-hint"><kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line · <kbd>@</kbd> to name a file</p>
           </div>
         </section>
 
@@ -285,18 +304,38 @@
           </div>
 
           <div class="card" id="sp-gh-card">
-            <label class="sp-section-label" for="sp-gh-token">GitHub token <span class="sp-optional">optional · raises the limit to 5,000 requests/hour</span></label>
-            <a id="sp-get-token-link" class="btn btn-block sp-get-token" href="https://github.com/settings/tokens" target="_blank"><svg class="icon"><use href="#i-bolt"/></svg>Generate a token on GitHub<svg class="icon icon-sm"><use href="#i-arrow-right"/></svg></a>
-            <div class="sp-input-row">
-              <input type="password" id="sp-gh-token" class="input" placeholder="ghp_..." autocomplete="off">
-              <button class="btn sp-toggle" id="sp-toggle-gh">Show</button>
+            <p class="sp-section-label">GitHub <span class="sp-optional">optional · raises the limit from 60 to 5,000 requests/hour</span></p>
+
+            <!-- Signed in: who, and Sign out (auth.js) -->
+            <div id="sp-gh-account" class="gh-account" hidden></div>
+
+            <!-- Signed out: device-flow sign-in (auth.js) -->
+            <div id="sp-gh-signin">
+              <button id="sp-signin-btn" class="btn btn-primary btn-block"><svg class="icon icon-sm"><use href="#i-github"/></svg>Sign in with GitHub</button>
+              <p class="sp-help-links">Read-only: no permissions are requested. You'll approve a one-time code on GitHub.</p>
+              <div id="sp-signin-flow" class="signin-flow" hidden></div>
             </div>
-            <div class="sp-gh-btns">
-              <button id="sp-save-gh-btn" class="btn btn-primary">Save token</button>
-              <button id="sp-clear-gh-btn" class="btn btn-danger">Clear</button>
-            </div>
+
+            <details id="sp-token-details" class="sp-token-details">
+              <summary>Use a personal access token instead</summary>
+              <a id="sp-get-token-link" class="btn btn-block sp-get-token" href="https://github.com/settings/tokens" target="_blank"><svg class="icon"><use href="#i-bolt"/></svg>Generate a token on GitHub<svg class="icon icon-sm"><use href="#i-arrow-right"/></svg></a>
+              <div class="sp-input-row">
+                <input type="password" id="sp-gh-token" class="input" placeholder="ghp_..." autocomplete="off" aria-label="GitHub token">
+                <button class="btn sp-toggle" id="sp-toggle-gh">Show</button>
+              </div>
+              <div class="sp-gh-btns">
+                <button id="sp-save-gh-btn" class="btn btn-primary">Save token</button>
+                <button id="sp-clear-gh-btn" class="btn btn-danger">Clear</button>
+              </div>
+              <p class="sp-help-links">No scopes are needed for public repos: generate a classic token, leave every box unticked, then paste it above.</p>
+            </details>
             <div id="sp-gh-status" class="status-msg"></div>
-            <p class="sp-help-links">Without a token GitHub allows 60 requests an hour, shared by everything on your network. No scopes are needed for public repos: generate a classic token, leave every box unticked, then paste it above.</p>
+          </div>
+
+          <!-- Your stack: what issues are matched against (stack.js); shown when signed in -->
+          <div class="card" id="sp-stack-card" hidden>
+            <p class="sp-section-label">Your stack <span class="sp-optional">used to sort issues by fit · stays in this browser</span></p>
+            <div id="sp-stack-body"></div>
           </div>
         </section>
       </main>
@@ -306,6 +345,9 @@
   <script src="insights.js"></script>
   <script src="brief.js"></script>
   <script src="pr-brief.js"></script>
+  <script src="ask-focus.js"></script>
+  <script src="auth.js"></script>
+  <script src="stack.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>
