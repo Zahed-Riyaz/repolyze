@@ -103,6 +103,19 @@ async function resolveIssueFiles(repo, issue, { comments = [], timeline = [] } =
     }
   }
 
+  // 3b. Nothing concrete yet: with a token, search the code for the issue's most
+  //     specific words — content, not file names ("banner" finds the code that draws it)
+  if (githubToken && ![...out.values()].some(f => f.confidence !== "low")) {
+    const words = searchWords(issue.title);
+    for (const query of [words.slice(0, 2), words.slice(0, 1)]) {
+      if (!query.length) continue;
+      const paths = (await searchCodeFor(query.join(" "), repo).catch(() => []))
+        .filter(p => known.has(p) && isCodeCandidate({ path: p, type: "blob", size: 0 }) && !TEST_PATH.test(p));
+      paths.slice(0, 3).forEach(p => add(p, `mentions “${query.join(" ")}”`, "medium"));
+      if (paths.length) break;
+    }
+  }
+
   // 4. Tests for the source files found so far
   for (const f of [...out.values()].filter(f => !TEST_PATH.test(f.path)).slice(0, 3)) {
     const t = testFileFor(f.path, blobs);

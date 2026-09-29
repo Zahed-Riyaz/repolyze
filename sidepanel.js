@@ -1499,10 +1499,14 @@ const BOT_LABEL_HTML = `${icon("compass", "icon-sm")}Assistant`;
 
 // How each file came to be read (retrieval.js sets `via`)
 const VIA_LABEL = {
-  named: "named in the question", picked: "chosen for the question", chosen: "chosen by you",
-  import: "imported by a file that was read", search: "found by code search",
+  named: "named in the question or issue", issue: "from the issue's brief", picked: "chosen for the question", chosen: "chosen by you",
+  import: "imported by a file that was read", search: "found by code search", name: "found by name",
+  changed: "changed by the PR (at its head)",
 };
-const FOLLOWED = new Set(["import", "search"]);
+const FOLLOWED = new Set(["import", "search", "name"]);
+
+// Where a source lives: its own `at` (a PR's head, maybe in a fork) or the repo's default branch
+const sourceHome = (s, repo, ref) => (s?.at ? { repo: { owner: s.at.owner, repo: s.at.repo }, ref: s.at.ref } : { repo, ref });
 
 // Files the answer was grounded in, linked to the exact lines on GitHub. When
 // `editable`, each file can be left out (✕) or another added, then re-run.
@@ -1510,9 +1514,11 @@ function sourcesHtml(sources, ref, { editable = false } = {}) {
   if (!sources?.length || !currentRepo) return "";
   const byFile = new Map();
   for (const s of sources) {
+    if (s.via === "diff") continue; // a PR's whole diff: counted as read, not listed
     if (!byFile.has(s.path)) byFile.set(s.path, []);
     byFile.get(s.path).push(s);
   }
+  if (!byFile.size) return "";
   const chips = [...byFile].map(([path, ranges]) => sourceChipHtml(path, ranges, ref, editable)).join("");
   const edit = editable
     ? `<button class="source-add" title="Add a file and re-run">${icon("file", "icon-sm")}Add file</button>` +
@@ -1527,8 +1533,9 @@ function sourceChipHtml(path, ranges, ref, editable, extraClass = "") {
   const lines = ranges.map(x => (!x.start || (x.start === 1 && ranges.length === 1) ? "" : `L${x.start}–${x.end}`)).filter(Boolean).join(", ");
   const name = path.split("/").pop();
   const title = `${path}${lines ? ` (${lines})` : ""}${VIA_LABEL[via] ? ` — ${VIA_LABEL[via]}` : ""}`;
+  const home = sourceHome(r, currentRepo, ref);
   return `<span class="source-chip${FOLLOWED.has(via) ? " source-followed" : ""}${extraClass}" data-path="${escapeHtml(path)}">` +
-    `<a class="source-link" href="${sourceUrl(currentRepo, ref, path, r.start, r.end)}" target="_blank" title="${escapeHtml(title)}">` +
+    `<a class="source-link" href="${sourceUrl(home.repo, home.ref, path, r.start, r.end)}" target="_blank" title="${escapeHtml(title)}">` +
     `${icon("file", "icon-sm")}<span>${escapeHtml(name)}</span>${lines ? `<em>${lines}</em>` : ""}</a>` +
     (editable ? `<button class="source-remove" title="Leave ${escapeHtml(name)} out" aria-label="Leave ${escapeHtml(path)} out">${icon("x", "icon-sm")}</button>` : "") +
     `</span>`;
@@ -1548,15 +1555,20 @@ function linkifyCitations(html, repo, ref, sources) {
         : m;
     }
     const ok = citationInRange(list, path, start && +start, end ? +end : start && +start);
-    return `<a class="cite${ok ? "" : " cite-unverified"}" href="${sourceUrl(repo, ref, path, start && +start, end && +end)}" target="_blank"` +
+    const home = sourceHome(list.find(s => s.path === path && s.at), repo, ref);
+    return `<a class="cite${ok ? "" : " cite-unverified"}" href="${sourceUrl(home.repo, home.ref, path, start && +start, end && +end)}" target="_blank"` +
       `${ok ? "" : ` title="Line ${start} wasn't in the code read for this answer — check it"`}>${m}</a>`;
   });
 }
 
 // A note under answers that cite code which wasn't sent to the model
 function citationNoteHtml(text, sources) {
-  const { outOfRange, unread } = checkCitations(text, sources || []);
+  const { total, outOfRange, unread } = checkCitations(text, sources || []);
   const n = outOfRange.length + unread.length;
+  // Code was read, but a substantial answer never points at a line of it
+  if (!total && (sources || []).some(s => s.start) && (text || "").length > 400) {
+    return `<p class="citation-note">${icon("alert", "icon-sm")}<span>This answer doesn't point to specific lines, so check it against the files read before relying on it.</span></p>`;
+  }
   if (!n) return "";
   return `<p class="citation-note">${icon("alert", "icon-sm")}<span>${n} citation${n === 1 ? "" : "s"} point${n === 1 ? "s" : ""} to code that wasn't read for this answer ` +
     `(${[...outOfRange, ...unread].slice(0, 3).map(c => `<code>${escapeHtml(c)}</code>`).join(", ")}${n > 3 ? "…" : ""}). Open ${n === 1 ? "it" : "them"} to check before relying on ${n === 1 ? "it" : "them"}.</span></p>`;

@@ -131,8 +131,8 @@ The extension uses **retrieval-augmented generation**: before the AI answers, it
 
 Where it's used:
 - **Ask** — the full pipeline above, per question (follow-ups carry the previous files).
-- **Ask focused on an issue** (`ask-focus.js`) — the same pipeline, with the issue and its discussion prepended to the retrieved code; follow-ups carry the files behind the last answer about the same item (falling back to the issue's likely files).
-- **Ask focused on a PR** — grounded generation without the retrieval step: the "retrieved" context is the PR itself (status, checks, every timeline event, review thread and numbered diff), packed to fit the budget. `buildChatPrompt({ focus })` tells the model which item it's about.
+- **Ask focused on an issue** (`ask-focus.js`) — the same pipeline, but the *issue's text* drives retrieval too (`about`: terms, named files, identifiers), not just the question, and the prompt's own instruction words ("…which test to add") stop counting as search terms. The brief's "Where to start" files are read first (`seedFiles`); names the issue mentions are traced to their definitions (code search with a token, else `findDefinitionByName`) and their definitions always make the excerpt (`extractSnippets(…, strong)`). The prompt makes the issue the source of truth: its own reproduction steps, and "say it's missing" rather than naming a nearby function.
+- **Ask focused on a PR** — the PR itself (status, checks, every timeline event, review thread, numbered diff), plus its most-changed files **read at the PR's head** around what changed (`prHeadSnippets`, `readFileAt`), plus related unchanged code from the default branch (imports of the changed files via `followFrom`, and names the PR mentions). Sources carry `at` when they live elsewhere (the fork's head), so citations link to the right place. `buildChatPrompt({ focus })` tells the model which item it's about.
 - **Not used** for briefs, availability verdicts, PR status, the health score, maintainers or CI commands — those are computed deterministically from GitHub data, so they're consistent and work without AI.
 
 ---
@@ -151,7 +151,7 @@ Where it's used:
 | **Performance** | Local ranking of 100k paths ≈ 150 ms; file reads in parallel; skeletons instead of layout jumps; streaming AI output. |
 | **Accessibility** | Keyboard-reachable controls with visible focus rings, ARIA roles on tabs/status, `prefers-reduced-motion` respected, theme-aware label contrast. |
 | **Compatibility** | Chrome with the Side Panel API (MV3); works at narrow panel widths (three text-only tabs); light and dark themes follow the OS. |
-| **Maintainability** | Plain JS, no build step; pure logic separated from rendering and unit-tested; 202 tests (`npm test`, ~3s) run in CI on every push. |
+| **Maintainability** | Plain JS, no build step; pure logic separated from rendering and unit-tested; 209 tests (`npm test`, ~3s) run in CI on every push. |
 | **Cost** | Zero infrastructure cost; users bring their own AI key (free tiers on Groq/Gemini, free local Ollama). |
 
 ---
@@ -269,6 +269,7 @@ Where it's used:
 
 - **Run:** `chrome://extensions` → Developer mode → Load unpacked → this folder. Reload the extension after edits.
 - **Test:** `npm test` (all suites) and `npm run check` (syntax). Node 22+. CI: `.github/workflows/test.yml`.
+- **Retrieval eval:** `npm run eval` runs made-up issues about this repo (`eval/issues.js`, 5 ambiguity levels, from "names the file and function" to "vague symptom") through the brief's resolver and Ask's retrieval, offline — this repo is served from disk as GitHub, code search answered from disk — and reports which needed files and definitions reached the model, per level. `-- --anonymous` runs signed out; `EVAL_AI_PROVIDER`/`EVAL_AI_KEY` use a real model for file picking. It measures, it doesn't gate: add an issue whenever an answer disappoints, and don't tune the code to these issues alone.
 - **Shared code:** `github.js` (API layer, caches, rate limits — no DOM; the panel hooks its badge via `onRateLimitChange`) and `guide.js` are loaded by both the panel and `background.js` (`importScripts("github.js", "retrieval.js", "insights.js", "brief.js", "guide.js")`), so they and their dependencies must stay DOM-free at the top level. The worker also serves the page guide; `content.js` only renders and gets data by message (`issue-guide`, `open-panel`).
 - **Script order matters:** `sidepanel.html` loads `github.js`, `retrieval.js`, `insights.js`, `brief.js`, `guide.js`, `pr-brief.js`, `ask-focus.js`, `auth.js`, `stack.js`, then `sidepanel.js` as classic scripts sharing one global scope; `test/helpers/panel.js` loads them in the same order. New files must be added to both (and to `npm run check`).
 - **Tests use the real code:** `loadPanel()` evals the scripts with a fake DOM, `chrome.*` and `fetch`; `githubMock()` fakes GitHub, raw files and AI replies and records requests. Use `panel.run("…")` to reach `let`/`const` state.
@@ -279,6 +280,66 @@ Where it's used:
 
 ---
 
-## 8. Summary
+## 8. Tests and evals
 
-GitHub Repo Analyzer is a backend-free Chrome side panel that turns "a repo I've never seen" into "a contribution I can start today". It finds issues that are genuinely available across the whole repo, briefs each one (is it free, where to start, who to ask, what CI will run), explains pull requests including their full conversation and status, surfaces the people who actually maintain the project, scores contributor-friendliness from measured signals, and answers questions from the repo's real source code with line-level citations. Everything is computed client-side from the GitHub API — carefully budgeted, cached and rate-limit-aware — with the user's own AI provider adding summaries on top of deterministic, verifiable data. It's plain JavaScript with no build step, a token-based light/dark design built for a narrow panel, and 202 tests running in CI.
+Two different things, kept apart on purpose:
+- **Tests** (`npm test`, 209 in 16 files, ~6s, run in CI) check that the code *behaves as designed*: fixed fake data, no network, no AI, deterministic. They gate every push.
+- **The retrieval eval** (`npm run eval`) *measures* how well the extension finds the code an issue needs. It reports a score; it doesn't pass or fail, and isn't in CI.
+
+### How the tests work
+- `test/helpers/panel.js` — `loadPanel()` evals the real extension scripts (in `sidepanel.html` order) into Node with a fake DOM (`getElementById` creates elements on demand; `querySelector` results are recorded so tests can click them), fake `chrome.*` (storage, tabs, windows) and an injected `fetch`. `panel.fn.X` calls any top-level function; `panel.run("…")` reads or sets `let`/`const` state; `panel.el(id)` reads what a render wrote. Every `loadPanel()` is fresh state.
+- `test/helpers/github-mock.js` — `githubMock(routes, { raw, ai })` fakes the GitHub API (routes by path, repo prefix stripped; unknown → 404), `raw.githubusercontent.com` files, and AI providers; it records every request so tests can assert on **request budgets** (`gh.apiCalls`). `sseReply(text)` fakes a streamed AI answer.
+- `content.js` is tested by loading it into a bare `vm` context (no `chrome`/`location`, so it doesn't start) and calling its pure functions.
+- Conventions: test the pure function first (verdicts, scoring, parsing, prompts), then one flow test through the panel; assert on what the user sees (rendered HTML) and what it cost (API calls, AI calls); every async render gets a "stale response never renders into another repo" test.
+
+### Test files
+| File | Tests | What it guarantees |
+|---|---|---|
+| `github-api.test.js` | 13 | The shared GitHub layer (`github.js`): fresh cache and cached 404s cost nothing; identical requests share one call; `If-None-Match` revalidation keeps bodies on 304; stale copies served while rate-limited; responses persist to `storage.session`; secondary limits pause for `Retry-After` only; an ordinary 403 isn't a rate limit; search quota is separate; a 401 flags the token; **the token is only ever sent to `api.github.com`**; cache keyed by auth mode; sorted lists always ask for `direction=desc`. |
+| `panel-flows.test.js` | 18 | End to end against a mocked repo: opening a repo costs **4 requests**, a full visit stays in budget, chat costs none, reopening costs none; rate-limit → token → reload recovery; failed tabs retry; stale responses never render into another repo; issue list (All, Good first/Help wanted via search, "all claimed" message, missing-label message, previews, Load more); Maintainers and quiet-repo message; health card evidence and n/a; chat replies saved to the repo that asked; token validated before saving; Get token; Repo tab identity card (avatar, owner, safe homepage, topics). |
+| `rendering.test.js` | 12 | Markdown is escaped before formatting, only `http(s)` links, code fences (also unclosed mid-stream) and lists; citations link only to files read; `escapeHtml` covers attributes; base64 → UTF-8; label-name spellings; number formatting; file-tree formatting; sized avatars. |
+| `brief.test.js` | 20 | "Start this issue": CODEOWNERS pattern rules and last-match-wins; claim detection ("I'll take this"); availability (free / possibly taken / taken, merged vs closed PRs, old vs recent claims, maintainer replies); CI + `package.json` verify commands; people; Markdown export; the brief's layout and **2-request** cost with **no AI calls**; Ask hand-off chips; instant reopen; stale-render guard. |
+| `pr-brief.test.js` | 16 | "Understand this PR": closing keywords; latest-review logic (comments don't reset approval, dismissals clear); checks summary; status verdicts (ready / changes / updated / blocked / draft / stale / pending reviewers); numbered diffs; the event log keeps every event and shortens bodies evenly instead of dropping any; diff context ordering; the brief for **5 requests** with "What it touches"; timeline paging with a token; no AI on open. |
+| `pr-browse.test.js` | 21 | Contribute lists and page following: Find parses numbers, issue/PR links (either box opens either kind) and keywords; PR list sorting, paging, merged/closed marks, search; issue search (open and closed, filters end a search); following issue and PR pages (opens once, stays closed if you close it, auto-closes when you leave, per-repo); a closed issue reads "Closed", not free. |
+| `insights.test.js` | 14 | Maintainers and health: median, bot detection, CODEOWNERS parsing, active maintainers (roles, bots, teams), response stats (first reply or close, too-new, capped samples), PR stats, **health score** (100 when healthy, unmeasured signals excluded not zeroed, archived capped at 20, onboarding weighs only what was checked), beginner search query. |
+| `retrieval.test.js` | 15 | Core retrieval: query terms (identifiers kept whole and split, stemming), path ranking (tests demoted, vendor/lockfiles excluded), picker reply parsing, snippets (small files whole, head + matching definition), context packing within budget, repo context found via the tree (no 404 probing), picker fallback, README-only answers, provider budgets, private repos via the contents API, rate-limited tree. |
+| `sections.test.js` | 9 | Section-aware docs: Markdown split by heading (ATX, underlined, HTML; fences ignored), the best-matching sections kept in document order within the limit, `package.json` summarised with every script, nested packages listed. |
+| `ai-requests.test.js` | 10 | How providers are called: instructions in each provider's system slot, low temperature, Ollama context sized to the request, context first and question last, history budgeted newest-first, named files read directly (no picker), follow-ups carry files, shortlist sized to the model. |
+| `follow-code.test.js` | 15 | Following the code: JS/TS and Python import parsing and resolution (extensions, index files, `.js`→`.ts`, `@/` aliases, relative Python), definition detection across languages (not calls), code names from questions, ranking imports, code search only with a token, edited file lists read exactly, `@file`; **citation checks** (verified / outside what was read / not read, marked and noted); the editable "Read N files" row; `@` suggestions. |
+| `retrieval-focus.test.js` | 7 | Issue- and PR-focused retrieval, on made-up repos that reproduce known failure patterns: a function only the **issue** names is found and its definition (deep in a 600-line file) is sent; a helper found **by name** without a token; the brief's files read first; a PR's changed file read **at its head** plus a helper it imports from the default branch, each source knowing where it lives; the issue-as-source-of-truth prompt rules; uncited answers flagged; names ending a sentence still count. |
+| `ask-focus.test.js` | 6 | Ask focused on an issue or PR: suggestions open Ask with the chip and send a visible question grounded in the item; PR questions read the discussion, diff and head files and cite the fork's head; "Your own question" sends nothing; a streaming reply is never interrupted; removing the chip or changing repo drops the focus; follow-ups keep the same item's files and PR files don't leak into repo-wide questions. |
+| `guide.test.js` | 11 | "Files it needs" (`guide.js`): paths, stack traces and links in the issue; PRs that reference it (merged first); test files by convention; confidence labels (named / changed by PR / defines X / tests / guesses); code search only with a token; `issueGuide` for the page card; presentation helpers (owners without the org, short folders, guesses apart); the page card (`content.js`) only on issue pages, waits for a click signed out, reads verdict → where to start → owners, escapes errors; the worker's `importScripts` order. |
+| `stack.test.js` | 15 | Your stack and fit: profile from your repos (recent weigh most, forks skipped, only known tech from descriptions/bio), edits, fit relative to the repo (the repo's main language or a term every issue has doesn't lift one issue), whole-word tech matching, the required-stack tags on issue and PR rows (brighter when you know them), Best fit sorting for issues and PRs, sign-in prompt, ≤8 requests and a day's cache, `prStack` from a PR's real changed files. |
+| `auth.test.js` | 7 | Sign in with GitHub (device flow): only the client ID and no scopes are sent; pending / `slow_down` / token polling; denied, expired and disabled-device-flow messages; cancel stops polling; Settings shows who's signed in; sign-out clears the token, account and stack; no client ID → token form; the limit banner offers Sign in. |
+
+### The retrieval eval
+- **Why:** tests prove the design works on fake data; they can't say whether the extension finds the *right* code in a real repo. The eval does, on the one repo where we know the right answer: this one.
+- **The issues** — `eval/issues.js`: 15 made-up issues about this repo that will never be built, each with what a correct answer must reach (`expect.files`, all or `any`; `expect.defs`, functions whose definition line must be sent). Five levels of ambiguity, three each:
+
+  | Level | The issue… | Example | Must reach |
+  |---|---|---|---|
+  | 1 | names the file and function | "extractSnippets in retrieval.js should use longer windows for Python files" | `retrieval.js`, `extractSnippets` |
+  | 2 | names the function only | "looksLikeClaim misses \"I'll open a PR for this\"" | `brief.js`, `looksLikeClaim` |
+  | 3 | uses UI or concept words | "Rate-limit banner should say how many requests are left" | `sidepanel.js`, `renderRateLimit` |
+  | 4 | uses only the user's words | "My languages stay highlighted after I sign out" | `stack.js` or `auth.js` |
+  | 5 | is a vague symptom | "Hard to tell which parts of an answer to trust" | any of `sidepanel.js`, `retrieval.js` |
+
+  The others: `parseCodeOwners` negation, `prStatus` dismissed reviews (1); `suggestFiles` ranking, `pollDeviceToken` giving up (2); health score and not-planned issues (`scoreHealth`), the guide card remembering collapse (`startGuide`) (3); fork links in answers, commit links in PR search (`parseFindQuery`) (4); slowness on big repos, wrong "files it needs" (5).
+- **How it runs** — `eval/run.js` serves this repo from disk as GitHub (`eval/` excluded so the issue texts can't leak in; code search answered by searching the files on disk) and runs each issue through the brief's `resolveIssueFiles` and Ask's `buildChatContext` for "Summary & plan", then reports per issue whether a needed file was in the brief's top 5, whether Ask read the needed files, and whether each needed definition line was sent; then a pass rate per level.
+  - `npm run eval` — signed in (code search available) · `npm run eval -- --anonymous` — signed out · `-- --json` — machine-readable.
+  - Without a model the file picker's fallback (path ranking) is used; `EVAL_AI_PROVIDER=groq EVAL_AI_KEY=gsk_… npm run eval` uses a real one.
+- **Results so far** (Ask got everything a correct answer needs):
+
+  | | L1 | L2 | L3 | L4 | L5 | Overall |
+  |---|---|---|---|---|---|---|
+  | First run, signed in | 3/3 | 0/3 | 0/3 | 1/3 | 0/3 | 4/15 |
+  | Now, signed in | 3/3 | 3/3 | 2/3 | 3/3 | 0/3 | **11/15** |
+  | Now, signed out | 3/3 | 0/3 | 0/3 | 1/3 | 0/3 | 4/15 |
+
+  What moved it: instruction words in the prompt ("…which test to add") stopped counting as search terms; names ending a sentence were recognised; named functions always make the excerpt; the brief searches code for the issue's key words when nothing points at a file; a PR's changed files' imports are always followed. Signed out, nothing looks inside files, so levels 2+ mostly fail — the case for signing in. Level 5 needs the model to pick files.
+- **Caveats:** we wrote the issues knowing the code (bias, even at level 4–5); this repo is small; the on-disk code search only approximates GitHub's ranking; it measures **retrieval**, not whether the final answer is right.
+- **Adding to it:** whenever an answer disappoints — here or on a real repo — write the issue as a user would (no file names past level 2), fill in what a correct answer must reach, and run the eval before and after a change. Fix causes that generalise; don't tune the code to these issues alone.
+
+## 9. Summary
+
+GitHub Repo Analyzer is a backend-free Chrome side panel that turns "a repo I've never seen" into "a contribution I can start today". It finds issues that are genuinely available across the whole repo, briefs each one (is it free, where to start, who to ask, what CI will run), explains pull requests including their full conversation and status, surfaces the people who actually maintain the project, scores contributor-friendliness from measured signals, and answers questions from the repo's real source code with line-level citations. Everything is computed client-side from the GitHub API — carefully budgeted, cached and rate-limit-aware — with the user's own AI provider adding summaries on top of deterministic, verifiable data. It's plain JavaScript with no build step, a token-based light/dark design built for a narrow panel, and 209 tests running in CI.

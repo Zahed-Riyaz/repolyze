@@ -75,20 +75,21 @@ test("an issue suggestion opens Ask focused on the issue and answers from the is
   assert.deepEqual(a.sources.map(s => s.path), ["src/launch/timer.ts"]);
 });
 
-test("a PR suggestion is grounded in its activity, checks and diff with one AI call, citing the fork's head", async () => {
+test("a PR question reads its discussion, diff and changed files at its head, citing each where it lives", async () => {
   const { panel, requests, saved } = setup();
   await panel.fn.showPrBrief(42);
   await panel.fn.askAboutBrief("pr", 1);
-  assert.equal(requests.length, 1, "no file picking: the PR is the context");
+  assert.equal(requests.length, 1, "no file picking for PRs: the PR and what it touches are the context");
   const userMsg = requests[0].messages.at(-1).content;
   assert.match(userMsg, /<pull_request number="42">[\s\S]*Closes: #7[\s\S]*Checks: 0 passed, 1 failed \(test\)/);
   assert.match(userMsg, /<activity>[\s\S]*requested changes: Use a monotonic clock[\s\S]*<diff>[\s\S]*2\+\|   tick\(\) \{ return now\(\); \}/);
-  assert.match(requests[0].messages[0].content, /asking about pull request #42[\s\S]*new line numbers from the diff/);
+  assert.match(userMsg, /<changed_files_at_head>\n=== src\/launch\/timer\.ts \(lines 1-3\) ===/, "the changed file, read at the PR's head");
+  assert.match(requests[0].messages[0].content, /asking about pull request #42[\s\S]*<changed_files_at_head>[\s\S]*<related_code>/);
   const a = saved()[1];
-  assert.deepEqual(a.cite, { owner: "dev", repo: "r" });
-  assert.equal(a.ref, "abc123");
-  assert.match(panel.fn.linkifyCitations(panel.fn.renderMarkdown(a.text), a.cite, a.ref, a.sources),
-    /href="https:\/\/github\.com\/dev\/r\/blob\/abc123\/src\/launch\/timer\.ts#L2"/);
+  assert.equal(a.cite, undefined, "each source says where it lives instead");
+  assert.ok(a.sources.some(s => s.path === "src/launch/timer.ts" && s.via === "changed" && s.at.owner === "dev" && s.at.ref === "abc123"));
+  assert.match(panel.fn.linkifyCitations(panel.fn.renderMarkdown(a.text), { owner: "o", repo: "r" }, a.ref, a.sources),
+    /href="https:\/\/github\.com\/dev\/r\/blob\/abc123\/src\/launch\/timer\.ts#L2"/, "changed code links to the fork's head commit");
 });
 
 test("'Your own question' focuses Ask without sending anything", async () => {
