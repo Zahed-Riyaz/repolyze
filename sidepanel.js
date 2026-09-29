@@ -1,6 +1,5 @@
 // ── State ────────────────────────────────────────────────────────────────────
 let currentRepo = null;
-let githubToken = "";
 let aiProvider = "groq";   // "groq" | "gemini" | "ollama" | "openai" | "anthropic"
 let aiApiKey = "";          // API key for cloud providers
 let ollamaModel = "llama3.2";
@@ -15,12 +14,6 @@ const MODELS = {
   anthropic: "claude-haiku-4-5-20251001",
 };
 
-// Session cache keyed by "owner/repo"
-// Stores: { repoData, issues, languages, contributors, health, prs, … }
-const repoCache = {};
-
-function repoKey(repo = currentRepo) { return `${repo.owner}/${repo.repo}`; }
-function cacheFor(key) { return (repoCache[key] ??= {}); }
 // Async work captures the repo it started for and checks this before touching
 // the UI, so a slow response never renders into a different repo's view.
 function isCurrentRepo(key) { return !!currentRepo && repoKey() === key; }
@@ -409,195 +402,6 @@ function reloadCurrentRepo() {
   loadTabData(lastContentTab);
 }
 
-// ── GitHub API layer ──────────────────────────────────────────────────────────
-// Without a token GitHub allows 60 requests an hour per IP, so every request
-// counts:
-//  • responses (404s included — most probed files don't exist) are cached for
-//    the browser session in chrome.storage.session, so reopening the panel is free
-//  • while fresh they're served without touching the network; after that they're
-//    revalidated with If-None-Match, and GitHub doesn't count 304 replies
-//  • once the quota is spent, requests stop until the reset time instead of
-//    each tab collecting its own 403
-const GH_FRESH_MS = 10 * 60 * 1000;
-const GH_MAX_CACHED_CHARS = 400_000; // skip persisting huge bodies (e.g. file trees)
-const ghMemCache = new Map();        // cache key → { status, body, etag, link, time }
-const ghInflight = new Map();        // cache key → Promise of the same
-// Core quota drives the badge/banner; search has its own (10/min anonymously)
-const ghState = { remaining: null, limit: null, resetAt: 0, badToken: false, search: { remaining: null, resetAt: 0 } };
-
-class GitHubError extends Error {
-  constructor(message, status, { rateLimited = false, resetAt = 0, resource = "core" } = {}) {
-    super(message);
-    this.status = status;
-    this.rateLimited = rateLimited;
-    this.resetAt = resetAt;
-    this.resource = resource;
-  }
-}
-
-const resourceFor = (url) => (/^\/search\//.test(new URL(url).pathname) ? "search" : "core");
-const limitsFor = (resource) => (resource === "search" ? ghState.search : ghState);
-
-function isRateLimited(resource = "core") {
-  const l = limitsFor(resource);
-  return l.remaining === 0 && Date.now() < l.resetAt;
-}
-
-function rateLimitError(resource = "core") {
-  const { resetAt } = limitsFor(resource);
-  const message = resource === "search"
-    ? `GitHub's search limit is used up for a moment — it resets at ${formatTime(resetAt)}.`
-    : `GitHub's hourly request limit is used up — it resets at ${formatTime(resetAt)}.`;
-  return new GitHubError(message, 403, { rateLimited: true, resetAt, resource });
-}
-
-function repoApiUrl(endpoint, repo) {
-  return endpoint.startsWith("http")
-    ? endpoint
-    : `https://api.github.com/repos/${repo.owner}/${repo.repo}${endpoint}`;
-}
-
-function githubHeaders(url, token = githubToken) {
-  const headers = { "Accept": "application/vnd.github+json" };
-  // Send the token only to GitHub's own API host — endpoint may be a full URL
-  // that came from response data, and the token must not follow it elsewhere.
-  let host = "";
-  try { host = new URL(url).host; } catch { throw new GitHubError(`Invalid GitHub API URL: ${url}`, 0); }
-  if (token && host === "api.github.com") headers["Authorization"] = `Bearer ${token}`;
-  return headers;
-}
-
-// Cache keys include whether a token was used: a private repo that 404s
-// anonymously must not stay "missing" once a token is added.
-function ghCacheKey(url) { return `gh:${githubToken ? "auth" : "anon"}:${url}`; }
-
-async function ghCacheGet(key) {
-  if (ghMemCache.has(key)) return ghMemCache.get(key);
-  try {
-    const stored = (await chrome.storage.session?.get(key))?.[key];
-    if (stored) ghMemCache.set(key, stored);
-    return stored || null;
-  } catch { return null; }
-}
-
-function ghCacheSet(key, entry) {
-  ghMemCache.set(key, entry);
-  if (JSON.stringify(entry).length > GH_MAX_CACHED_CHARS) return;
-  chrome.storage.session?.set({ [key]: entry }).catch(() => {}); // quota full → memory only
-}
-
-function noteRateLimitHeaders(res, resource) {
-  const remaining = res.headers.get("X-RateLimit-Remaining");
-  if (remaining === null) return;
-  const l = limitsFor(res.headers.get("X-RateLimit-Resource") || resource);
-  l.remaining = Number(remaining);
-  l.limit = Number(res.headers.get("X-RateLimit-Limit"));
-  l.resetAt = Number(res.headers.get("X-RateLimit-Reset")) * 1000;
-  if (l === ghState) renderRateLimit();
-}
-
-function isRateLimitResponse(res, body, resource = "core") {
-  if (res.status !== 403 && res.status !== 429) return false;
-  const quotaGone = res.headers.get("X-RateLimit-Remaining") === "0";
-  const retryAfter = Number(res.headers.get("Retry-After")) || 0;
-  if (!quotaGone && !retryAfter && res.status !== 429 && !/rate limit/i.test(body?.message || "")) return false;
-  // Secondary limits don't zero the quota — pause for Retry-After (or a minute).
-  // Not until X-RateLimit-Reset: that's the primary window, often an hour away.
-  if (!quotaGone) {
-    const l = limitsFor(resource);
-    l.remaining = 0;
-    l.resetAt = Date.now() + (retryAfter || 60) * 1000;
-    if (l === ghState) renderRateLimit();
-  }
-  return true;
-}
-
-// GET a GitHub API URL → { status, body, link }. Cached, de-duplicated and
-// rate-limit aware; a stale cached copy is preferred over failing.
-async function githubRequest(url) {
-  const key = ghCacheKey(url);
-  const cached = await ghCacheGet(key);
-  if (cached && Date.now() - cached.time < GH_FRESH_MS) return cached;
-  if (ghInflight.has(key)) return ghInflight.get(key);
-
-  const resource = resourceFor(url);
-  const request = (async () => {
-    if (isRateLimited(resource)) {
-      if (cached) return cached;
-      throw rateLimitError(resource);
-    }
-    const headers = githubHeaders(url);
-    if (cached?.etag) headers["If-None-Match"] = cached.etag;
-
-    let res;
-    try {
-      // no-store: we do our own conditional requests, so skip the HTTP cache
-      res = await fetch(url, { headers, cache: "no-store" });
-    } catch {
-      if (cached) return cached;
-      throw new GitHubError("Couldn't reach GitHub — check your connection.", 0);
-    }
-    noteRateLimitHeaders(res, resource);
-
-    if (res.status === 304 && cached) {
-      const refreshed = { ...cached, time: Date.now() };
-      ghCacheSet(key, refreshed);
-      return refreshed;
-    }
-
-    const body = await res.json().catch(() => null);
-    if (isRateLimitResponse(res, body, resource)) {
-      if (cached) return cached;
-      throw rateLimitError(resource);
-    }
-    if (res.status === 401 && githubToken) {
-      ghState.badToken = true;
-      renderRateLimit();
-      throw new GitHubError("GitHub rejected your token — update or clear it in Settings.", 401);
-    }
-
-    const entry = { status: res.status, body, etag: res.headers.get("ETag"), link: res.headers.get("Link"), time: Date.now() };
-    if (res.ok || res.status === 404) ghCacheSet(key, entry);
-    return entry;
-  })().finally(() => ghInflight.delete(key));
-
-  ghInflight.set(key, request);
-  return request;
-}
-
-// `repo` defaults to the current repo; callers that have already awaited
-// something must pass the repo they captured, since currentRepo may have moved on.
-async function fetchGitHub(endpoint, repo = currentRepo) {
-  return (await fetchGitHubPage(endpoint, repo)).data;
-}
-
-// Like fetchGitHub, but also returns the Link header (for page counts)
-async function fetchGitHubPage(endpoint, repo = currentRepo) {
-  const { status, body, link } = await githubRequest(repoApiUrl(endpoint, repo));
-  if (status < 200 || status >= 300) {
-    throw new GitHubError(`GitHub API ${status}: ${body?.message || "request failed"}`, status);
-  }
-  return { data: body, link };
-}
-
-// Does this path exist? 404 → false; rate limits and other errors propagate.
-function githubExists(endpoint, repo) {
-  return fetchGitHub(endpoint, repo).then(() => true, err => {
-    if (err.status === 404) return false;
-    throw err;
-  });
-}
-
-// GET /rate_limit doesn't count against the limit, so it's a free way to show
-// the real quota on open and to validate a token before saving it.
-async function checkRateLimit(token = githubToken) {
-  const url = "https://api.github.com/rate_limit";
-  const res = await fetch(url, { headers: githubHeaders(url, token), cache: "no-store" });
-  if (res.status === 401) return { valid: false };
-  const core = (await res.json().catch(() => null))?.resources?.core;
-  return { valid: true, core };
-}
-
 async function refreshRateLimit() {
   try {
     const { valid, core } = await checkRateLimit();
@@ -664,6 +468,7 @@ function renderRateLimit() {
   if (wasRateLimited && !limited && !badToken) reloadCurrentRepo();
   wasRateLimited = limited;
 }
+onRateLimitChange = renderRateLimit; // github.js reports quota changes here
 
 const GITHUB_TOKEN_URL = "https://github.com/settings/tokens";
 
@@ -700,17 +505,6 @@ function getGitHubToken() {
   showSpStatus("sp-gh-status", "Paste your new token here and press Save token.", false, 0);
 }
 
-// ── Repo metadata ─────────────────────────────────────────────────────────────
-// Returns a shared promise for the repo metadata so the header and the health
-// score (which needs pushed_at / open_issues_count) wait on the same request.
-function loadRepoData(repo = currentRepo) {
-  const cache = cacheFor(repoKey(repo));
-  if (cache.repoData) return Promise.resolve(cache.repoData);
-  cache.repoDataPromise ??= fetchGitHub("", repo)
-    .then(data => (cache.repoData = data))
-    .finally(() => { delete cache.repoDataPromise; });
-  return cache.repoDataPromise;
-}
 
 async function fetchRepoData() {
   const cacheKey = repoKey();
@@ -1701,7 +1495,7 @@ function appendChatMessage(role, text, save = true, animate = true, time = null,
   if (save) saveChatHistory();
 }
 
-const BOT_LABEL_HTML = `${icon("sparkles", "icon-sm")}Assistant`;
+const BOT_LABEL_HTML = `${icon("compass", "icon-sm")}Assistant`;
 
 // How each file came to be read (retrieval.js sets `via`)
 const VIA_LABEL = {
@@ -1969,7 +1763,7 @@ function renderChatStarters() {
     ["Where is the main entry point, and what happens at startup?", "What happens at startup?"],
   ];
   el.innerHTML = `
-    <svg class="icon chat-starters-icon" aria-hidden="true"><use href="#i-sparkles"/></svg>
+    <svg class="icon chat-starters-icon" aria-hidden="true"><use href="#i-compass"/></svg>
     <p class="chat-starters-title">Ask about ${escapeHtml(currentRepo?.repo || "this repo")}</p>
     <p class="chat-starters-label">Answers come from its actual source files, with links to the lines they cite.</p>
     <div class="chat-starters-grid">
@@ -2158,6 +1952,10 @@ function initSettingsTab() {
   if (ollamaModel) document.getElementById("sp-ollama-model").value = ollamaModel;
   if (githubToken) document.getElementById("sp-gh-token").placeholder = maskApiKey(githubToken);
   renderGitHubAccount();
+  // The guide on GitHub's issue pages (content.js) — on unless switched off
+  const pageGuide = document.getElementById("sp-page-guide");
+  chrome.storage.local.get(["pageGuide"]).then(({ pageGuide: on }) => { pageGuide.checked = on !== false; });
+  pageGuide.addEventListener("change", () => chrome.storage.local.set({ pageGuide: pageGuide.checked }));
   const stackCard = document.getElementById("sp-stack-card");
   stackCard.addEventListener("click", handleStackCardClick);
   stackCard.addEventListener("keydown", handleStackCardKeydown);
@@ -2602,14 +2400,6 @@ function geminiToOpenAI(contents) {
   }));
 }
 
-// ── File decoding ─────────────────────────────────────────────────────────────
-// The contents API returns base64 of the raw bytes; atob() alone yields Latin-1,
-// which garbles any UTF-8 (emoji, CJK, accents), so decode the bytes properly.
-function decodeGitHubContent(data) {
-  const binary = atob((data.content || "").replace(/\n/g, ""));
-  const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
-  return new TextDecoder("utf-8").decode(bytes);
-}
 
 // ── Markdown renderer ─────────────────────────────────────────────────────────
 function renderMarkdown(text) {
@@ -2659,15 +2449,4 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
-function formatTime(ts) {
-  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
 
-function daysAgo(dateStr) {
-  const days = Math.floor((Date.now() - new Date(dateStr)) / (1000 * 60 * 60 * 24));
-  if (days === 0) return "today";
-  if (days === 1) return "1 day ago";
-  if (days < 30) return `${days} days ago`;
-  if (days < 365) return `${Math.floor(days / 30)}mo ago`;
-  return `${Math.floor(days / 365)}y ago`;
-}

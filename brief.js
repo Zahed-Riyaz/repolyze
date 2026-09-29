@@ -195,7 +195,7 @@ function issueDiscussion(comments) {
 function briefMarkdown(repo, issue, brief) {
   const lines = [`# #${issue.number} ${issue.title}`, issue.html_url, "", `**${brief.availability.verdict}** — ${brief.availability.advice}`];
   for (const r of brief.availability.reasons) lines.push(`- ${r.text}${r.url ? ` (${r.url})` : ""}`);
-  if (brief.likelyFiles?.length) lines.push("", "## Likely files", ...brief.likelyFiles.map(f => `- ${f}`));
+  if (brief.fileSources?.length) lines.push("", "## Files it needs", ...brief.fileSources.map(f => `- ${f.path} (${f.why})`));
   const people = brief.people;
   if (people?.owners.length || people?.inThread.length) {
     lines.push("", "## Who to ask");
@@ -227,13 +227,6 @@ async function loadVerifyCommands(repo) {
   ]);
   const packageManager = has("pnpm-lock.yaml") ? "pnpm" : has("yarn.lock") ? "yarn" : has("bun.lockb") || has("bun.lock") ? "bun" : "npm";
   return verifyCommands({ workflowText, workflowPath: workflow?.path, packageJson, packageManager });
-}
-
-// Files the issue is probably about: the best path matches for its title and body
-async function likelyFiles(repo, issue) {
-  const tree = await getRepoTree(repo);
-  const terms = queryTerms(`${issue.title} ${(issue.body || "").slice(0, 600)}`);
-  return rankCodeFiles(tree.entries, terms).filter(f => f.score >= 1).slice(0, 5).map(f => f.path);
 }
 
 // ── View ─────────────────────────────────────────────────────────────────────
@@ -300,11 +293,13 @@ async function showIssueBrief(issueOrNumber, { auto = false } = {}) {
         return;
       }
       // Path matches point at where to look and whose code it is — no AI needed
-      const files = await likelyFiles(repo, issue).catch(() => []);
+      // Where the work is, from the strongest signals first (guide.js)
+      const fileSources = await resolveIssueFiles(repo, issue, { comments, timeline }).catch(() => []);
+      const files = fileSources.map(f => f.path);
       brief = briefs[number] = {
         issue, comments, commands, codeOwnerRules: owners.rules,
         availability: issueAvailability(issue, comments, timeline, Date.now()),
-        likelyFiles: files, people: briefPeople(files, owners.rules, comments),
+        likelyFiles: files, fileSources, people: briefPeople(files, owners.rules, comments),
       };
     }
     if (!live()) return;
@@ -336,9 +331,8 @@ const REASON_ICONS = { good: "check", bad: "x", warn: "alert", info: "inbox" };
 
 function renderBrief(repo, issue, brief) {
   const a = brief.availability;
-  const reasons = a.reasons.map(r => `
-    <li class="reason reason-${r.tone}">${icon(REASON_ICONS[r.tone], "icon-sm")}
-      <span>${r.url ? `<a href="${r.url}" target="_blank">${escapeHtml(r.text)}</a>` : escapeHtml(r.text)}</span></li>`).join("");
+  // Reasons as one quiet line (links kept); the verdict and the next step lead
+  const why = a.reasons.map(r => (r.url ? `<a href="${r.url}" target="_blank">${escapeHtml(r.text)}</a>` : escapeHtml(r.text))).join(" · ");
   const commands = brief.commands.length
     ? brief.commands.map(c => `
         <div class="cmd-row"><code class="cmd-code">${escapeHtml(c.cmd)}</code>
@@ -348,26 +342,50 @@ function renderBrief(repo, issue, brief) {
 
   document.getElementById("brief-body").innerHTML = `
     ${briefHeaderHtml(issue)}
-    <section class="card availability availability-${a.status}">
-      <div class="availability-head"><span class="availability-dot"></span><strong>${a.verdict}</strong></div>
-      <ul class="reason-list">${reasons}</ul>
-      <p class="brief-note">${escapeHtml(a.advice)}</p>
+    <section class="verdict verdict-${a.status}">
+      <p class="verdict-line"><strong>${escapeHtml(a.verdict)}</strong></p>
+      ${why ? `<p class="verdict-why">${why}</p>` : ""}
+      <p class="verdict-next">${icon("arrow-right", "icon-sm")}<span>${escapeHtml(a.advice)}</span></p>
     </section>
-    ${askRowHtml("issue")}
-    ${stackSectionHtml(issueStack(issue, brief.likelyFiles))}
-    ${brief.likelyFiles.length ? `<section class="brief-section">
-      <h2 class="section-title">Likely files</h2>
-      <ul class="brief-files">${brief.likelyFiles.map(f => `<li><a href="${sourceUrl(repo, null, f)}" target="_blank"><code>${escapeHtml(f)}</code></a></li>`).join("")}</ul>
-    </section>` : ""}
+    ${whereToStartHtml(repo, brief.fileSources, issueStack(issue, brief.likelyFiles))}
     <section class="brief-section">
       <h2 class="section-title">Who to ask</h2>
       <div id="brief-people"></div>
     </section>
+    ${askRowHtml("issue")}
     <section class="brief-section">
       <h2 class="section-title">Run before opening a PR</h2>
       ${commands}
     </section>`;
   renderBriefPeople(brief.people);
+}
+
+// One file: its name (linked) and why on the first line, its folder dimmed below
+function fileRowHtml(repo, f, ref = null) {
+  const { name, dir } = splitPath(f.path);
+  return `<li class="file-row file-${f.confidence}">
+    <a class="file-name" href="${sourceUrl(repo, ref, f.path)}" target="_blank" title="${escapeHtml(f.path)}"><code>${escapeHtml(name)}</code></a>
+    <span class="file-why">${escapeHtml(f.why)}</span>
+    ${dir ? `<span class="file-dir" title="${escapeHtml(f.path)}">${escapeHtml(shortDir(dir))}</span>` : ""}
+  </li>`;
+}
+
+// Files with a real signal, then name-matching guesses folded away (open only
+// when they're all there is); the stack the files need as a header note
+function whereToStartHtml(repo, fileSources, stack) {
+  const { start, guesses } = groupIssueFiles(fileSources || []);
+  if (!start.length && !guesses.length) return "";
+  const plural = guesses.length === 1 ? "guess" : "guesses";
+  return `<section class="brief-section">
+      <div class="section-head"><h2 class="section-title">Where to start</h2>${stackLineHtml(stack)}</div>
+      ${start.length
+        ? `<ul class="file-list">${start.map(f => fileRowHtml(repo, f)).join("")}</ul>`
+        : `<p class="brief-note">Nothing in the issue or its PRs points at a file yet.</p>`}
+      ${guesses.length ? `<details class="file-guesses"${start.length ? "" : " open"}>
+        <summary>${guesses.length} ${plural} by file name</summary>
+        <ul class="file-list">${guesses.map(f => fileRowHtml(repo, f)).join("")}</ul>
+      </details>` : ""}
+    </section>`;
 }
 
 // ── Asking about a brief ─────────────────────────────────────────────────────
@@ -427,20 +445,19 @@ function renderBriefPeople({ owners, inThread }) {
     ${owners.map(o => {
       const name = o.handle.slice(1);
       const isTeam = name.includes("/");
+      const files = o.files.map(f => f.split("/").pop());
       return `<li class="person">
         ${isTeam ? `<span class="team-avatar">${icon("users", "icon-sm")}</span>` : `<img src="https://github.com/${encodeURIComponent(name)}.png?size=64" class="contributor-avatar" alt="" loading="lazy">`}
         <div class="contributor-info">
-          <div class="contributor-top"><a href="https://github.com/${isTeam ? `orgs/${name.split("/")[0]}/teams/${name.split("/")[1]}` : encodeURIComponent(name)}" target="_blank" class="contributor-name">${escapeHtml(isTeam ? o.handle : name)}</a>
-            <span class="role-chips"><span class="role-chip role-owner">Code owner</span></span></div>
-          <div class="person-sub">Owns ${o.files.map(f => `<code>${escapeHtml(f.split("/").pop())}</code>`).join(", ")}</div>
+          <a href="https://github.com/${isTeam ? `orgs/${name.split("/")[0]}/teams/${name.split("/")[1]}` : encodeURIComponent(name)}" target="_blank" class="contributor-name" title="${escapeHtml(o.handle)}">${escapeHtml(ownerDisplay(o.handle, currentRepo?.owner))}</a>
+          <div class="person-sub" title="${escapeHtml(o.files.join("\n"))}">Code owner · ${files.length === 1 ? escapeHtml(files[0]) : `${files.length} of these files`}</div>
         </div></li>`;
     }).join("")}
     ${inThread.map(p => `<li class="person">
         <img src="${avatarUrl(p.avatar_url, 64)}" class="contributor-avatar" alt="" loading="lazy">
         <div class="contributor-info">
-          <div class="contributor-top"><a href="${p.html_url}" target="_blank" class="contributor-name">${escapeHtml(p.login)}</a>
-            <span class="role-chips"><span class="role-chip">${ROLE_NAMES[p.role] || p.role}</span></span></div>
-          <div class="person-sub">Replied ${p.replies}× in this thread</div>
+          <a href="${p.html_url}" target="_blank" class="contributor-name">${escapeHtml(p.login)}</a>
+          <div class="person-sub">${ROLE_NAMES[p.role] || p.role} · replied ${p.replies}× here</div>
         </div></li>`).join("")}
   </ul>`;
 }

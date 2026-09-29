@@ -139,12 +139,13 @@ test("briefMarkdown produces a shareable summary", () => {
   const md = pure.briefMarkdown({ owner: "o", repo: "r" }, baseIssue, {
     availability: pure.issueAvailability(baseIssue, [], [], NOW),
     likelyFiles: ["src/launch/timer.ts"],
+    fileSources: [{ path: "src/launch/timer.ts", why: "named in the issue", confidence: "high" }],
     people: { owners: [{ handle: "@ada", files: ["src/launch/timer.ts"] }], inThread: [] },
     commands: [{ cmd: "npm test", from: "package.json" }],
   });
   assert.match(md, /^# #7 Countdown drifts on Windows\nhttps:\/\/github\.com\/o\/r\/issues\/7/);
   assert.match(md, /\*\*Looks free\*\*/);
-  assert.match(md, /## Likely files\n- src\/launch\/timer\.ts/);
+  assert.match(md, /## Files it needs\n- src\/launch\/timer\.ts \(named in the issue\)/);
   assert.match(md, /- @ada — code owner of src\/launch\/timer\.ts/);
   assert.match(md, /## Run before opening a PR\n```bash\nnpm test\n```/);
 });
@@ -180,13 +181,13 @@ test("the brief shows availability, likely files, code owners and verify command
   await panel.fn.showIssueBrief({ ...baseIssue, title: "Timer drifts during launch countdown" });
 
   const body = panel.el("brief-body").innerHTML;
-  assert.match(body, /availability-free[\s\S]*Looks free/);
-  assert.match(body, /Likely files[\s\S]*href="https:\/\/github\.com\/o\/r\/blob\/HEAD\/src\/launch\/timer\.ts"/);
+  assert.match(body, /class="verdict verdict-free"[\s\S]*<strong>Looks free<\/strong>[\s\S]*class="verdict-next"[\s\S]*Leave a short comment/);
+  assert.match(body, /Where to start[\s\S]*Nothing in the issue or its PRs points at a file yet[\s\S]*<details class="file-guesses" open>[\s\S]*href="https:\/\/github\.com\/o\/r\/blob\/HEAD\/src\/launch\/timer\.ts"[\s\S]*<code>timer\.ts<\/code>[\s\S]*name matches the issue[\s\S]*file-dir[^>]*>src\/launch</, "only guesses → shown open, labelled as guesses");
   assert.match(body, /Run before opening a PR[\s\S]*npm test/);
   assert.match(body, /From <code>\.github\/workflows\/test\.yml<\/code>/);
   const people = panel.el("brief-people").innerHTML;
-  assert.match(people, /github\.com\/ada"[^>]*>ada<\/a>[\s\S]*Code owner[\s\S]*timer\.ts/);
-  assert.match(people, /bob[\s\S]*Replied 1× in this thread/);
+  assert.match(people, /github\.com\/ada"[^>]*>ada<\/a>[\s\S]*Code owner · timer\.ts/);
+  assert.match(people, /bob[\s\S]*replied 1× here/);
   assert.equal(aiCalls(), 0, "briefs never call the AI");
 
   const issueCalls = gh.apiCalls.filter(u => u.startsWith("/issues/7/"));
@@ -219,7 +220,7 @@ test("reopening a brief is instant: no new API requests", async () => {
 test("a taken issue says so, with the PR that took it", async () => {
   const { panel } = briefPanel({ ai: false, timeline: [prRef(42, "open", false, "grace")] });
   await panel.fn.showIssueBrief(baseIssue);
-  assert.match(panel.el("brief-body").innerHTML, /availability-taken[\s\S]*Open PR #42 by @grace/);
+  assert.match(panel.el("brief-body").innerHTML, /verdict-taken[\s\S]*Already taken[\s\S]*class="verdict-why">[\s\S]*Open PR #42 by @grace/);
 });
 
 test("switching repos while a brief is loading never renders it into the other repo", async () => {
