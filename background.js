@@ -2,7 +2,7 @@
 // Opens the side panel from the toolbar button, and serves the contributor
 // guide that content.js shows on GitHub issue pages. The guide's data comes
 // from the same code the panel uses (github.js, retrieval.js, …), loaded here
-// with importScripts, so both share one response cache (chrome.storage.session)
+// with importScripts, so both share one response cache (chrome.storage.local)
 // and the token is only ever sent to api.github.com.
 
 let currentRepo = null; // the shared scripts default to it; the worker always passes a repo

@@ -67,10 +67,11 @@ test("a full visit stays within budget, chat costs no API requests, and reopenin
   await first.panel.fn.getRepoContextParts();
   assert.equal(first.gh.apiCalls.length, beforeChat, "chat context re-uses the tree and raw files");
 
-  const session = structuredClone(first.panel.chrome.storage.session.data);
-  const reopened = openRepo({ chrome: { session } });
+  // Reloading the extension or restarting Chrome keeps chrome.storage.local
+  const local = structuredClone(first.panel.chrome.storage.local.data);
+  const reopened = openRepo({ chrome: { local } });
   await visitAllTabs(reopened.panel);
-  assert.deepEqual(reopened.gh.apiCalls, [], "everything is served from the session cache");
+  assert.deepEqual(reopened.gh.apiCalls, [], "everything is served from the stored cache");
 });
 
 // ── Tab loading & recovery ───────────────────────────────────────────────────

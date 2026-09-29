@@ -117,7 +117,7 @@ async function buildFocusedContext(repo, item, question, previousQuestion, onSta
   const noun = isPr ? "pull request" : "issue";
   const focus = [`The user is asking about ${noun} #${item.number} ("${item.title}"), shown in the <${isPr ? "pull_request" : "issue"}> block of the context. Answer about this ${noun} specifically.`,
     ...FOCUS_RULES[item.kind]].join("\n- ");
-  const budget = CONTEXT_BUDGET[aiProvider] || 20000;
+  const budget = contextBudget();
 
   if (isPr) {
     const { pr, files } = item.brief;

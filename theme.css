@@ -204,3 +204,37 @@ code { font-family: var(--mono); font-size: 0.9em; }
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ── Ollama setup steps (ollama.js; side panel and options page) ───────── */
+.ollama-setup { margin-top: 10px; }
+.ollama-os-tabs { display: inline-flex; gap: 2px; margin-bottom: 8px; }
+.ollama-os { padding: 2px 9px; border: none; border-radius: var(--r-full); background: transparent; color: var(--fg-muted); font-size: 12px; }
+.ollama-os:hover { color: var(--fg); }
+.ollama-os.active { background: var(--bg-subtle); color: var(--fg); }
+.ollama-steps { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 10px; font-size: 12px; }
+.ollama-steps li::marker { color: var(--fg-subtle); }
+.ollama-step-title { display: block; margin-bottom: 4px; color: var(--fg); }
+.ollama-cmd { display: flex; align-items: center; gap: 6px; }
+.ollama-cmd code {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-elev);
+  font-size: 11.5px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.ollama-cmd .copy-btn {
+  flex-shrink: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  color: var(--fg-muted);
+  font-size: 11.5px;
+}
+.ollama-cmd .copy-btn:hover { color: var(--fg); border-color: var(--border-strong); }
+.ollama-step-note { display: block; margin-top: 3px; color: var(--fg-subtle); font-size: 11.5px; }

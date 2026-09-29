@@ -2,17 +2,60 @@
 let currentRepo = null;
 let aiProvider = "groq";   // "groq" | "gemini" | "ollama" | "openai" | "anthropic"
 let aiApiKey = "";          // API key for cloud providers
-let ollamaModel = "llama3.2";
+// The local model when none is chosen: free, 128k-token context, runs on most laptops
+const DEFAULT_OLLAMA_MODEL = "llama3.1:8b";
+let ollamaModel = DEFAULT_OLLAMA_MODEL;
 let chatMessages = []; // [{role:"user"|"bot", text:"...", error?:true}]
 let panelWindowId = null; // the browser window this side panel belongs to
 
-// Model used for each provider — the one place to bump when a model is retired
-const MODELS = {
-  groq:      "llama-3.3-70b-versatile",
-  gemini:    "gemini-2.5-flash",
-  openai:    "gpt-4o-mini",
-  anthropic: "claude-haiku-4-5-20251001",
+// Models offered in Settings for each provider, first = the default. Providers
+// add and retire models often, so "Other…" in Settings takes any model ID too.
+// The one place to update when a model is retired or a better one arrives.
+const MODEL_CHOICES = {
+  groq: [
+    { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B", note: "Fast and reliable; the most generous free-tier limits." },
+    { id: "moonshotai/kimi-k2-instruct", label: "Kimi K2", note: "Moonshot's open model, strong at code. Lower free-tier limits, so long chats may pause." },
+    { id: "openai/gpt-oss-120b", label: "GPT-OSS 120B", note: "OpenAI's open-weight model; strong reasoning." },
+    { id: "qwen/qwen3-32b", label: "Qwen3 32B", note: "Good at code for its size." },
+    { id: "llama-3.1-8b-instant", label: "Llama 3.1 8B", note: "Fastest; weakest answers." },
+  ],
+  gemini: [
+    { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash", note: "Fast, with a generous free tier and the largest context budget here." },
+    { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro", note: "Stronger answers; much lower free-tier limits." },
+    { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite", note: "Fastest and cheapest; weaker answers." },
+  ],
+  openai: [
+    { id: "gpt-4o-mini", label: "GPT-4o mini", note: "Cheap and fast." },
+    { id: "gpt-4.1-mini", label: "GPT-4.1 mini", note: "Better at following instructions and code; still cheap." },
+    { id: "gpt-4.1", label: "GPT-4.1", note: "Stronger; costs more." },
+    { id: "gpt-5-mini", label: "GPT-5 mini", note: "Newer and stronger; slower to start answering." },
+  ],
+  anthropic: [
+    { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5", note: "Fast and cheap." },
+    { id: "claude-sonnet-5", label: "Claude Sonnet 5", note: "Stronger answers; costs more." },
+    { id: "claude-opus-5-5", label: "Claude Opus 5.5", note: "The strongest; costs the most." },
+  ],
+  ollama: [
+    { id: "llama3.1:8b", label: "Llama 3.1 8B", note: "128k-token context; runs on most laptops (~5 GB)." },
+    { id: "qwen2.5-coder:7b", label: "Qwen2.5 Coder 7B", note: "Tuned for code; ~5 GB." },
+    { id: "gemma3:12b", label: "Gemma 3 12B", note: "128k-token context; needs ~10 GB of memory." },
+    { id: "gpt-oss:20b", label: "GPT-OSS 20B", note: "128k-token context, strong reasoning; needs ~16 GB of memory." },
+    { id: "llama3.2", label: "Llama 3.2 3B", note: "Small and fast, but often ignores instructions like citing lines." },
+  ],
 };
+const MODELS = Object.fromEntries(Object.entries(MODEL_CHOICES).map(([p, list]) => [p, list[0].id]));
+let aiModels = {}; // provider → the model chosen in Settings (unset → the default)
+
+// The model in use for a provider
+function modelFor(provider = aiProvider) {
+  if (provider === "ollama") return ollamaModel || DEFAULT_OLLAMA_MODEL;
+  return aiModels[provider] || MODELS[provider];
+}
+
+// "moonshotai/kimi-k2-instruct" → "Kimi K2" (an ID not in the list shows as itself)
+function modelLabel(provider, id = modelFor(provider)) {
+  return MODEL_CHOICES[provider]?.find(m => m.id === id)?.label || id;
+}
 
 // Async work captures the repo it started for and checks this before touching
 // the UI, so a slow response never renders into a different repo's view.
@@ -104,12 +147,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // Load saved settings — also migrate legacy geminiApiKey → aiApiKey
-  const stored = await chrome.storage.local.get(["githubToken", "githubUser", "aiProvider", "aiApiKey", "ollamaModel", "geminiApiKey"]);
+  const stored = await chrome.storage.local.get(["githubToken", "githubUser", "aiProvider", "aiApiKey", "aiModels", "ollamaModel", "ollamaDefaultMoved", "geminiApiKey"]);
   githubToken  = stored.githubToken  || "";
   githubUser   = stored.githubUser   || null;
   aiProvider   = stored.aiProvider   || "groq";
   aiApiKey     = stored.aiApiKey     || "";
-  ollamaModel  = stored.ollamaModel  || "llama3.2";
+  ollamaModel  = stored.ollamaModel  || DEFAULT_OLLAMA_MODEL;
+  aiModels     = stored.aiModels     || {};
+  // The old default (llama3.2, 3B) was too small to follow citation rules; move
+  // anyone still on it to the new default, once (choosing it again later sticks)
+  if (stored.ollamaModel === "llama3.2" && !stored.ollamaDefaultMoved) {
+    ollamaModel = DEFAULT_OLLAMA_MODEL;
+    await chrome.storage.local.set({ ollamaModel, ollamaDefaultMoved: true });
+  }
 
   // One-time migration: if old Gemini key exists but new key doesn't, adopt it
   if (!aiApiKey && stored.geminiApiKey) {
@@ -1359,7 +1409,7 @@ async function handleChat({ files = null } = {}) {
     const { system, contents } = buildChatPrompt({
       repo, context, question: query, focus,
       history: messages.slice(0, -1),
-      historyBudget: Math.floor((CONTEXT_BUDGET[aiProvider] || 20000) * 0.25),
+      historyBudget: Math.floor(contextBudget() * 0.25),
     });
 
     // Stream tokens directly into the bot bubble
@@ -1794,52 +1844,32 @@ function renderChatStarters() {
   });
 }
 
+// Ollama isn't running (or is blocking the extension): the steps to fix it for
+// the model in use, from ollama.js, with the user's message kept for a retry
 function showOllamaGuide(reason, retryQuery) {
   const isCors = reason === "OLLAMA_CORS";
   const history = document.getElementById("chat-history");
+  const model = modelFor("ollama");
+  // Not running → download the model (if needed) and start it; blocking → only restart it
+  const steps = isCors ? ["serve"] : ["pull", "serve"];
 
   const card = document.createElement("div");
   card.className = "ollama-guide msg-entering";
-  card.innerHTML = `
-    <div class="ollama-guide-header">${icon("alert")}${isCors ? "Ollama is blocking the extension" : "Ollama isn't running"}</div>
-    <p class="ollama-guide-desc">${
-      isCors
-        ? "Ollama is running but blocking browser extension requests. Restart it with the <code>OLLAMA_ORIGINS</code> flag:"
-        : "Start Ollama in your terminal, then press Send again:"
-    }</p>
-
-    <div class="cmd-block">
-      <span class="cmd-os">macOS / Linux</span>
-      <div class="cmd-row">
-        <code class="cmd-code">OLLAMA_ORIGINS='*' ollama serve</code>
-        <button class="copy-btn" data-cmd="OLLAMA_ORIGINS='*' ollama serve">${icon("copy", "icon-sm")}Copy</button>
-      </div>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-os">Windows (PowerShell)</span>
-      <div class="cmd-row">
-        <code class="cmd-code">$env:OLLAMA_ORIGINS='*'; ollama serve</code>
-        <button class="copy-btn" data-cmd="$env:OLLAMA_ORIGINS='*'; ollama serve">${icon("copy", "icon-sm")}Copy</button>
-      </div>
-    </div>
-
-    ${!isCors ? `<p class="ollama-guide-link">Not installed? Get it at <a href="https://ollama.com" target="_blank">ollama.com</a></p>` : ""}
-    <p class="ollama-guide-ready">Your message is back in the box below — press Send once Ollama is up.</p>
-  `;
+  const draw = (os) => {
+    card.innerHTML = `
+      <div class="ollama-guide-header">${icon("alert")}${isCors ? "Ollama is blocking the extension" : "Ollama isn't running"}</div>
+      <p class="ollama-guide-desc">${isCors
+        ? "Ollama is running but blocking requests from the extension. Quit it, then start it again allowing Chrome extensions:"
+        : `Run these in a terminal, then press Send again:`}</p>
+      ${ollamaSetupHtml({ model, os, steps })}
+      ${!isCors ? `<p class="ollama-guide-link">Not installed? Get it at <a href="https://ollama.com" target="_blank">ollama.com</a>, or see Settings for the install command.</p>` : ""}
+      <p class="ollama-guide-ready">Your message is back in the box below — press Send once Ollama is up.</p>`;
+  };
+  draw(detectOS());
+  card.addEventListener("click", (e) => handleOllamaSetupClick(e, draw));
 
   history.appendChild(card);
   history.scrollTop = history.scrollHeight;
-
-  // Wire up copy buttons
-  card.querySelectorAll(".copy-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      navigator.clipboard.writeText(btn.dataset.cmd).then(() => {
-        btn.innerHTML = `${icon("check", "icon-sm")}Copied`;
-        setTimeout(() => { btn.innerHTML = `${icon("copy", "icon-sm")}Copy`; }, 2000);
-      });
-    });
-  });
 
   // Restore the user's message to the input so they can just press Send
   if (retryQuery) {
@@ -1902,11 +1932,11 @@ function initSettingsTab() {
     openai: "sk-...", anthropic: "sk-ant-...",
   };
   const PROVIDER_HELP = {
-    groq:      'Free key at <a href="https://console.groq.com/keys" target="_blank">console.groq.com</a>. Uses <strong>Llama 3.3 70B</strong> — 14,400 req/day.',
-    gemini:    'Free key at <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a>. Uses <strong>Gemini 2.5 Flash</strong> — generous free tier.',
-    ollama:    'Download at <a href="https://ollama.com" target="_blank">ollama.com</a>. Models pull automatically on first use.',
-    openai:    'Key at <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com</a>. Uses <strong>GPT-4o mini</strong>.',
-    anthropic: 'Key at <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com</a>. Uses <strong>Claude Haiku 4.5</strong>.',
+    groq:      'Free key at <a href="https://console.groq.com/keys" target="_blank">console.groq.com</a>. Free-tier limits differ per model.',
+    gemini:    'Free key at <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a>. Free-tier limits differ per model.',
+    ollama:    'Download at <a href="https://ollama.com" target="_blank">ollama.com</a>. Runs on your machine; nothing leaves it.',
+    openai:    'Key at <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com</a>. Paid per use.',
+    anthropic: 'Key at <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com</a>. Paid per use.',
   };
 
   let settingsProvider = aiProvider;
@@ -1929,6 +1959,47 @@ function initSettingsTab() {
       }
     }
     document.getElementById("sp-help-links").innerHTML = PROVIDER_HELP[provider] || "";
+    renderModelPicker(provider);
+  }
+
+  // The model list for a provider: its choices plus "Other…" for any model ID;
+  // shows the one in use (or the saved choice), and a note on what it's good for
+  function renderModelPicker(provider) {
+    const select = document.getElementById("sp-model");
+    const custom = document.getElementById("sp-model-custom");
+    const current = modelFor(provider);
+    const choices = MODEL_CHOICES[provider] || [];
+    const known = choices.some(m => m.id === current);
+    select.innerHTML = choices.map((m, i) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.label)}${i === 0 ? " (default)" : ""}</option>`).join("") +
+      `<option value="__other">Other…</option>`;
+    select.value = known ? current : "__other";
+    custom.value = known ? "" : current;
+    custom.hidden = known;
+    showModelNote(provider);
+    renderOllamaSetup(provider);
+  }
+
+  // Ollama only: install / download / start commands for the model picked above
+  let setupOS = detectOS();
+  function renderOllamaSetup(provider, os = setupOS) {
+    setupOS = os;
+    const el = document.getElementById("sp-ollama-setup");
+    el.innerHTML = provider === "ollama" ? ollamaSetupHtml({ model: pickedModel("ollama"), os, steps: ["install", "pull", "serve", "list"] }) : "";
+  }
+
+  function showModelNote(provider) {
+    const value = document.getElementById("sp-model").value;
+    const note = value === "__other"
+      ? `Any ${provider === "ollama" ? "Ollama model name (it downloads on first use)" : "model ID your key can use"}.`
+      : MODEL_CHOICES[provider]?.find(m => m.id === value)?.note || "";
+    document.getElementById("sp-model-note").textContent = note;
+  }
+
+  // The model picked in the form (empty → the provider's default)
+  function pickedModel(provider) {
+    const value = document.getElementById("sp-model").value;
+    const model = value === "__other" ? document.getElementById("sp-model-custom").value.trim() : value;
+    return model || (provider === "ollama" ? DEFAULT_OLLAMA_MODEL : MODELS[provider]);
   }
 
   // Expected key prefixes for each provider — used for instant format validation
@@ -1942,14 +2013,10 @@ function initSettingsTab() {
   function refreshBadge() {
     const badge  = document.getElementById("sp-active-badge");
     const banner = document.getElementById("sp-quickstart-banner");
-    const names  = {
-      groq: "Groq — Llama 3.3 70B", gemini: "Gemini 2.5 Flash",
-      ollama: `Ollama — ${ollamaModel || "llama3.2"}`,
-      openai: "OpenAI — GPT-4o mini", anthropic: "Anthropic — Claude Haiku 4.5",
-    };
+    const names  = { groq: "Groq", gemini: "Gemini", ollama: "Ollama", openai: "OpenAI", anthropic: "Anthropic" };
     const configured = aiProvider === "ollama" || !!aiApiKey;
     badge.textContent = configured
-      ? `Active: ${names[aiProvider] || aiProvider}`
+      ? `Active: ${names[aiProvider] || aiProvider} — ${modelLabel(aiProvider)}`
       : "Not configured — choose a provider";
     badge.classList.toggle("is-ok", configured);
     badge.classList.toggle("is-warn", !configured);
@@ -1961,7 +2028,6 @@ function initSettingsTab() {
   // Initialise UI from current globals
   updateSettingsUI(settingsProvider);
   if (aiApiKey) document.getElementById("sp-api-key").placeholder = maskApiKey(aiApiKey);
-  if (ollamaModel) document.getElementById("sp-ollama-model").value = ollamaModel;
   if (githubToken) document.getElementById("sp-gh-token").placeholder = maskApiKey(githubToken);
   renderGitHubAccount();
   // The guide on GitHub's issue pages (content.js) — on unless switched off
@@ -1972,6 +2038,17 @@ function initSettingsTab() {
   stackCard.addEventListener("click", handleStackCardClick);
   stackCard.addEventListener("keydown", handleStackCardKeydown);
   refreshBadge();
+
+  // Model picker: "Other…" reveals the field for any model ID
+  document.getElementById("sp-model").addEventListener("change", (e) => {
+    const custom = document.getElementById("sp-model-custom");
+    custom.hidden = e.target.value !== "__other";
+    if (!custom.hidden) custom.focus();
+    showModelNote(settingsProvider);
+    renderOllamaSetup(settingsProvider);
+  });
+  document.getElementById("sp-model-custom").addEventListener("input", () => renderOllamaSetup(settingsProvider));
+  document.getElementById("sp-ollama-setup").addEventListener("click", (e) => handleOllamaSetupClick(e, (os) => renderOllamaSetup(settingsProvider, os)));
 
   // Provider pill clicks
   document.querySelectorAll(".sp-pill").forEach(pill => {
@@ -1994,14 +2071,18 @@ function initSettingsTab() {
   // Save AI settings
   document.getElementById("sp-save-btn").addEventListener("click", async () => {
     const toSave = { aiProvider: settingsProvider };
+    const model = pickedModel(settingsProvider);
     if (settingsProvider === "ollama") {
-      const model = document.getElementById("sp-ollama-model").value.trim() || "llama3.2";
       toSave.ollamaModel = model;
       toSave.aiApiKey    = "";
       ollamaModel = model;
       aiApiKey    = "";
     } else {
-      const key = document.getElementById("sp-api-key").value.trim();
+      aiModels = { ...aiModels, [settingsProvider]: model };
+      toSave.aiModels = aiModels;
+      // Same provider, key left blank → keep the saved key (e.g. only the model changed)
+      const typed = document.getElementById("sp-api-key").value.trim();
+      const key = typed || (settingsProvider === aiProvider ? aiApiKey : "");
       if (!key) { showSpStatus("sp-status", "Enter an API key.", true); return; }
 
       // Validate key format before saving — catches the most common mistake
@@ -2063,7 +2144,8 @@ function initSettingsTab() {
     if (area !== "local") return;
     if (changes.aiProvider)  aiProvider  = changes.aiProvider.newValue  || "groq";
     if (changes.aiApiKey)    aiApiKey    = changes.aiApiKey.newValue    || "";
-    if (changes.ollamaModel) ollamaModel = changes.ollamaModel.newValue || "llama3.2";
+    if (changes.ollamaModel) ollamaModel = changes.ollamaModel.newValue || DEFAULT_OLLAMA_MODEL;
+    if (changes.aiModels) aiModels = changes.aiModels.newValue || {};
     // A token saved elsewhere (options page) without its account → no stale name
     if (changes.githubUser) githubUser = changes.githubUser.newValue || null;
     else if (changes.githubToken) githubUser = null;
@@ -2073,12 +2155,11 @@ function initSettingsTab() {
       onGitHubTokenChanged();
     }
     if (changes.githubToken || changes.githubUser) renderGitHubAccount();
-    if (changes.aiProvider || changes.aiApiKey || changes.ollamaModel) {
+    if (changes.aiProvider || changes.aiApiKey || changes.ollamaModel || changes.aiModels) {
       settingsProvider = aiProvider;
       updateSettingsUI(aiProvider);
       document.getElementById("sp-api-key").placeholder =
         aiApiKey ? maskApiKey(aiApiKey) : PROVIDER_PLACEHOLDERS[aiProvider] || "";
-      document.getElementById("sp-ollama-model").value = ollamaModel;
       refreshBadge();
     }
   });
@@ -2128,7 +2209,7 @@ async function pullOllamaModel(model) {
       body: JSON.stringify({ name: model, stream: true })
     });
   } catch {
-    throw new Error("Ollama is not running. Start it with: ollama serve");
+    throw new Error(`Ollama is not running. Start it with: ${ollamaSteps(modelFor("ollama")).serve.cmd}`);
   }
   if (!pullResponse.ok) throw new Error(`Ollama: could not pull model "${model}".`);
 
@@ -2185,15 +2266,15 @@ function providerBody(provider, contents, { system, temperature = 0.2 } = {}) {
       return { contents, ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}), generationConfig: { temperature } };
     case "groq":
     case "openai":
-      return { model: MODELS[provider], messages: withSystem, temperature, stream: true };
+      return { model: modelFor(provider), messages: withSystem, temperature, stream: true };
     case "anthropic":
-      return { model: MODELS.anthropic, max_tokens: 2048, ...(system ? { system } : {}), temperature, messages: chat, stream: true };
+      return { model: modelFor("anthropic"), max_tokens: 2048, ...(system ? { system } : {}), temperature, messages: chat, stream: true };
     case "ollama": {
       const chars = (system || "").length + chat.reduce((n, m) => n + m.content.length, 0);
       const needed = Math.ceil(chars / 3.5) + 1536; // prompt tokens + room for the answer
       let numCtx = 8192;
       while (numCtx < needed && numCtx < 32768) numCtx *= 2;
-      return { model: ollamaModel || "llama3.2", messages: withSystem, stream: true, options: { temperature, num_ctx: numCtx } };
+      return { model: modelFor("ollama"), messages: withSystem, stream: true, options: { temperature, num_ctx: numCtx } };
     }
   }
   throw new Error(`Unknown provider ${provider}`);
@@ -2206,7 +2287,7 @@ async function callGeminiStreaming(contents, onChunk, opts = {}) {
   let response;
   try {
     response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${MODELS.gemini}:streamGenerateContent?alt=sse`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelFor("gemini"))}:streamGenerateContent?alt=sse`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": aiApiKey },
@@ -2357,7 +2438,7 @@ async function callAnthropicStreaming(contents, onChunk, opts = {}) {
 // Final line has "done":true. Auto-pulls missing models via pullOllamaModel.
 async function callOllamaStreaming(contents, onChunk, opts = {}) {
   const body = providerBody("ollama", contents, opts);
-  const model    = ollamaModel || "llama3.2";
+  const model    = ollamaModel || DEFAULT_OLLAMA_MODEL;
 
   const ollamaFetch = () => fetch("http://localhost:11434/api/chat", {
     method: "POST",

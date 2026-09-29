@@ -44,6 +44,7 @@ Three tabs: **Repo** · **Contribute** · **Ask**. A repo opens on Contribute �
 
 **Settings & rate limits**
 - FR-16 Five AI providers (Groq, Gemini, OpenAI, Anthropic, local Ollama) with key format checks; settings sync between the panel and the options page.
+- FR-16a **Model per provider**: Settings offers a short list for each provider (`MODEL_CHOICES`, first = default — e.g. Groq: Llama 3.3 70B, **Kimi K2**, GPT-OSS 120B, Qwen3 32B, Llama 3.1 8B; Ollama: llama3.1:8b, qwen2.5-coder:7b, gemma3:12b, gpt-oss:20b, llama3.2) with a note on each, plus **Other…** for any model ID. Changing only the model keeps the saved key; the badge names the model in use. For Ollama, Settings (and the options page) show numbered terminal steps for the picked model and your OS (tabs for macOS / Linux / Windows), each with Copy: install Ollama, `ollama pull <model>`, `OLLAMA_ORIGINS='chrome-extension://*' ollama serve`, `ollama list`; the chat's "Ollama isn't running" help shows the same steps (download + start, or only the restart when Ollama is blocking the extension).
 - FR-17 **Sign in with GitHub** (OAuth device flow, no backend, no scopes): the panel shows a one-time code, opens `github.com/login/device`, polls until approved, validates the token against `/rate_limit`, and shows "Signed in as @you" with Sign out. A personal access token can still be pasted (folded under "Use a personal access token instead"; the only option until `AUTH.clientId` is set). The limit banner's button is "Sign in".
 - FR-18 Live quota badge; banner when the hourly limit is low or used up (with reset time and auto-resume) or the token is rejected.
 
@@ -141,17 +142,17 @@ Where it's used:
 
 | Area | Requirement |
 |---|---|
-| **API budget** | Opening a repo costs 4 GitHub requests (header, first page of issues, first page of PRs, the file tree — shared with briefs and Ask); the Repo tab loads on first view; reopening the panel costs 0 (session cache); chat costs 0 (file contents come from `raw.githubusercontent.com`), plus ≤2 code-search requests with a token when the question names identifiers nothing read defines; an issue brief costs 2 (3 when opened from its page) plus ≤2 for PRs that reference it and, with a token, ≤2 code searches; the page guide the same (shared cache); a PR brief 5; signed in, your stack costs ≤8 a day. |
+| **API budget** | Opening a repo costs 4 GitHub requests (header, first page of issues, first page of PRs, the file tree — shared with briefs and Ask); the Repo tab loads on first view; reopening the panel, reloading the extension or restarting Chrome costs 0 (responses are stored for 3 days; older ones revalidate with their ETag, and a 304 is free); chat costs 0 (file contents come from `raw.githubusercontent.com`), plus ≤2 code-search requests with a token when the question names identifiers nothing read defines; an issue brief costs 2 (3 when opened from its page) plus ≤2 for PRs that reference it and, with a token, ≤2 code searches; the page guide the same (shared cache); a PR brief 5; signed in, your stack costs ≤8 a day. |
 | **AI budget** | No AI call happens without a user action, and only in Ask (on send, or a brief's suggestion). Opening a brief — from a list or by following the page — costs 0 AI credits. |
 | **Rate-limit resilience** | Never collect raw 403s: stop requesting when the core quota is spent, serve stale cache instead of failing, track the search quota separately, honour `Retry-After` for secondary limits (not the hourly reset), auto-reload failed tabs when the window resets or a token is added. |
 | **Correctness under navigation** | Every async render is guarded by the repo it started for (`isCurrentRepo(key)`); briefs are guarded by an active token so a stale response never renders into another repo or brief. |
-| **Privacy** | No backend and no telemetry. Keys, chat history and your stack profile (built from your public data, never sent anywhere but GitHub) live in `chrome.storage.local`; GitHub responses in `chrome.storage.session`. The GitHub token is only ever sent to `api.github.com`. Repo content is sent only to the AI provider the user chose. |
+| **Privacy** | No backend and no telemetry. Keys, chat history and your stack profile (built from your public data, never sent anywhere but GitHub) live in `chrome.storage.local`; GitHub responses in `chrome.storage.local` for up to 3 days (capped at ~4M characters, oldest pruned first); responses read with a token are deleted on sign-out. The GitHub token is only ever sent to `api.github.com`. Repo content is sent only to the AI provider the user chose. |
 | **Security** | All GitHub/AI text is HTML-escaped before rendering; Markdown links only render for `http(s)`; label colours are validated; AI instructions go in each provider's system slot and repo content is marked as data, not instructions. Minimal permissions: `sidePanel`, `storage`, `tabs`; host access to `github.com/*` for the sign-in endpoints (they don't allow cross-origin requests) and the contributor guide on issue pages (content script; switchable off). Sign out removes the token locally; revoking it is done on GitHub (Settings → Applications), since that needs the app's secret. |
-| **AI answer quality** | Grounded answers with citations; per-provider context budgets (Groq/Ollama smaller); Ollama `num_ctx` sized to the request; temperature 0.2 (0 for file picking); history has its own budget. |
+| **AI answer quality** | Grounded answers with citations; per-provider context budgets (`contextBudget()`: Groq and small ≤4B local models smaller; Ollama's default `llama3.1:8b` — free, 128k-token context — gets the cloud providers' 40k characters); Ollama `num_ctx` sized to the request; temperature 0.2 (0 for file picking); history has its own budget. |
 | **Performance** | Local ranking of 100k paths ≈ 150 ms; file reads in parallel; skeletons instead of layout jumps; streaming AI output. |
 | **Accessibility** | Keyboard-reachable controls with visible focus rings, ARIA roles on tabs/status, `prefers-reduced-motion` respected, theme-aware label contrast. |
 | **Compatibility** | Chrome with the Side Panel API (MV3); works at narrow panel widths (three text-only tabs); light and dark themes follow the OS. |
-| **Maintainability** | Plain JS, no build step; pure logic separated from rendering and unit-tested; 209 tests (`npm test`, ~3s) run in CI on every push. |
+| **Maintainability** | Plain JS, no build step; pure logic separated from rendering and unit-tested; 217 tests (`npm test`, ~3s) run in CI on every push. |
 | **Cost** | Zero infrastructure cost; users bring their own AI key (free tiers on Groq/Gemini, free local Ollama). |
 
 ---
@@ -162,7 +163,7 @@ Where it's used:
 1. `chrome.tabs.onUpdated` / `onActivated` fire in the side panel (active tab of its window only).
 2. `handleRepoRefresh(url)` parses `owner/repo` (and an issue/PR number if on one — `briefPageFromPath`) and calls `updateRepoInfo()` for a new repo.
 3. `updateRepoInfo()` resets per-repo UI, fetches repo metadata, loads chat history, and loads **only the visible tab** (`loadTabData`).
-4. Every GitHub call goes through `githubRequest()`: check the session cache → serve if fresh (10 min) → otherwise send with `If-None-Match` (a 304 costs nothing) → record rate-limit headers → cache 200s and 404s in memory + `chrome.storage.session`.
+4. Every GitHub call goes through `githubRequest()`: check the cache (memory, then `chrome.storage.local`, up to 3 days old) → serve if fresh (10 min) → otherwise send with `If-None-Match` (a 304 costs nothing) → record rate-limit headers → cache 200s and 404s in memory + `chrome.storage.local`.
 5. Renders check `isCurrentRepo(key)` before touching the DOM; results are cached in `repoCache[owner/repo]`.
 
 **Opening a tab**
@@ -199,7 +200,7 @@ Where it's used:
 | GitHub REST API | Complete public data (issues, PRs, timelines, reviews, checks, community profile) with conditional requests. |
 | GitHub Search API | Repo-wide label filters and PR keyword search beyond the first page of results. |
 | `raw.githubusercontent.com` | Reads file contents without spending API quota. |
-| `chrome.storage.local` / `.session` | Persistent settings & chat history / a session-scoped response cache that survives panel reopen. |
+| `chrome.storage.local` | Settings, chat history, your stack profile, and the GitHub response cache (3 days, size-capped) — all survive panel reopen, extension reloads and browser restarts. (`storage.session` was dropped: Chrome wipes it on every reload and restart.) |
 | Groq, Gemini, OpenAI, Anthropic, Ollama | Bring-your-own-key choice from free and fast to paid and strong to fully local and private. |
 | Server-Sent Events / NDJSON streaming | Answers appear as they're generated rather than after a long wait. |
 | Node.js built-in test runner (`node --test`) | Tests with zero dependencies against the real extension scripts. |
@@ -243,7 +244,7 @@ Where it's used:
 │  │ options.js   │                ▼              ▼                   │                     │
 │  └──────────────┘   ┌───────────────────────────────────────────┐   │                     │
 │                     │ chrome.storage.local   settings, chat     │   │                     │
-│                     │ chrome.storage.session GitHub responses   │   │                     │
+│                     │   + GitHub responses (3 days, capped)     │   │                     │
 │                     └───────────────────────────────────────────┘   │                     │
 └─────────────────────────────────────────────────────────────────────┼─────────────────────┘
                                                                       │ fetch
@@ -259,7 +260,7 @@ Where it's used:
  └─────────────────────┘
 
  Request path inside the panel:
-   loader ─▶ fetchGitHub ─▶ githubRequest ─▶ [memory cache ─▶ session cache ─▶ quota gate ─▶ fetch
+   loader ─▶ fetchGitHub ─▶ githubRequest ─▶ [memory cache ─▶ stored cache ─▶ quota gate ─▶ fetch
             (If-None-Match)] ─▶ rate-limit headers ─▶ ghState ─▶ badge / banner / auto-resume
 ```
 
@@ -269,13 +270,13 @@ Where it's used:
 
 - **Run:** `chrome://extensions` → Developer mode → Load unpacked → this folder. Reload the extension after edits.
 - **Test:** `npm test` (all suites) and `npm run check` (syntax). Node 22+. CI: `.github/workflows/test.yml`.
-- **Retrieval eval:** `npm run eval` runs made-up issues about this repo (`eval/issues.js`, 5 ambiguity levels, from "names the file and function" to "vague symptom") through the brief's resolver and Ask's retrieval, offline — this repo is served from disk as GitHub, code search answered from disk — and reports which needed files and definitions reached the model, per level. `-- --anonymous` runs signed out; `EVAL_AI_PROVIDER`/`EVAL_AI_KEY` use a real model for file picking. It measures, it doesn't gate: add an issue whenever an answer disappoints, and don't tune the code to these issues alone.
+- **Retrieval eval:** `npm run eval` runs made-up issues about this repo (`eval/issues.js`, 5 ambiguity levels, from "names the file and function" to "vague symptom") through the brief's resolver and Ask's retrieval, offline — this repo is served from disk as GitHub, code search answered from disk — and reports which needed files and definitions reached the model, per level. `-- --anonymous` runs signed out; `EVAL_AI_PROVIDER`/`EVAL_AI_KEY` (and `EVAL_AI_MODEL`, e.g. `moonshotai/kimi-k2-instruct`) use a real model for file picking, at that setup's context budget — so models can be compared on the same issues. It measures, it doesn't gate: add an issue whenever an answer disappoints, and don't tune the code to these issues alone.
 - **Shared code:** `github.js` (API layer, caches, rate limits — no DOM; the panel hooks its badge via `onRateLimitChange`) and `guide.js` are loaded by both the panel and `background.js` (`importScripts("github.js", "retrieval.js", "insights.js", "brief.js", "guide.js")`), so they and their dependencies must stay DOM-free at the top level. The worker also serves the page guide; `content.js` only renders and gets data by message (`issue-guide`, `open-panel`).
-- **Script order matters:** `sidepanel.html` loads `github.js`, `retrieval.js`, `insights.js`, `brief.js`, `guide.js`, `pr-brief.js`, `ask-focus.js`, `auth.js`, `stack.js`, then `sidepanel.js` as classic scripts sharing one global scope; `test/helpers/panel.js` loads them in the same order. New files must be added to both (and to `npm run check`).
+- **Script order matters:** `sidepanel.html` loads `github.js`, `retrieval.js`, `insights.js`, `brief.js`, `guide.js`, `pr-brief.js`, `ask-focus.js`, `ollama.js`, `auth.js`, `stack.js`, then `sidepanel.js` as classic scripts sharing one global scope; `test/helpers/panel.js` loads them in the same order. New files must be added to both (and to `npm run check`).
 - **Tests use the real code:** `loadPanel()` evals the scripts with a fake DOM, `chrome.*` and `fetch`; `githubMock()` fakes GitHub, raw files and AI replies and records requests. Use `panel.run("…")` to reach `let`/`const` state.
 - **Conventions:** keep pure logic (verdicts, scoring, parsing, prompts) separate from rendering and unit-test it; escape everything interpolated into `innerHTML`; guard async renders with `isCurrentRepo(key)`; go through `fetchGitHub`/`fetchGitHubPage` (never raw `fetch`) for GitHub API calls; always pass `direction=desc` when sorting GitHub lists (it defaults to ascending); put AI instructions in `opts.system`.
 - **GitHub sign-in** needs an OAuth App's Client ID in `AUTH.clientId` (`auth.js`), with "Enable Device Flow" ticked; empty → token form only.
-- **Model IDs** live in `MODELS` (`sidepanel.js`); context budgets in `CONTEXT_BUDGET` and picker sizes in `PICKER_SHORTLIST` (`retrieval.js`).
+- **Model IDs** live in `MODEL_CHOICES` (`sidepanel.js`; first per provider = default, `MODELS` derived from it; `modelFor(provider)` = the one in use, from `aiModels` in storage), and Ollama's default in `DEFAULT_OLLAMA_MODEL` (`llama3.1:8b`; setups still on the old `llama3.2` are moved once); the Ollama setup steps come from `ollama.js` (`ollamaSteps(model, os)`, `ollamaSetupHtml`; shared by the panel and the options page, no DOM globals) — install, pull the model, then `OLLAMA_ORIGINS='chrome-extension://*' ollama serve` (extensions only, not `*`); context budgets in `CONTEXT_BUDGET` and picker sizes in `PICKER_SHORTLIST` (`retrieval.js`).
 - **Not yet done:** extension icons, privacy policy / private-repo warning, Web Store packaging, real-model answer evaluation.
 
 ---
@@ -283,7 +284,7 @@ Where it's used:
 ## 8. Tests and evals
 
 Two different things, kept apart on purpose:
-- **Tests** (`npm test`, 209 in 16 files, ~6s, run in CI) check that the code *behaves as designed*: fixed fake data, no network, no AI, deterministic. They gate every push.
+- **Tests** (`npm test`, 217 in 16 files, ~6s, run in CI) check that the code *behaves as designed*: fixed fake data, no network, no AI, deterministic. They gate every push.
 - **The retrieval eval** (`npm run eval`) *measures* how well the extension finds the code an issue needs. It reports a score; it doesn't pass or fail, and isn't in CI.
 
 ### How the tests work
@@ -295,7 +296,7 @@ Two different things, kept apart on purpose:
 ### Test files
 | File | Tests | What it guarantees |
 |---|---|---|
-| `github-api.test.js` | 13 | The shared GitHub layer (`github.js`): fresh cache and cached 404s cost nothing; identical requests share one call; `If-None-Match` revalidation keeps bodies on 304; stale copies served while rate-limited; responses persist to `storage.session`; secondary limits pause for `Retry-After` only; an ordinary 403 isn't a rate limit; search quota is separate; a 401 flags the token; **the token is only ever sent to `api.github.com`**; cache keyed by auth mode; sorted lists always ask for `direction=desc`. |
+| `github-api.test.js` | 15 | The shared GitHub layer (`github.js`): fresh cache and cached 404s cost nothing; identical requests share one call; `If-None-Match` revalidation keeps bodies on 304; stale copies served while rate-limited; responses survive reloads and restarts in `storage.local` (3 days), pruned oldest-first past the size cap without touching settings; sign-out deletes responses read with the token; secondary limits pause for `Retry-After` only; an ordinary 403 isn't a rate limit; search quota is separate; a 401 flags the token; **the token is only ever sent to `api.github.com`**; cache keyed by auth mode; sorted lists always ask for `direction=desc`. |
 | `panel-flows.test.js` | 18 | End to end against a mocked repo: opening a repo costs **4 requests**, a full visit stays in budget, chat costs none, reopening costs none; rate-limit → token → reload recovery; failed tabs retry; stale responses never render into another repo; issue list (All, Good first/Help wanted via search, "all claimed" message, missing-label message, previews, Load more); Maintainers and quiet-repo message; health card evidence and n/a; chat replies saved to the repo that asked; token validated before saving; Get token; Repo tab identity card (avatar, owner, safe homepage, topics). |
 | `rendering.test.js` | 12 | Markdown is escaped before formatting, only `http(s)` links, code fences (also unclosed mid-stream) and lists; citations link only to files read; `escapeHtml` covers attributes; base64 → UTF-8; label-name spellings; number formatting; file-tree formatting; sized avatars. |
 | `brief.test.js` | 20 | "Start this issue": CODEOWNERS pattern rules and last-match-wins; claim detection ("I'll take this"); availability (free / possibly taken / taken, merged vs closed PRs, old vs recent claims, maintainer replies); CI + `package.json` verify commands; people; Markdown export; the brief's layout and **2-request** cost with **no AI calls**; Ask hand-off chips; instant reopen; stale-render guard. |
@@ -304,7 +305,7 @@ Two different things, kept apart on purpose:
 | `insights.test.js` | 14 | Maintainers and health: median, bot detection, CODEOWNERS parsing, active maintainers (roles, bots, teams), response stats (first reply or close, too-new, capped samples), PR stats, **health score** (100 when healthy, unmeasured signals excluded not zeroed, archived capped at 20, onboarding weighs only what was checked), beginner search query. |
 | `retrieval.test.js` | 15 | Core retrieval: query terms (identifiers kept whole and split, stemming), path ranking (tests demoted, vendor/lockfiles excluded), picker reply parsing, snippets (small files whole, head + matching definition), context packing within budget, repo context found via the tree (no 404 probing), picker fallback, README-only answers, provider budgets, private repos via the contents API, rate-limited tree. |
 | `sections.test.js` | 9 | Section-aware docs: Markdown split by heading (ATX, underlined, HTML; fences ignored), the best-matching sections kept in document order within the limit, `package.json` summarised with every script, nested packages listed. |
-| `ai-requests.test.js` | 10 | How providers are called: instructions in each provider's system slot, low temperature, Ollama context sized to the request, context first and question last, history budgeted newest-first, named files read directly (no picker), follow-ups carry files, shortlist sized to the model. |
+| `ai-requests.test.js` | 16 | How providers are called: instructions in each provider's system slot, low temperature, Ollama context sized to the request, context first and question last, history budgeted newest-first, named files read directly (no picker), follow-ups carry files, shortlist and context budget sized to the model (small ≤4B local models stay tight), the Ollama setup steps per OS (install, pull the chosen model, start allowing only Chrome extensions; the chat help shows only what's needed), and the model picker (defaults, labels, the chosen model reaching every provider incl. Gemini's URL, Other…, saving a model change keeps the key). |
 | `follow-code.test.js` | 15 | Following the code: JS/TS and Python import parsing and resolution (extensions, index files, `.js`→`.ts`, `@/` aliases, relative Python), definition detection across languages (not calls), code names from questions, ranking imports, code search only with a token, edited file lists read exactly, `@file`; **citation checks** (verified / outside what was read / not read, marked and noted); the editable "Read N files" row; `@` suggestions. |
 | `retrieval-focus.test.js` | 7 | Issue- and PR-focused retrieval, on made-up repos that reproduce known failure patterns: a function only the **issue** names is found and its definition (deep in a 600-line file) is sent; a helper found **by name** without a token; the brief's files read first; a PR's changed file read **at its head** plus a helper it imports from the default branch, each source knowing where it lives; the issue-as-source-of-truth prompt rules; uncited answers flagged; names ending a sentence still count. |
 | `ask-focus.test.js` | 6 | Ask focused on an issue or PR: suggestions open Ask with the chip and send a visible question grounded in the item; PR questions read the discussion, diff and head files and cite the fork's head; "Your own question" sends nothing; a streaming reply is never interrupted; removing the chip or changing repo drops the focus; follow-ups keep the same item's files and PR files don't leak into repo-wide questions. |
@@ -327,7 +328,7 @@ Two different things, kept apart on purpose:
   The others: `parseCodeOwners` negation, `prStatus` dismissed reviews (1); `suggestFiles` ranking, `pollDeviceToken` giving up (2); health score and not-planned issues (`scoreHealth`), the guide card remembering collapse (`startGuide`) (3); fork links in answers, commit links in PR search (`parseFindQuery`) (4); slowness on big repos, wrong "files it needs" (5).
 - **How it runs** — `eval/run.js` serves this repo from disk as GitHub (`eval/` excluded so the issue texts can't leak in; code search answered by searching the files on disk) and runs each issue through the brief's `resolveIssueFiles` and Ask's `buildChatContext` for "Summary & plan", then reports per issue whether a needed file was in the brief's top 5, whether Ask read the needed files, and whether each needed definition line was sent; then a pass rate per level.
   - `npm run eval` — signed in (code search available) · `npm run eval -- --anonymous` — signed out · `-- --json` — machine-readable.
-  - Without a model the file picker's fallback (path ranking) is used; `EVAL_AI_PROVIDER=groq EVAL_AI_KEY=gsk_… npm run eval` uses a real one.
+  - Without a model the file picker's fallback (path ranking) is used; `EVAL_AI_PROVIDER=groq EVAL_AI_KEY=gsk_… EVAL_AI_MODEL=moonshotai/kimi-k2-instruct npm run eval` uses a real one.
 - **Results so far** (Ask got everything a correct answer needs):
 
   | | L1 | L2 | L3 | L4 | L5 | Overall |
@@ -342,4 +343,4 @@ Two different things, kept apart on purpose:
 
 ## 9. Summary
 
-GitHub Repo Analyzer is a backend-free Chrome side panel that turns "a repo I've never seen" into "a contribution I can start today". It finds issues that are genuinely available across the whole repo, briefs each one (is it free, where to start, who to ask, what CI will run), explains pull requests including their full conversation and status, surfaces the people who actually maintain the project, scores contributor-friendliness from measured signals, and answers questions from the repo's real source code with line-level citations. Everything is computed client-side from the GitHub API — carefully budgeted, cached and rate-limit-aware — with the user's own AI provider adding summaries on top of deterministic, verifiable data. It's plain JavaScript with no build step, a token-based light/dark design built for a narrow panel, and 209 tests running in CI.
+GitHub Repo Analyzer is a backend-free Chrome side panel that turns "a repo I've never seen" into "a contribution I can start today". It finds issues that are genuinely available across the whole repo, briefs each one (is it free, where to start, who to ask, what CI will run), explains pull requests including their full conversation and status, surfaces the people who actually maintain the project, scores contributor-friendliness from measured signals, and answers questions from the repo's real source code with line-level citations. Everything is computed client-side from the GitHub API — carefully budgeted, cached and rate-limit-aware — with the user's own AI provider adding summaries on top of deterministic, verifiable data. It's plain JavaScript with no build step, a token-based light/dark design built for a narrow panel, and 217 tests running in CI.

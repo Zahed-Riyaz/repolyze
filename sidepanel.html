@@ -293,9 +293,17 @@
             </div>
 
             <div id="sp-ollama-section" style="display:none">
-              <div class="sp-ollama-note">No key needed — run <code>ollama serve</code> locally. Models download automatically on first use.</div>
-              <label class="sp-section-label" for="sp-ollama-model">Model name</label>
-              <input type="text" id="sp-ollama-model" class="input sp-text-input" placeholder="llama3.2" autocomplete="off">
+              <div class="sp-ollama-note">No key needed — the model runs on your machine. Pick one below, then run these in a terminal:</div>
+            </div>
+
+            <!-- Model: a short list per provider, or any model ID -->
+            <div id="sp-model-section">
+              <label class="sp-section-label" for="sp-model">Model</label>
+              <select id="sp-model" class="select sp-model-select"></select>
+              <input type="text" id="sp-model-custom" class="input sp-text-input" placeholder="Model ID" autocomplete="off" aria-label="Model ID" hidden>
+              <p id="sp-model-note" class="sp-help-links"></p>
+              <!-- Ollama: install / download / start commands for the model above (ollama.js) -->
+              <div id="sp-ollama-setup"></div>
             </div>
 
             <button id="sp-save-btn" class="btn btn-primary btn-block">Save</button>
@@ -355,6 +363,7 @@
   <script src="guide.js"></script>
   <script src="pr-brief.js"></script>
   <script src="ask-focus.js"></script>
+  <script src="ollama.js"></script>
   <script src="auth.js"></script>
   <script src="stack.js"></script>
   <script src="sidepanel.js"></script>

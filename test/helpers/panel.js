@@ -1,4 +1,4 @@
-// Loads the side panel scripts (github.js, retrieval.js, insights.js, brief.js, guide.js, pr-brief.js, ask-focus.js, auth.js, stack.js, sidepanel.js — in the
+// Loads the side panel scripts (github.js, retrieval.js, insights.js, brief.js, guide.js, pr-brief.js, ask-focus.js, ollama.js, auth.js, stack.js, sidepanel.js — in the
 // same order as sidepanel.html) into this Node process with in-memory stand-ins
 // for the DOM, chrome.* and fetch, so tests exercise the real code.
 //
@@ -13,7 +13,7 @@ const fs = require("fs");
 const path = require("path");
 
 const ROOT = path.join(__dirname, "..", "..");
-const SCRIPTS = ["github.js", "retrieval.js", "insights.js", "brief.js", "guide.js", "pr-brief.js", "ask-focus.js", "auth.js", "stack.js", "sidepanel.js"];
+const SCRIPTS = ["github.js", "retrieval.js", "insights.js", "brief.js", "guide.js", "pr-brief.js", "ask-focus.js", "ollama.js", "auth.js", "stack.js", "sidepanel.js"];
 const SOURCE = SCRIPTS.map(f => fs.readFileSync(path.join(ROOT, f), "utf8")).join("\n;\n");
 
 // ── Minimal DOM ──────────────────────────────────────────────────────────────
@@ -82,7 +82,7 @@ function fakeChrome({ local = {}, session = {} } = {}) {
   const area = (data) => ({
     data,
     get: async (keys) => {
-      const list = keys === undefined ? Object.keys(data) : Array.isArray(keys) ? keys : [keys];
+      const list = keys === undefined || keys === null ? Object.keys(data) : Array.isArray(keys) ? keys : [keys]; // get(null) = everything, as in Chrome
       return Object.fromEntries(list.filter(k => k in data).map(k => [k, structuredClone(data[k])]));
     },
     set: async (obj) => { for (const [k, v] of Object.entries(obj)) data[k] = structuredClone(v); },

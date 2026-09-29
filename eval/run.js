@@ -8,7 +8,8 @@
 // This repo is served from disk as if it were on GitHub (eval/ itself excluded),
 // so it's offline and repeatable. Without a model, the file picker's fallback
 // (path ranking) stands in for it; set EVAL_AI_PROVIDER and EVAL_AI_KEY to use a
-// real one (e.g. groq / gsk_…). Not part of `npm test`: it measures, it doesn't pass or fail.
+// real one (e.g. groq / gsk_…), and EVAL_AI_MODEL to pick its model (e.g.
+// moonshotai/kimi-k2-instruct) — the context budget then matches that setup too. Not part of `npm test`: it measures, it doesn't pass or fail.
 // By default it runs signed in, with GitHub code search answered from the files
 // on disk; --anonymous runs signed out (no code search), the harder case.
 //
@@ -110,13 +111,15 @@ async function main() {
   panel.run(`currentRepo = ${JSON.stringify(REPO)}; onRepoPage = true;`);
   if (!anonymous) panel.setToken("eval-token"); // signed in → code search (answered from disk)
   panel.run(useAI ? `aiProvider = ${JSON.stringify(process.env.EVAL_AI_PROVIDER)}; aiApiKey = ${JSON.stringify(process.env.EVAL_AI_KEY)}` : `aiProvider = "openai"; aiApiKey = "none"`);
+  const model = process.env.EVAL_AI_MODEL;
+  if (useAI && model) panel.run(process.env.EVAL_AI_PROVIDER === "ollama" ? `ollamaModel = ${JSON.stringify(model)}` : `aiModels = { ${JSON.stringify(process.env.EVAL_AI_PROVIDER)}: ${JSON.stringify(model)} }`);
 
   const results = [];
   for (const [i, issue] of ISSUES.entries()) results.push(await runOne(panel, issue, i + 1));
 
   if (process.argv.includes("--json")) { console.log(JSON.stringify(results, null, 2)); return; }
   const mark = (b) => (b ? "✓" : "✗");
-  console.log(`Retrieval eval — ${ISSUES.length} made-up issues about this repo · ${anonymous ? "signed out" : "signed in (code search from disk)"} · picker: ${useAI ? process.env.EVAL_AI_PROVIDER : "path ranking (no model)"}\n`);
+  console.log(`Retrieval eval — ${ISSUES.length} made-up issues about this repo · ${anonymous ? "signed out" : "signed in (code search from disk)"} · picker: ${useAI ? `${process.env.EVAL_AI_PROVIDER} ${panel.fn.modelFor()}` : "path ranking (no model)"}\n`);
   console.log("lvl  #   brief  ask  defs   issue");
   for (const r of results) {
     const d = r.defs.length ? `${r.defs.filter(x => x.sent).length}/${r.defs.length}` : " – ";

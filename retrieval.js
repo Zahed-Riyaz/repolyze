@@ -454,6 +454,17 @@ function mentionedFiles(question, entries) {
 // crowds a small model's context and makes it more likely to answer badly.
 const PICKER_SHORTLIST = { ollama: 60, groq: 120 };
 
+// Small local models (≤4B parameters) keep Ollama's tight budget and short
+// picker list; 7B+ local models (the default llama3.1:8b has a 128k-token
+// window) get the same room as the cloud providers.
+const SMALL_LOCAL_MODEL = /(^|[:\-_])(0\.5b|1b|1\.5b|2b|3b|4b)\b|^(llama3\.2|phi|tinyllama|smollm|gemma3:1b)(:latest)?$/i;
+const isSmallLocalModel = (model) => SMALL_LOCAL_MODEL.test(model || "");
+
+function pickerShortlist(provider = aiProvider) {
+  if (provider === "ollama") return isSmallLocalModel(ollamaModel) ? 60 : 120;
+  return PICKER_SHORTLIST[provider] || 250;
+}
+
 // Tolerates code fences and chatter around the array; keeps only real paths
 function parsePickedPaths(reply, validPaths) {
   const match = (reply || "").match(/\[[\s\S]*?\]/);
@@ -705,6 +716,12 @@ async function findDefinitionByName(name, candidates, read, skip) {
 // models have far tighter token-per-minute / context limits than the others.
 const CONTEXT_BUDGET = { groq: 14000, ollama: 10000, gemini: 48000, openai: 40000, anthropic: 40000 };
 
+// The budget for the provider in use, and for Ollama, the model in use
+function contextBudget(provider = aiProvider) {
+  if (provider === "ollama") return isSmallLocalModel(ollamaModel) ? CONTEXT_BUDGET.ollama : 40000;
+  return CONTEXT_BUDGET[provider] || 20000;
+}
+
 // Adds parts in priority order until the budget is spent (last one trimmed)
 function packContext(parts, budget) {
   const out = [];
@@ -740,7 +757,7 @@ async function buildChatContext(repo, question, previousQuestion, onStatus = () 
   previousFiles = [], files = null, onFiles = () => {},
   about = "", seedFiles = [], exclude = [], followFrom = [], budgetShare = 1, docs = true, picker = true,
 } = {}) {
-  const budget = Math.floor((CONTEXT_BUDGET[aiProvider] || 20000) * budgetShare);
+  const budget = Math.floor(contextBudget() * budgetShare);
   onStatus("Reading the repo…");
   const [meta, tree, baseParts] = await Promise.all([loadRepoData(repo), getRepoTree(repo), docs ? getRepoContextParts(repo) : []]);
   const ref = meta.default_branch || "HEAD";
@@ -769,7 +786,7 @@ async function buildChatContext(repo, question, previousQuestion, onStatus = () 
 
   // 2. Otherwise shortlist by path and let the model choose
   if (!files && !picked.length) {
-    const size = PICKER_SHORTLIST[aiProvider] || 250;
+    const size = pickerShortlist();
     const shortlist = [...carried.map(p => ranked.find(r => r.path === p)).filter(Boolean),
       ...ranked.filter(r => !carried.includes(r.path))].slice(0, size);
     picked = null;

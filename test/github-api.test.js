@@ -80,17 +80,55 @@ test("while limited, a stale cached copy is served instead of an error", async (
   assert.deepEqual(plain(await fetchGitHub("/contributors")), { v: 2 });
 });
 
-test("responses persist to chrome.storage.session so a reopened panel is free", async () => {
+test("responses survive reloading the extension or restarting Chrome (chrome.storage.local), for 3 days", async () => {
   const gh = githubMock({ "/languages": { Go: 1 } });
   const first = loadPanel({ fetch: gh.fetch });
   first.setRepo();
   await first.fn.fetchGitHub("/languages");
-  const session = structuredClone(first.chrome.storage.session.data);
+  const local = structuredClone(first.chrome.storage.local.data);
+  assert.ok(Object.keys(local).some(k => k.startsWith("gh:anon:")), "stored, not just in memory");
 
-  const reopened = loadPanel({ fetch: gh.fetch, chrome: { session } });
-  reopened.setRepo();
-  assert.deepEqual(plain(await reopened.fn.fetchGitHub("/languages")), { Go: 1 });
-  assert.equal(gh.apiCalls.length, 1);
+  const reloaded = loadPanel({ fetch: gh.fetch, chrome: { local } });
+  reloaded.setRepo();
+  assert.deepEqual(plain(await reloaded.fn.fetchGitHub("/languages")), { Go: 1 });
+  assert.equal(gh.apiCalls.length, 1, "no new request after a reload");
+
+  // Older than 3 days → not trusted from storage
+  const old = structuredClone(local);
+  for (const k of Object.keys(old)) if (k.startsWith("gh:")) old[k].time = Date.now() - 4 * 86_400_000;
+  const later = loadPanel({ fetch: gh.fetch, chrome: { local: old } });
+  later.setRepo();
+  await later.fn.fetchGitHub("/languages");
+  assert.equal(gh.apiCalls.length, 2);
+});
+
+test("stored responses are pruned: expired first, then the oldest past the size cap; settings are never touched", async () => {
+  const now = Date.now();
+  const entry = (ageMs, size = 100) => ({ status: 200, body: "x".repeat(size), time: now - ageMs });
+  const panel = loadPanel({ chrome: { local: {
+    "gh:anon:https://api.github.com/a": entry(1000), "gh:anon:https://api.github.com/b": entry(2000),
+    "gh:anon:https://api.github.com/c": entry(5000), "gh:anon:https://api.github.com/old": entry(4 * 86_400_000),
+    aiApiKey: "gsk_keep", chat_o_r: [{ role: "user", text: "keep" }],
+  } } });
+  const r = plain(await panel.fn.pruneGitHubCache({ force: true, maxChars: 300 }));
+  const left = Object.keys(panel.chrome.storage.local.data);
+  assert.ok(left.includes("gh:anon:https://api.github.com/a") && left.includes("gh:anon:https://api.github.com/b"), "newest kept");
+  assert.ok(!left.includes("gh:anon:https://api.github.com/c"), "oldest past the cap dropped");
+  assert.ok(!left.includes("gh:anon:https://api.github.com/old"), "expired dropped");
+  assert.ok(left.includes("aiApiKey") && left.includes("chat_o_r"), "only GitHub responses are pruned");
+  assert.deepEqual(r, { kept: 2, dropped: 2 });
+});
+
+test("signing out forgets responses read with the token; anonymous ones stay", async () => {
+  const panel = loadPanel({ chrome: { local: {
+    githubToken: "gho_x", "gh:auth:https://api.github.com/repos/o/private": { status: 200, body: {}, time: Date.now() },
+    "gh:anon:https://api.github.com/repos/o/public": { status: 200, body: {}, time: Date.now() },
+  } } });
+  panel.run(`githubToken = "gho_x"`);
+  await panel.fn.signOutOfGitHub();
+  const left = Object.keys(panel.chrome.storage.local.data);
+  assert.ok(!left.some(k => k.startsWith("gh:auth:")), "private data read with the token is gone");
+  assert.ok(left.includes("gh:anon:https://api.github.com/repos/o/public"));
 });
 
 test("secondary limit pauses for Retry-After only, not until the hourly reset", async () => {

@@ -2,8 +2,9 @@
 // Everything that talks to the GitHub API, used both by the side panel and by
 // the background worker (which serves the contributor guide on GitHub pages).
 // No DOM here: the panel hooks its rate-limit badge in via onRateLimitChange.
-// Both contexts share the response cache through chrome.storage.session, so an
-// issue opened in the panel and on the page is only fetched once.
+// Both contexts share the response cache through chrome.storage.local, so an
+// issue opened in the panel and on the page is only fetched once — and reloading
+// the extension or restarting Chrome doesn't throw it away.
 
 let githubToken = "";                // set from chrome.storage.local by whoever loads this
 let onRateLimitChange = () => {};    // the panel redraws its badge/banner here
@@ -18,14 +19,19 @@ function cacheFor(key) { return (repoCache[key] ??= {}); }
 // ── GitHub API layer ──────────────────────────────────────────────────────────
 // Without a token GitHub allows 60 requests an hour per IP, so every request
 // counts:
-//  • responses (404s included — most probed files don't exist) are cached for
-//    the browser session in chrome.storage.session, so reopening the panel is free
+//  • responses (404s included — most probed files don't exist) are cached in
+//    chrome.storage.local for up to 3 days, so reopening the panel, reloading the
+//    extension or restarting Chrome is free. (chrome.storage.session was wiped by
+//    each of those.) Old entries still carry their ETag: revalidating one costs
+//    nothing when it hasn't changed.
 //  • while fresh they're served without touching the network; after that they're
 //    revalidated with If-None-Match, and GitHub doesn't count 304 replies
 //  • once the quota is spent, requests stop until the reset time instead of
 //    each tab collecting its own 403
 const GH_FRESH_MS = 10 * 60 * 1000;
 const GH_MAX_CACHED_CHARS = 400_000; // skip persisting huge bodies (e.g. file trees)
+const GH_PERSIST_MS = 3 * 24 * 60 * 60 * 1000; // stored responses older than this are dropped
+const GH_PERSIST_MAX_CHARS = 4_000_000;       // total stored, so chat history keeps room in storage.local
 const ghMemCache = new Map();        // cache key → { status, body, etag, link, time }
 const ghInflight = new Map();        // cache key → Promise of the same
 // Core quota drives the badge/banner; search has its own (10/min anonymously)
@@ -80,16 +86,49 @@ function ghCacheKey(url) { return `gh:${githubToken ? "auth" : "anon"}:${url}`; 
 async function ghCacheGet(key) {
   if (ghMemCache.has(key)) return ghMemCache.get(key);
   try {
-    const stored = (await chrome.storage.session?.get(key))?.[key];
-    if (stored) ghMemCache.set(key, stored);
-    return stored || null;
+    const stored = (await chrome.storage.local.get(key))?.[key];
+    if (!stored || Date.now() - stored.time > GH_PERSIST_MS) return null;
+    ghMemCache.set(key, stored);
+    return stored;
   } catch { return null; }
 }
 
 function ghCacheSet(key, entry) {
   ghMemCache.set(key, entry);
   if (JSON.stringify(entry).length > GH_MAX_CACHED_CHARS) return;
-  chrome.storage.session?.set({ [key]: entry }).catch(() => {}); // quota full → memory only
+  pruneGitHubCache(); // once per page/worker: drop expired entries, keep within the size cap
+  chrome.storage.local.set({ [key]: entry }).catch(() => pruneGitHubCache({ force: true })); // full → make room for next time
+}
+
+// Stored responses: drop expired ones, then the oldest until the total fits
+// GH_PERSIST_MAX_CHARS. Runs once per page (or when storage is full).
+let ghPruned = null;
+function pruneGitHubCache({ force = false, maxChars = GH_PERSIST_MAX_CHARS } = {}) {
+  if (ghPruned && !force) return ghPruned;
+  ghPruned = (async () => {
+    const all = await chrome.storage.local.get(null);
+    const entries = Object.entries(all).filter(([k]) => k.startsWith("gh:"))
+      .map(([k, v]) => ({ k, time: v?.time || 0, size: JSON.stringify(v).length }))
+      .sort((a, b) => b.time - a.time); // newest first
+    const drop = [];
+    let total = 0;
+    for (const e of entries) {
+      if (Date.now() - e.time > GH_PERSIST_MS || total + e.size > maxChars) drop.push(e.k);
+      else total += e.size;
+    }
+    if (drop.length) await chrome.storage.local.remove(drop);
+    return { kept: entries.length - drop.length, dropped: drop.length };
+  })().catch(() => ({ kept: 0, dropped: 0 }));
+  return ghPruned;
+}
+
+// Forget stored responses for one auth mode ("auth" on sign-out: a signed-in
+// token may have read private repos) or all of them
+async function clearGitHubCache(mode = null) {
+  for (const k of [...ghMemCache.keys()]) if (!mode || k.startsWith(`gh:${mode}:`)) ghMemCache.delete(k);
+  const all = await chrome.storage.local.get(null);
+  const keys = Object.keys(all).filter(k => (mode ? k.startsWith(`gh:${mode}:`) : k.startsWith("gh:")));
+  if (keys.length) await chrome.storage.local.remove(keys);
 }
 
 function noteRateLimitHeaders(res, resource) {
