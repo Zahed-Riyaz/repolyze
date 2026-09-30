@@ -1363,3 +1363,7 @@ a.cite:hover code { background: var(--accent-subtle); }
 #sp-model-custom { margin: 6px 0 0; }
 #sp-model-custom[hidden] { display: none; }
 #sp-model-note { margin: 4px 0 0; }
+
+/* A citation recovered from prose ("line 58" next to a file that was read) */
+a.cite-prose { color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 40%, transparent); }
+a.cite-prose.cite-unverified { color: var(--warning); text-decoration-style: dashed; }

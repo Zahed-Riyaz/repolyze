@@ -1597,7 +1597,7 @@ function sourceChipHtml(path, ranges, ref, editable, extraClass = "") {
 function linkifyCitations(html, repo, ref, sources) {
   const list = sources || [];
   if (!list.length) return html;
-  return html.replace(/<code>([^<\s]+?)(?::(\d+)(?:[-–](\d+))?)?<\/code>/g, (m, rawPath, start, end) => {
+  const linked = html.replace(/<code>([^<\s]+?)(?::(\d+)(?:[-–](\d+))?)?<\/code>/g, (m, rawPath, start, end) => {
     const path = resolveCitedPath(rawPath, list);
     if (!path) {
       return start && /[./]/.test(rawPath) && !/^https?:/.test(rawPath)
@@ -1608,6 +1608,34 @@ function linkifyCitations(html, repo, ref, sources) {
     const home = sourceHome(list.find(s => s.path === path && s.at), repo, ref);
     return `<a class="cite${ok ? "" : " cite-unverified"}" href="${sourceUrl(home.repo, home.ref, path, start && +start, end && +end)}" target="_blank"` +
       `${ok ? "" : ` title="Line ${start} wasn't in the code read for this answer — check it"`}>${m}</a>`;
+  });
+  return linkifyProseCitations(linked, repo, ref, list);
+}
+
+// "In <code>provider.ts</code>, change line 58" → "line 58" becomes a link to
+// that file's line, when the paragraph or list item names exactly one file that
+// was read and has no `path:line` citation of its own (see proseCitations)
+function linkifyProseCitations(html, repo, ref, sources) {
+  return html.replace(/(<(p|li|h[2-5])>)([\s\S]*?)(<\/\2>)/g, (m, open, tag, inner, close) => {
+    if (/class="cite[^"]*" href="[^"]*#L\d/.test(inner)) return m; // already cites a line properly
+    const named = new Set();
+    for (const c of inner.matchAll(/<code>([^<\s]+)<\/code>|([\w./-]+\.[A-Za-z][A-Za-z0-9]{0,7})\b/g)) {
+      const p = resolveCitedPath((c[1] || c[2]).replace(/:\d+.*$/, ""), sources);
+      if (p) named.add(p);
+    }
+    if (named.size !== 1) return m;
+    const [path] = named;
+    const home = sourceHome(sources.find(s => s.path === path && s.at), repo, ref);
+    // Only text between tags; code spans and existing links are left alone
+    let depth = 0;
+    const out = inner.replace(/(<\/?(?:code|a|pre)\b[^>]*>)|(<[^>]+>)|\b((?:lines?|L)\s?(\d+)(?:\s*(?:-|–|to)\s*(\d+))?)\b/g, (x, guard, tagm, txt, a, b) => {
+      if (guard) { depth += guard.startsWith("</") ? -1 : 1; return guard; }
+      if (tagm || depth > 0) return x;
+      const start = +a, end = b ? +b : +a;
+      const ok = citationInRange(sources, path, start, end);
+      return `<a class="cite cite-prose${ok ? "" : " cite-unverified"}" href="${sourceUrl(home.repo, home.ref, path, start, end)}" target="_blank" title="${escapeHtml(path)}${ok ? "" : " — this line wasn't in the code read for this answer"}">${txt}</a>`;
+    });
+    return open + out + close;
   });
 }
 

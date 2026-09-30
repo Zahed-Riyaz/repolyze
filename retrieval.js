@@ -510,6 +510,18 @@ function extractSnippets(text, terms, maxChars, strong = []) {
   const charsOf = (r) => lines.slice(r.start - 1, r.end).reduce((n, l) => n + l.length + 6, 0);
   const picked = [{ start: 1, end: Math.min(lines.length, 25) }];
   let used = charsOf(picked[0]);
+  // A function the question names: its definition goes in right after the head,
+  // however many other lines happen to match (its first 30 lines, a few before)
+  for (let i = 0; i < lines.length && strong.length; i++) {
+    const l = lines[i].toLowerCase(); // strong terms are lowercase; keywords already are
+    if (!DEF.test(lines[i]) || !strong.some(t => l.includes(t) && definesIdentifier(l, t))) continue;
+    const w = { start: Math.max(1, i + 1 - 3), end: Math.min(lines.length, i + 30) };
+    if (picked.some(p => w.start <= p.end && w.end >= p.start)) continue;
+    const cost = charsOf(w);
+    if (used + cost > maxChars) continue;
+    picked.push(w);
+    used += cost;
+  }
   for (const w of windows) {
     if (picked.some(p => w.start <= p.end && w.end >= p.start)) continue;
     const cost = charsOf(w);
@@ -644,16 +656,47 @@ function definesIdentifier(text, name) {
     "m").test(text);
 }
 
-// Code identifiers the question names: `backticked`, camelCase, snake_case, PascalCase
-function questionIdentifiers(text) {
-  const ids = new Set();
-  for (const m of (text || "").matchAll(/`([A-Za-z_$][\w$]*)(?:\(\))?`/g)) ids.add(m[1]);
+// How likely a code name is to be the code an issue is about. Issues also
+// name tool names (save_memory), properties (endpointTrust) and env vars
+// (SANDBOX_PROVIDER); the functions to change are what's worth chasing first.
+const FUNCTION_WORD = /^(is|has|can|should|get|set|parse|build|load|check|validate|resolve|create|make|fetch|handle|find|read|to|allow|ensure|require|compute|format|normalize)[A-Z_]|(Requires|Allowed|Allows|Url|Endpoint|Host|Owner|Handler|Provider|Service)[A-Z]?/;
+function identifierRank(id, backticked) {
+  let rank;
+  if (/^[A-Z0-9_]+$/.test(id)) rank = 0;                               // ENV_VAR / CONSTANT
+  else if (/^[a-z0-9]+(_[a-z0-9]+)+$/.test(id)) rank = 1;              // snake_case: tool or field names
+  else if (/^[A-Z]/.test(id)) rank = 2;                                // PascalCase: types and classes
+  else rank = FUNCTION_WORD.test(id) ? 4 : 3;                          // camelCase: functions first
+  return rank + (backticked ? 0.5 : 0);
+}
+
+// Product and technology names that look like code (PascalCase) but aren't
+const NOT_CODE_NAMES = new Set(("github gitlab bitbucket javascript typescript nodejs oauth graphql postgresql mysql mongodb " +
+  "redis devops webpack chatgpt openai deepseek fastapi nextjs vscode youtube linkedin macos iphone ipad iphoneos " +
+  "powershell dockerhub kubernetes webassembly websocket websockets ollama").split(" "));
+
+// Code identifiers the question names: `backticked`, camelCase, snake_case,
+// PascalCase — ranked by how likely they are to be the code in question
+// (functions first, env vars last), ties in the order they appear
+function questionIdentifiers(text, limit = 6) {
+  const ids = new Map(); // id → { rank, order }
+  const add = (id, backticked) => {
+    if (id.length < 4 || (!backticked && NOT_CODE_NAMES.has(id.toLowerCase()))) return;
+    const rank = identifierRank(id, backticked);
+    const prev = ids.get(id);
+    if (!prev) ids.set(id, { rank, order: ids.size });
+    else prev.rank = Math.max(prev.rank, rank);
+  };
+  for (const m of (text || "").matchAll(/`([A-Za-z_$][\w$]*)(?:\(\))?`/g)) add(m[1], true);
   for (const raw of (text || "").split(/[^A-Za-z0-9_$.\/]+/)) {
-    const tok = raw.replace(/[./]+$/, ""); // "…via fooRequiresOwner." ends a sentence, not a path
-    if (!/^[A-Za-z_$][\w$]*$/.test(tok)) continue; // skips file paths like a/b.ts
-    if (/[a-z0-9][A-Z]/.test(tok) || /[A-Za-z0-9]_[A-Za-z]/.test(tok)) ids.add(tok);
+    const trimmed = raw.replace(/[./]+$/, ""); // "…via fooRequiresOwner." ends a sentence, not a path
+    // "save_memory/recall_memory" names two things; "src/a.ts" is a path (it has an extension)
+    const toks = trimmed.includes("/") && !/\.[A-Za-z]/.test(trimmed) ? trimmed.split("/") : [trimmed];
+    for (const tok of toks) {
+      if (!/^[A-Za-z_$][\w$]*$/.test(tok)) continue; // skips file paths like a/b.ts
+      if (/[a-z0-9][A-Z]/.test(tok) || /[A-Za-z0-9]_[A-Za-z]/.test(tok)) add(tok, false);
+    }
   }
-  return [...ids].filter(id => id.length >= 4).slice(0, 5);
+  return [...ids].sort((a, b) => b[1].rank - a[1].rank || a[1].order - b[1].order).slice(0, limit).map(([id]) => id);
 }
 
 // The imports of the files read → [{ path, score, names }], best first. A file
@@ -677,11 +720,13 @@ function relatedFiles(readFiles, known, terms, identifiers) {
   return [...byPath.values()].map(e => {
     const names = [...e.names];
     const file = e.path.toLowerCase().split("/").pop();
-    let score = 0.5 * e.from.size;
-    if (names.some(n => ids.has(n.toLowerCase()))) score += 4;
-    score += Math.min(2, names.filter(n => terms.some(t => t.length >= 4 && n.toLowerCase().includes(t))).length);
+    const namesId = names.some(n => ids.has(n.toLowerCase()));
+    const namesTerm = Math.min(2, names.filter(n => terms.some(t => t.length >= 4 && n.toLowerCase().includes(t))).length);
+    let score = 0.5 * e.from.size + (namesId ? 4 : 0) + namesTerm;
     if (terms.some(t => t.length >= 3 && file.includes(t))) score += 2;
-    return { path: e.path, score, names, from: [...e.from] };
+    // `related`: it brings in a name the question/issue mentions or is about,
+    // not just a file with a similar name or one several files import
+    return { path: e.path, score, names, from: [...e.from], related: namesId || namesTerm > 0 };
   }).sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
 }
 
@@ -820,11 +865,14 @@ async function buildChatContext(repo, question, previousQuestion, onStatus = () 
   // 4. Follow the code: imports of what was read (and of `followFrom`), then find
   //    identifiers the question or issue names that nothing read defines
   if (!files && (readFiles.length || followFrom.length || identifiers.length)) {
-    const maxExtra = budget < 12000 ? 2 : 4;
+    const maxExtra = budget < 12000 ? 2 : aboutText ? 3 : 4;
     // Imports of `followFrom` (a PR's changed files) always matter; others must match the question
     const followPaths = new Set(followFrom.map(f => f.path));
+    // For an issue, an import must bring in something the issue is about; for a PR,
+    // everything its changed files import matters; otherwise a score of 1+ will do
     const related = relatedFiles([...readFiles, ...followFrom], known, terms, identifiers)
-      .filter(r => (r.score >= 1 || r.from.some(p => followPaths.has(p))) && !via.has(r.path)).slice(0, maxExtra);
+      .filter(r => !via.has(r.path) && (r.from.some(p => followPaths.has(p)) || (aboutText ? r.related : r.score >= 1)))
+      .slice(0, maxExtra);
     if (related.length) {
       onStatus(`Following imports: ${related.map(r => r.path.split("/").pop()).join(", ")}`);
       related.forEach(r => { via.set(r.path, "import"); extraTerms.set(r.path, r.names.map(n => n.toLowerCase())); });
@@ -833,7 +881,7 @@ async function buildChatContext(repo, question, previousQuestion, onStatus = () 
     const everything = [...readFiles, ...followFrom];
     const missing = identifiers.filter(id => !everything.some(f => definesIdentifier(f.text, id)));
     const candidates = tree.entries.filter(e => known.has(e.path) && isCodeCandidate(e));
-    for (const id of missing.slice(0, 3)) {
+    for (const id of missing.slice(0, budget >= 30000 ? 4 : 3)) {
       let hit = null;
       if (githubToken) {
         onStatus(`Searching the code for ${id}…`);
@@ -895,6 +943,31 @@ function citationInRange(sources, path, start, end = start) {
   return ranges.some(r => start >= r.start && start <= r.end && end <= r.end + 2);
 }
 
+// Citations written in prose — "In `supermemory-provider.ts`, change line 58" —
+// which smaller models often produce instead of `path:line`. Within one
+// paragraph or list item that names exactly one file that was read, each
+// "line N" / "lines N–M" counts as a citation of that file.
+// → [{ path, start, end, text }] (text = the matched "line 58")
+function proseCitations(text, sources = []) {
+  const out = [];
+  const paths = [...new Set(sources.map(s => s.path))];
+  if (!paths.length) return out;
+  for (const block of (text || "").split(/\n\s*\n|\n(?=\s*(?:[-*+]|\d+[.)])\s)/)) {
+    if (/`[^`\s]+?:\d+`/.test(block)) continue; // already cited properly
+    const named = new Set();
+    for (const m of block.matchAll(/`([^`\s]+)`|([\w./-]+\.[A-Za-z][A-Za-z0-9]{0,7})\b/g)) {
+      const p = resolveCitedPath((m[1] || m[2]).replace(/:\d+.*$/, ""), sources);
+      if (p) named.add(p);
+    }
+    if (named.size !== 1) continue; // none, or ambiguous
+    const [path] = named;
+    for (const m of block.matchAll(/\b(?:lines?|L)\s?(\d+)(?:\s*(?:-|–|to)\s*(\d+))?\b/g)) {
+      out.push({ path, start: +m[1], end: m[2] ? +m[2] : +m[1], text: m[0] });
+    }
+  }
+  return out;
+}
+
 // An answer's Markdown → { total, verified, outOfRange: [..], unread: [..] }
 function checkCitations(text, sources = []) {
   const res = { total: 0, verified: 0, outOfRange: [], unread: [] };
@@ -905,6 +978,11 @@ function checkCitations(text, sources = []) {
     if (!path) res.unread.push(raw.slice(1, -1));
     else if (!citationInRange(sources, path, +start, +(end || start))) res.outOfRange.push(raw.slice(1, -1));
     else res.verified++;
+  }
+  for (const c of proseCitations(text, sources)) {
+    res.total++;
+    if (citationInRange(sources, c.path, c.start, c.end)) res.verified++;
+    else res.outOfRange.push(`${c.path.split("/").pop()} ${c.text}`);
   }
   return res;
 }

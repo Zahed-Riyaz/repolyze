@@ -104,3 +104,70 @@ test("names at the end of a sentence still count as code names", () => {
   const { fn } = loadPanel();
   assert.deepEqual(plain(fn.questionIdentifiers("The check is checkLimit. See fooRequiresOwner, and src/a/b.ts.")), ["checkLimit", "fooRequiresOwner"]);
 });
+
+// ── The Supermemory pattern: many code-style names, one that matters ─────────
+const NOISY = `Local mode only accepts a loopback base URL, see isLoopbackBaseUrl in src/providers/memory-provider.ts.
+Both the API (connect/verify) and the worker (save_memory/recall_memory) call the provider.
+Serenity memory: endpointTrust: "private", gated by serenityEndpointRequiresOwner.
+SANDBOX_PROVIDER docker  AGENT_RUNTIME pi`;
+
+test("code names are ranked: functions first, then types, tool/field names, env vars last", () => {
+  const { fn } = loadPanel();
+  assert.deepEqual(plain(fn.questionIdentifiers(NOISY)),
+    ["isLoopbackBaseUrl", "serenityEndpointRequiresOwner", "endpointTrust", "save_memory", "recall_memory", "SANDBOX_PROVIDER"]);
+  assert.deepEqual(plain(fn.questionIdentifiers("Why does `backoff` call retryDelay twice and what is MAX_RETRIES?")), ["backoff", "retryDelay", "MAX_RETRIES"]);
+});
+
+test("the helper the issue points to is found even when tool names, fields and env vars come first; unrelated imports aren't followed", async () => {
+  const tree = { tree: blobs(["src/providers/memory-provider.ts", "src/policy/serenity-policy.ts", "src/ui/computer.ts", "src/tools/memory-tools.ts", "README.md"]) };
+  const raw = {
+    "README.md": "# App",
+    "src/providers/memory-provider.ts": 'import { renderComputer } from "../ui/computer";\nimport { toolSchema } from "../tools/memory-tools";\nexport function isLoopbackBaseUrl(url) {\n  return /localhost/.test(url);\n}\n',
+    "src/policy/serenity-policy.ts": "export function serenityEndpointRequiresOwner(url, actor) {\n  return isPrivate(url) && actor.isOwner;\n}\n",
+    "src/ui/computer.ts": "export function renderComputer() {}",
+    "src/tools/memory-tools.ts": "export const toolSchema = {};",
+  };
+  const gh = githubMock({ "": { default_branch: "main" }, "/git/trees/HEAD?recursive=1": tree }, { raw });
+  const panel = loadPanel({ fetch: gh.fetch });
+  panel.setRepo();
+  panel.run(`aiProvider = "openai"; aiApiKey = "sk-test"`);
+  const { context, sources } = await panel.fn.buildChatContext(repo, SUMMARY, null, () => {},
+    { about: `Issue #1063: Local mode rejects private hosts\n${NOISY}`, seedFiles: ["src/providers/memory-provider.ts"], picker: false });
+  const read = [...new Set(plain(sources).map(s => s.path))];
+  assert.ok(read.includes("src/policy/serenity-policy.ts"), `the Serenity helper is read (read: ${read.join(", ")})`);
+  assert.match(context, /export function serenityEndpointRequiresOwner/);
+  assert.ok(!read.includes("src/ui/computer.ts"), "an import that brings in nothing the issue is about isn't followed");
+});
+
+// ── Citations written in prose ───────────────────────────────────────────────
+test("\"line 58\" next to the one file read in that paragraph counts as a citation and links to it", () => {
+  const panel = loadPanel();
+  const sources = [{ path: "packages/adapters/src/supermemory-memory-provider.ts", start: 41, end: 80 }, { path: "src/other.ts", start: 1, end: 10 }];
+  const text = "In `packages/adapters/src/supermemory-memory-provider.ts`, update parseSupermemoryConnection.\n\n- Change line 58 in `supermemory-memory-provider.ts` to accept private hosts.\n- Also see line 300 of `supermemory-memory-provider.ts`.\n- Compare `src/other.ts` with `supermemory-memory-provider.ts` at line 5.";
+  assert.deepEqual(plain(panel.fn.proseCitations(text, sources)).map(c => [c.path.split("/").pop(), c.start]),
+    [["supermemory-memory-provider.ts", 58], ["supermemory-memory-provider.ts", 300]], "a paragraph naming two files is ambiguous, so skipped");
+  const check = plain(panel.fn.checkCitations(text, sources));
+  assert.equal(check.total, 2);
+  assert.equal(check.verified, 1);
+  assert.deepEqual(check.outOfRange, ["supermemory-memory-provider.ts line 300"]);
+  assert.equal(panel.fn.citationNoteHtml(text.repeat(3), sources).includes("doesn't point to specific lines"), false, "no 'uncited' warning");
+
+  const html = panel.fn.linkifyCitations(panel.fn.renderMarkdown(text), { owner: "o", repo: "r" }, "main", sources);
+  assert.match(html, /Change <a class="cite cite-prose" href="https:\/\/github\.com\/o\/r\/blob\/main\/packages\/adapters\/src\/supermemory-memory-provider\.ts#L58"[^>]*>line 58<\/a>/);
+  assert.match(html, /<a class="cite cite-prose cite-unverified"[^>]*#L300"[^>]*>line 300<\/a>/);
+  assert.doesNotMatch(html, /#L5"/, "ambiguous paragraph left alone");
+});
+
+test("product names that look like code (GitHub, TypeScript, OAuth) aren't treated as code names", () => {
+  const { fn } = loadPanel();
+  assert.deepEqual(plain(fn.questionIdentifiers("If GitHub keeps answering slow_down in TypeScript, pollDeviceToken retries; see `GitHub` too")),
+    ["pollDeviceToken", "GitHub", "slow_down"], "backticked is kept on purpose; plain GitHub/TypeScript aren't");
+});
+
+test("a named function's definition always makes the excerpt, however many lines mention other terms", () => {
+  const { fn } = loadPanel();
+  const noisy = Array.from({ length: 400 }, (_, i) =>
+    i === 300 ? "async function pollDeviceToken(code, interval) {" : `const url${i} = "https://github.com/login"; // github github`).join("\n");
+  const ranges = plain(fn.extractSnippets(noisy, ["github", "login"], 6000, ["polldevicetoken", "github"]));
+  assert.ok(ranges.some(r => r.start <= 301 && r.end >= 301), `definition line 301 kept (${JSON.stringify(ranges)})`);
+});
