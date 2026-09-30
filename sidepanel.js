@@ -101,6 +101,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   document.getElementById("brief-back").addEventListener("click", closeIssueBrief);
   document.getElementById("brief-copy").addEventListener("click", copyBrief);
+  document.getElementById("brief-refresh").addEventListener("click", refreshBrief);
   document.getElementById("brief-body").addEventListener("click", handleBriefClick);
 
   // "Understand this PR" brief

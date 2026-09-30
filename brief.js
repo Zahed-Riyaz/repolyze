@@ -43,79 +43,111 @@ function looksLikeClaim(text) {
   return CLAIM_RE.test(text || "");
 }
 
-// Is the issue actually free? → { status: free|maybe|taken, verdict, advice, reasons[] }
+// Can I work on this issue? → { status, kind, verdict, advice, reasons[] }
+// Facts first (assignees, PRs, links, commits, claims), then the one case that
+// best describes it, most blocking first — each with its own verdict and next step:
+//   closed · assigned (Taken) · open PR · merged PR · linked PR · claimed ·
+//   PR closed recently · commits · free
+// `status` is the tone: free (green), maybe (amber: check first), taken (red).
+const RECENT_MS = 30 * DAY_MS;
+
 function issueAvailability(issue, comments, timeline, now) {
-  const order = { free: 0, maybe: 1, taken: 2 };
-  let status = "free";
-  const bump = (s) => { if (order[s] > order[status]) status = s; };
   const reasons = [];
+  const recent = (iso) => !!iso && now - Date.parse(iso) <= RECENT_MS;
+  const at = (login) => (login ? ` by @${login}` : "");
 
   const assignees = issue.assignees?.length ? issue.assignees : issue.assignee ? [issue.assignee] : [];
-  if (assignees.length) {
-    bump("taken");
-    reasons.push({ tone: "bad", text: `Assigned to ${assignees.map(a => `@${a.login}`).join(", ")}` });
-  }
+  if (assignees.length) reasons.push({ tone: "bad", text: `Assigned to ${assignees.map(a => `@${a.login}`).join(", ")}` });
 
+  // PRs that reference it: open, merged, or closed unmerged (recently or long ago)
   const prs = new Map();
   for (const ev of timeline) {
     const src = ev.event === "cross-referenced" ? ev.source?.issue : null;
     if (src?.pull_request) prs.set(src.number, src);
   }
-  for (const pr of prs.values()) {
-    const by = pr.user?.login ? ` by @${pr.user.login}` : "";
-    if (pr.state === "open") {
-      bump("taken");
-      reasons.push({ tone: "bad", text: `Open PR #${pr.number}${by} references it`, url: pr.html_url });
-    } else if (pr.pull_request.merged_at) {
-      bump("maybe");
-      reasons.push({ tone: "warn", text: `PR #${pr.number}${by} merged — may already be fixed`, url: pr.html_url });
-    } else {
-      reasons.push({ tone: "info", text: `PR #${pr.number}${by} closed without merging`, url: pr.html_url });
-    }
+  const list = [...prs.values()];
+  const openPrs = list.filter(pr => pr.state === "open");
+  const mergedPrs = list.filter(pr => pr.state !== "open" && pr.pull_request.merged_at);
+  const closedPrs = list.filter(pr => pr.state !== "open" && !pr.pull_request.merged_at);
+  const recentClosed = closedPrs.filter(pr => recent(pr.closed_at));
+  for (const pr of openPrs) reasons.push({ tone: "bad", text: `Open PR #${pr.number}${at(pr.user?.login)}`, url: pr.html_url });
+  for (const pr of mergedPrs) reasons.push({ tone: "warn", text: `PR #${pr.number}${at(pr.user?.login)} merged`, url: pr.html_url });
+  for (const pr of closedPrs) {
+    reasons.push({ tone: recent(pr.closed_at) ? "warn" : "info", text: `PR #${pr.number}${at(pr.user?.login)} closed unmerged${pr.closed_at ? ` ${daysAgo(pr.closed_at)}` : ""}`, url: pr.html_url });
   }
 
-  // Latest claim per person; someone who already opened a PR is covered above
-  const prAuthors = new Set([...prs.values()].map(pr => pr.user?.login));
+  // A PR linked in the Development section leaves "connected" events (no PR named)
+  let linked = 0;
+  for (const ev of timeline) {
+    if (ev.event === "connected") linked++;
+    else if (ev.event === "disconnected") linked = Math.max(0, linked - 1);
+  }
+  const linkedOnly = linked > 0 && !openPrs.length;
+  if (linkedOnly) reasons.push({ tone: "warn", text: "A PR is linked in its Development section", url: issue.html_url });
+
+  // Commits that mention it ("fix #12"): work may be under way on a branch
+  const commits = timeline.filter(ev => ev.event === "referenced" && ev.commit_id);
+  const latestCommit = commits.map(ev => ev.created_at).filter(Boolean).sort().at(-1);
+  if (commits.length && !prs.size) {
+    const base = (issue.html_url || "").replace(/\/issues\/\d+$/, "");
+    const last = commits[commits.length - 1];
+    reasons.push({ tone: recent(latestCommit) ? "warn" : "info", text: `${commits.length === 1 ? "A commit mentions" : `${commits.length} commits mention`} it${latestCommit ? ` (${daysAgo(latestCommit)})` : ""}`,
+      url: base && last.commit_id ? `${base}/commit/${last.commit_id}` : undefined });
+  }
+
+  // "I'll take this" comments: latest per person, not from maintainers or PR authors
+  const prAuthors = new Set(list.map(pr => pr.user?.login));
   const claims = new Map();
   for (const c of comments) {
     if (!c.user || isBot(c.user) || MAINTAINER_ROLES.has(c.author_association)) continue;
     if (!looksLikeClaim(c.body) || prAuthors.has(c.user.login)) continue;
     claims.set(c.user.login, c);
   }
+  const recentClaims = [...claims.values()].filter(c => recent(c.created_at));
   for (const c of claims.values()) {
-    const recent = now - Date.parse(c.created_at) <= 30 * DAY_MS;
-    if (recent) bump("maybe");
     reasons.push({
-      tone: recent ? "warn" : "info",
-      text: recent
-        ? `@${c.user.login} offered to work on it ${daysAgo(c.created_at)}`
-        : `@${c.user.login} offered ${daysAgo(c.created_at)}, no PR followed`,
+      tone: recent(c.created_at) ? "warn" : "info",
+      text: recent(c.created_at) ? `@${c.user.login} offered to take it ${daysAgo(c.created_at)}` : `@${c.user.login} offered ${daysAgo(c.created_at)}, no PR followed`,
       url: c.html_url,
     });
   }
 
   const maintainerReplied = comments.some(c => c.user && !isBot(c.user) && MAINTAINER_ROLES.has(c.author_association));
-  if (!maintainerReplied) {
-    reasons.push({ tone: "info", text: "No maintainer reply yet" });
-  }
-  // A closed issue (e.g. found with Find) isn't available, whatever else is true
+  if (!maintainerReplied) reasons.push({ tone: "info", text: "No maintainer reply yet" });
+
+  // The one case that describes it best, most blocking first
+  const who = (people) => people.map(p => `@${p}`).join(", ");
+  const num = (pr) => `#${pr.number}`;
+  let c;
   if (issue.state === "closed") {
     const how = issue.state_reason === "not_planned" ? " as not planned" : issue.state_reason === "completed" ? " as completed" : "";
     reasons.unshift({ tone: "bad", text: `Closed${how} ${daysAgo(issue.closed_at || issue.updated_at)}` });
-    return {
-      status: "taken", verdict: "Closed", reasons,
-      advice: "Read why it was closed before working on anything similar.",
-    };
+    c = { status: "taken", kind: "closed", verdict: "Closed", advice: "Read why it was closed before working on anything similar." };
+  } else if (assignees.length) {
+    const names = assignees.map(a => a.login);
+    c = { status: "taken", kind: "assigned", verdict: "Taken",
+      advice: openPrs.length ? `Pick another issue, or review ${num(openPrs[0])}.` : `Pick another issue, or ask ${who(names)} if they'd like help.` };
+  } else if (openPrs.length) {
+    const pr = openPrs[0];
+    c = { status: "maybe", kind: "open-pr", verdict: openPrs.length === 1 ? "Has an open PR" : `Has ${openPrs.length} open PRs`,
+      advice: `Review or help on ${num(pr)}${pr.user?.login ? ` with @${pr.user.login}` : ""} instead of starting over.` };
+  } else if (mergedPrs.length) {
+    c = { status: "maybe", kind: "merged", verdict: "May already be fixed", advice: `Check whether ${num(mergedPrs[0])} fixed it before starting.` };
+  } else if (linkedOnly) {
+    c = { status: "maybe", kind: "linked", verdict: "Has a linked PR", advice: "Check the PR in the issue's Development section first." };
+  } else if (recentClaims.length) {
+    const names = recentClaims.map(x => x.user.login);
+    c = { status: "maybe", kind: "claimed", verdict: "Claimed in the comments", advice: `Ask ${who(names)} if they're still on it before starting.` };
+  } else if (recentClosed.length) {
+    c = { status: "maybe", kind: "closed-pr", verdict: "A PR was closed recently", advice: `Read why ${num(recentClosed[0])} was closed, then ask before starting.` };
+  } else if (commits.length && recent(latestCommit)) {
+    c = { status: "maybe", kind: "commits", verdict: "Work may be under way", advice: "A recent commit mentions it; ask in the thread before starting." };
+  } else {
+    // Say "no PR" only when there's none at all
+    reasons.unshift({ tone: "good", text: prs.size || linked || commits.length ? "No assignee or open PR" : "No assignee, PR or claim" });
+    c = { status: "free", kind: "free", verdict: "Free to work on", advice: "Comment that you'd like to take it, then start." };
   }
-  if (status === "free") reasons.unshift({ tone: "good", text: "No assignee, PR or claim" });
-
-  const verdict = { free: "Looks free", maybe: "Possibly taken", taken: "Already taken" }[status];
-  const advice = {
-    free: "Comment that you'd like to take it, then start.",
-    maybe: "Ask in the thread if it's still being worked on.",
-    taken: "Pick another issue, or offer to help.",
-  }[status];
-  return { status, verdict, advice, reasons };
+  return { ...c, reasons };
 }
 
 // `run:` commands from a GitHub Actions workflow (single-line and `run: |` blocks)
@@ -217,12 +249,25 @@ function briefMarkdown(repo, issue, brief) {
 }
 
 // ── Data loading ─────────────────────────────────────────────────────────────
-async function loadIssueThread(repo, number) {
+async function loadIssueThread(repo, number, opts = {}) {
   const [comments, timeline] = await Promise.all([
-    fetchGitHub(`/issues/${number}/comments?per_page=100`, repo),
-    fetchGitHub(`/issues/${number}/timeline?per_page=100`, repo),
+    fetchGitHub(`/issues/${number}/comments?per_page=100`, repo, opts),
+    loadIssueTimeline(repo, number, opts),
   ]);
   return { comments, timeline };
+}
+
+// The timeline is oldest first, 100 events a page: on a busy issue the PR
+// that took it is often past page 1. Signed in, read up to 5 pages (and the
+// last); signed out, add just the last page, the newest events (1 request).
+async function loadIssueTimeline(repo, number, opts = {}) {
+  const endpoint = (page) => `/issues/${number}/timeline?per_page=100${page > 1 ? `&page=${page}` : ""}`;
+  const { data, link } = await fetchGitHubPage(endpoint(1), repo, opts);
+  const last = Number((link || "").match(/[?&]page=(\d+)[^>]*>;\s*rel="last"/)?.[1]) || 1;
+  if (last <= 1) return data;
+  const pages = githubToken ? [...new Set([...Array.from({ length: Math.min(last, 5) - 1 }, (_, i) => i + 2), last])] : [last];
+  const rest = await Promise.all(pages.map(p => fetchGitHub(endpoint(p), repo, opts).catch(err => { if (err.rateLimited) throw err; return []; })));
+  return [...data, ...rest.flat()];
 }
 
 // Setup, CI checks and PR conventions for the repo (flow.js); a repo that can't
@@ -271,7 +316,11 @@ function closeIssueBrief() {
 
 // Takes the issue from the list, or just its number (opened from its GitHub
 // page), in which case the issue itself is fetched too.
-async function showIssueBrief(issueOrNumber, { auto = false } = {}) {
+// A brief is reused for 10 minutes; after that (or when opened from the issue's
+// own page, or with Refresh) its thread is checked again — free when unchanged.
+const BRIEF_TTL_MS = 10 * 60 * 1000;
+
+async function showIssueBrief(issueOrNumber, { auto = false, refresh = false } = {}) {
   const listIssue = typeof issueOrNumber === "object" ? issueOrNumber : issueIndex.get(Number(issueOrNumber)) || null;
   const number = Number(listIssue ? listIssue.number : issueOrNumber);
   const repo = currentRepo;
@@ -288,11 +337,14 @@ async function showIssueBrief(issueOrNumber, { auto = false } = {}) {
 
   const briefs = (cacheFor(key).briefs ??= {});
   try {
+    // Looking at the issue on GitHub, or asking to refresh: what the page shows now wins
+    const revalidate = auto || refresh;
     let brief = briefs[number];
+    if (brief && (revalidate || Date.now() - brief.loadedAt > BRIEF_TTL_MS)) brief = null;
     if (!brief) {
       const [issue, { comments, timeline }, flow, owners] = await Promise.all([
-        listIssue || fetchGitHub(`/issues/${number}`, repo),
-        loadIssueThread(repo, number),
+        listIssue && !revalidate ? listIssue : fetchGitHub(`/issues/${number}`, repo, { revalidate }),
+        loadIssueThread(repo, number, { revalidate }),
         loadFlowForBrief(repo),
         loadCodeOwners(repo).catch(() => ({ rules: [] })),
       ]);
@@ -305,7 +357,7 @@ async function showIssueBrief(issueOrNumber, { auto = false } = {}) {
       const fileSources = await resolveIssueFiles(repo, issue, { comments, timeline }).catch(() => []);
       const files = fileSources.map(f => f.path);
       brief = briefs[number] = {
-        issue, comments, flow, commands: flow.verify, codeOwnerRules: owners.rules,
+        issue, comments, flow, commands: flow.verify, codeOwnerRules: owners.rules, loadedAt: Date.now(),
         availability: issueAvailability(issue, comments, timeline, Date.now()),
         likelyFiles: files, fileSources, people: briefPeople(files, owners.rules, comments),
       };
@@ -572,6 +624,10 @@ function handleBriefClick(e) {
 
 function currentBrief() {
   return activeBrief ? cacheFor(activeBrief.key).briefs?.[activeBrief.number] : null;
+}
+
+function refreshBrief() {
+  if (activeBrief) showIssueBrief(activeBrief.number, { auto: activeBrief.auto, refresh: true });
 }
 
 function copyBrief() {

@@ -171,10 +171,12 @@ function isRateLimitResponse(res, body, resource = "core") {
 
 // GET a GitHub API URL → { status, body, link }. Cached, de-duplicated and
 // rate-limit aware; a stale cached copy is preferred over failing.
-async function githubRequest(url) {
+// `revalidate`: ask GitHub even if the saved copy is fresh (with its ETag, so
+// an unchanged answer is a free 304) — for when the user is looking at the thing itself
+async function githubRequest(url, { revalidate = false } = {}) {
   const key = ghCacheKey(url);
   const cached = await ghCacheGet(key);
-  if (cached && Date.now() - cached.time < GH_FRESH_MS) return cached;
+  if (cached && !revalidate && Date.now() - cached.time < GH_FRESH_MS) return cached;
   if (ghInflight.has(key)) return ghInflight.get(key);
 
   const resource = resourceFor(url);
@@ -224,13 +226,13 @@ async function githubRequest(url) {
 
 // `repo` defaults to the current repo; callers that have already awaited
 // something must pass the repo they captured, since currentRepo may have moved on.
-async function fetchGitHub(endpoint, repo = currentRepo) {
-  return (await fetchGitHubPage(endpoint, repo)).data;
+async function fetchGitHub(endpoint, repo = currentRepo, opts = {}) {
+  return (await fetchGitHubPage(endpoint, repo, opts)).data;
 }
 
 // Like fetchGitHub, but also returns the Link header (for page counts)
-async function fetchGitHubPage(endpoint, repo = currentRepo) {
-  const { status, body, link } = await githubRequest(repoApiUrl(endpoint, repo));
+async function fetchGitHubPage(endpoint, repo = currentRepo, opts = {}) {
+  const { status, body, link } = await githubRequest(repoApiUrl(endpoint, repo), opts);
   if (status < 200 || status >= 300) {
     throw new GitHubError(`GitHub API ${status}: ${body?.message || "request failed"}`, status);
   }

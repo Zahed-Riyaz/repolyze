@@ -94,7 +94,7 @@ test("issueGuide gathers the verdict and the files with their owners for the pag
   const g = plain(await panel.fn.issueGuide({ owner: "o", repo: "r", number: 7 }));
   assert.equal(g.kind, "issue");
   assert.equal(g.ref, "main");
-  assert.equal(g.availability.verdict, "Looks free");
+  assert.equal(g.availability.verdict, "Free to work on");
   assert.deepEqual(g.start.map(f => f.path).slice(0, 2), ["src/launch/timer.ts", "src/launch/sequence.ts"]);
   assert.deepEqual(g.guesses, [], "real signals, so no guesses");
   assert.deepEqual(g.owners.map(o => [o.display, o.files.length]), [["ada", 2]], "owners once, with how many of the files");
@@ -134,14 +134,14 @@ test("the page card waits to be asked when signed out, and reads verdict → whe
   assert.match(c.guideCardHtml(page, { phase: "idle", open: true }), /Is it free, where to start, who owns it[\s\S]*data-act="load">Show/);
   assert.doesNotMatch(c.guideCardHtml(page, { phase: "idle", open: false }), /class="body"/, "collapsed: just the header");
   const data = {
-    ref: "main", availability: { status: "free", verdict: "Looks free", advice: "Leave a short comment first.", reasons: ["No assignee, linked PR or recent claim"] },
+    ref: "main", availability: { status: "free", verdict: "Free to work on", advice: "Leave a short comment first.", reasons: ["No assignee, linked PR or recent claim"] },
     start: [{ path: "src/x/a b.ts", name: "a b.ts", dir: "src/x", why: "named in the issue", confidence: "high" }],
     guesses: [{ path: "src/y.ts", name: "y.ts", dir: "src", why: "name matches the issue", confidence: "low" }],
     owners: [{ handle: "@o/maintainers", display: "maintainers", files: ["src/x/a b.ts", "src/y.ts"] }],
     stack: ["TypeScript", "CLI"],
   };
   const html = c.guideCardHtml(page, { phase: "ready", open: true, data });
-  assert.match(html, /class="verdict tone-good">Looks free/);
+  assert.match(html, /class="verdict tone-good">Free to work on/);
   assert.match(html, /class="why-line">No assignee, linked PR or recent claim<\/p>\s*<p class="next">→ Leave a short comment first\./);
   assert.match(html, /Where to start<\/h3><span class="stack">TypeScript · CLI<\/span>/);
   assert.match(html, /href="https:\/\/github\.com\/o\/r\/blob\/main\/src\/x\/a%20b\.ts"[^>]*>a b\.ts<\/a>\s*<span class="why">named in the issue<\/span>\s*<\/li>/, "one line per file; the folder is in the link's title");

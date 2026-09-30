@@ -10,9 +10,9 @@ const NOW = Date.now();
 const iso = (daysAgo) => new Date(NOW - daysAgo * DAY).toISOString();
 const user = (login) => ({ login, type: "User", avatar_url: `https://avatars.githubusercontent.com/u/1?v=4`, html_url: `https://github.com/${login}` });
 const comment = (login, assoc, body, daysAgo) => ({ user: user(login), author_association: assoc, body, created_at: iso(daysAgo), html_url: `https://github.com/o/r/issues/7#c-${login}` });
-const prRef = (number, state, merged, login = "someone") => ({
+const prRef = (number, state, merged, login = "someone", closedDaysAgo = null) => ({
   event: "cross-referenced",
-  source: { issue: { number, state, user: user(login), html_url: `https://github.com/o/r/pull/${number}`, pull_request: { merged_at: merged ? iso(1) : null } } },
+  source: { issue: { number, state, user: user(login), html_url: `https://github.com/o/r/pull/${number}`, closed_at: closedDaysAgo === null ? null : iso(closedDaysAgo), pull_request: { merged_at: merged ? iso(1) : null } } },
 });
 const baseIssue = { number: 7, title: "Countdown drifts on Windows", labels: [], assignees: [], user: user("reporter"), created_at: iso(10), comments: 0, html_url: "https://github.com/o/r/issues/7" };
 
@@ -41,38 +41,75 @@ test("looksLikeClaim spots the usual ways of calling dibs", () => {
   for (const t of ["I can reproduce this on Windows too", "This works for me", "Any update?", "+1"]) assert.ok(!pure.looksLikeClaim(t), t);
 });
 
-test("an untouched issue looks free, and notes that no maintainer has replied", () => {
-  const a = pure.issueAvailability(baseIssue, [], [], NOW);
-  assert.equal(a.status, "free");
-  assert.equal(a.verdict, "Looks free");
-  assert.deepEqual(plain(a.reasons.map(r => r.tone)), ["good", "info"]);
-  assert.match(a.reasons[1].text, /no maintainer/i);
+// Each case: [what's on the issue] → the verdict, its tone and the next step
+const avail = (issue, comments, timeline) => plain(pure.issueAvailability(issue, comments, timeline, NOW));
+test("each situation gets its own verdict and next step, most blocking first", () => {
+  const cases = [
+    ["nothing", avail(baseIssue, [], []), "free", "free", "Free to work on", /Comment that you'd like to take it/],
+    ["assigned", avail({ ...baseIssue, assignees: [user("ada")] }, [], []), "taken", "assigned", "Taken", /ask @ada if they'd like help/],
+    ["assigned + open PR", avail({ ...baseIssue, assignees: [user("ada")] }, [], [prRef(42, "open", false, "ada")]), "taken", "assigned", "Taken", /review #42/],
+    ["open PR, nobody assigned", avail(baseIssue, [], [prRef(42, "open", false, "grace")]), "maybe", "open-pr", "Has an open PR", /Review or help on #42 with @grace/],
+    ["two open PRs", avail(baseIssue, [], [prRef(42, "open", false), prRef(43, "open", false)]), "maybe", "open-pr", "Has 2 open PRs", /#4[23]/],
+    ["merged PR, issue still open", avail(baseIssue, [], [prRef(40, "closed", true)]), "maybe", "merged", "May already be fixed", /Check whether #40 fixed it/],
+    ["linked in Development", avail(baseIssue, [], [{ event: "connected", created_at: iso(2) }]), "maybe", "linked", "Has a linked PR", /Development section/],
+    ["recent claim", avail(baseIssue, [comment("newbie", "NONE", "Can I work on this?", 3)], []), "maybe", "claimed", "Claimed in the comments", /Ask @newbie if they're still on it/],
+    ["PR closed last week", avail(baseIssue, [], [prRef(41, "closed", false, "grace", 5)]), "maybe", "closed-pr", "A PR was closed recently", /Read why #41 was closed/],
+    ["recent commit", avail(baseIssue, [], [{ event: "referenced", commit_id: "abc123", created_at: iso(3) }]), "maybe", "commits", "Work may be under way", /ask in the thread/],
+    ["closed issue", avail({ ...baseIssue, state: "closed", state_reason: "completed", closed_at: iso(1) }, [], [prRef(42, "open", false)]), "taken", "closed", "Closed", /Read why it was closed/],
+  ];
+  for (const [name, a, status, kind, verdict, advice] of cases) {
+    assert.deepEqual([a.status, a.kind, a.verdict], [status, kind, verdict], name);
+    assert.match(a.advice, advice, name);
+  }
 });
 
-test("assignees and open PRs mean it's taken", () => {
-  const assigned = pure.issueAvailability({ ...baseIssue, assignees: [user("ada")] }, [], [], NOW);
-  assert.equal(assigned.status, "taken");
-  assert.match(assigned.reasons[0].text, /Assigned to @ada/);
-  const withPR = pure.issueAvailability(baseIssue, [], [prRef(42, "open", false, "grace")], NOW);
-  assert.equal(withPR.status, "taken");
-  assert.match(withPR.reasons.find(r => r.tone === "bad").text, /Open PR #42 by @grace/);
+test("the reasons back the verdict: 'no PR' only when there's none, and every PR is listed", () => {
+  const free = avail(baseIssue, [], []);
+  assert.deepEqual(free.reasons.map(r => r.text), ["No assignee, PR or claim", "No maintainer reply yet"]);
+  const oldClosed = avail(baseIssue, [], [prRef(41, "closed", false, "someone", 90)]);
+  assert.equal(oldClosed.kind, "free", "a PR closed long ago doesn't block");
+  assert.equal(oldClosed.reasons[0].text, "No assignee or open PR");
+  assert.ok(oldClosed.reasons.some(r => /^PR #41 by @someone closed unmerged \S+ ago$/.test(r.text)));
+  const open = avail(baseIssue, [], [prRef(42, "open", false, "grace")]);
+  assert.equal(open.reasons[0].text, "Open PR #42 by @grace");
+  assert.equal(open.reasons[0].url, "https://github.com/o/r/pull/42");
 });
 
-test("a merged PR means it may already be fixed; a closed one is just context", () => {
-  assert.equal(pure.issueAvailability(baseIssue, [], [prRef(40, "closed", true)], NOW).status, "maybe");
-  const closed = pure.issueAvailability(baseIssue, [], [prRef(41, "closed", false)], NOW);
-  assert.equal(closed.status, "free");
-  assert.ok(closed.reasons.some(r => /closed without merging/.test(r.text)));
-});
-
-test("recent claims make it 'possibly taken'; old claims with no PR don't", () => {
-  const recent = pure.issueAvailability(baseIssue, [comment("newbie", "NONE", "Can I work on this?", 3)], [], NOW);
-  assert.equal(recent.status, "maybe");
-  assert.match(recent.reasons.find(r => r.tone === "warn").text, /@newbie offered to work on it/);
-
-  const stale = pure.issueAvailability(baseIssue, [comment("ghost", "NONE", "I'll take this", 90)], [], NOW);
-  assert.equal(stale.status, "free");
+test("Development links count until unlinked; old commits and old claims are only context", () => {
+  assert.equal(avail(baseIssue, [], [{ event: "connected", created_at: iso(5) }, { event: "disconnected", created_at: iso(2) }]).kind, "free");
+  const withOpen = avail(baseIssue, [], [{ event: "connected" }, prRef(43, "open", false)]);
+  assert.equal(withOpen.kind, "open-pr");
+  assert.equal(withOpen.reasons.filter(r => /Development|#43/.test(r.text)).length, 1, "an open PR already explains the link");
+  const commit = avail(baseIssue, [], [{ event: "referenced", commit_id: "abc123", created_at: iso(3) }]).reasons.find(x => /commit/.test(x.text));
+  assert.equal(commit.text, "A commit mentions it (3 days ago)");
+  assert.equal(commit.url, "https://github.com/o/r/commit/abc123");
+  assert.equal(avail(baseIssue, [], [{ event: "referenced", commit_id: "a", created_at: iso(200) }]).kind, "free");
+  const stale = avail(baseIssue, [comment("ghost", "NONE", "I'll take this", 90)], []);
+  assert.equal(stale.kind, "free");
   assert.match(stale.reasons.find(r => /ghost/.test(r.text)).text, /no PR followed/);
+});
+
+test("the whole timeline is read: signed out adds the newest page, signed in reads up to 5", async () => {
+  const page = (n) => [{ event: "commented", n }];
+  const lastLink = '<https://api.github.com/repos/o/r/issues/7/timeline?per_page=100&page=2>; rel="next", <https://api.github.com/repos/o/r/issues/7/timeline?per_page=100&page=8>; rel="last"';
+  const routes = {
+    "": { default_branch: "main" },
+    "/issues/7/timeline?per_page=100": new Response(JSON.stringify(page(1)), { headers: { Link: lastLink, "X-RateLimit-Remaining": "4999", "X-RateLimit-Limit": "5000", "X-RateLimit-Reset": "9999999999" } }),
+  };
+  for (let n = 2; n <= 8; n++) routes[`/issues/7/timeline?per_page=100&page=${n}`] = n === 8 ? [prRef(99, "open", false, "late")] : page(n);
+  const out = githubMock(routes);
+  const anon = loadPanel({ fetch: out.fetch });
+  anon.setRepo();
+  const t1 = plain(await anon.fn.loadIssueTimeline({ owner: "o", repo: "r" }, 7));
+  assert.equal(pure.issueAvailability(baseIssue, [], t1, NOW).kind, "open-pr", "the PR on the last page is found");
+  assert.deepEqual(out.apiCalls.filter(u => u.includes("timeline")), ["/issues/7/timeline?per_page=100", "/issues/7/timeline?per_page=100&page=8"], "signed out: 1 extra request");
+
+  const inn = githubMock(routes);
+  const signed = loadPanel({ fetch: inn.fetch });
+  signed.setRepo();
+  signed.setToken("ghp_x");
+  await signed.fn.loadIssueTimeline({ owner: "o", repo: "r" }, 7);
+  assert.equal(inn.apiCalls.filter(u => u.includes("timeline")).length, 6, "signed in: pages 1–5 and the last");
 });
 
 test("maintainer comments aren't claims, and count as a maintainer reply", () => {
@@ -144,7 +181,7 @@ test("briefMarkdown produces a shareable summary", () => {
     commands: [{ cmd: "npm test", from: "package.json" }],
   });
   assert.match(md, /^# #7 Countdown drifts on Windows\nhttps:\/\/github\.com\/o\/r\/issues\/7/);
-  assert.match(md, /\*\*Looks free\*\*/);
+  assert.match(md, /\*\*Free to work on\*\*/);
   assert.match(md, /## Files it needs\n- src\/launch\/timer\.ts \(named in the issue\)/);
   assert.match(md, /- @ada — code owner of src\/launch\/timer\.ts/);
   assert.match(md, /## Set up\n```bash\ngit clone https:\/\/github\.com\/YOUR-USERNAME\/r\.git && cd r\ngit checkout -b issue\/7-countdown-drifts-windows\n```/);
@@ -183,7 +220,7 @@ test("the brief shows availability, likely files, code owners and the steps from
   await panel.fn.showIssueBrief({ ...baseIssue, title: "Timer drifts during launch countdown" });
 
   const body = panel.el("brief-body").innerHTML;
-  assert.match(body, /class="verdict verdict-free"[\s\S]*<strong>Looks free<\/strong>[\s\S]*class="verdict-next"[\s\S]*Comment that you'd like to take it/);
+  assert.match(body, /class="verdict verdict-free"[\s\S]*<strong>Free to work on<\/strong>[\s\S]*class="verdict-next"[\s\S]*Comment that you'd like to take it/);
   assert.match(body, /Where to start[\s\S]*Nothing in the issue or its PRs points at a file yet[\s\S]*<details class="file-guesses" open>[\s\S]*href="https:\/\/github\.com\/o\/r\/blob\/HEAD\/src\/launch\/timer\.ts"[^>]*title="src\/launch\/timer\.ts"><code>timer\.ts<\/code>[\s\S]*name matches the issue/, "only guesses → shown open, labelled as guesses; one line, the path on hover");
   assert.match(body, /<details class="flow-step">\s*<summary class="flow-label"><span class="flow-num">1<\/span>Set up<span class="flow-sum">3 commands<\/span>/, "steps fold to a one-line summary");
   assert.match(body, /From clone to pull request[\s\S]*Set up[\s\S]*npm ci[\s\S]*Before you push[\s\S]*npm test[\s\S]*Open the PR/);
@@ -222,10 +259,10 @@ test("reopening a brief is instant: no new API requests", async () => {
   assert.equal(gh.apiCalls.length, api);
 });
 
-test("a taken issue says so, with the PR that took it", async () => {
+test("an issue with an open PR says so, with the PR", async () => {
   const { panel } = briefPanel({ ai: false, timeline: [prRef(42, "open", false, "grace")] });
   await panel.fn.showIssueBrief(baseIssue);
-  assert.match(panel.el("brief-body").innerHTML, /verdict-taken[\s\S]*Already taken[\s\S]*class="verdict-why">[\s\S]*Open PR #42 by @grace/);
+  assert.match(panel.el("brief-body").innerHTML, /verdict-maybe[\s\S]*Has an open PR[\s\S]*class="verdict-why">[\s\S]*Open PR #42 by @grace[\s\S]*Review or help on #42/);
 });
 
 test("switching repos while a brief is loading never renders it into the other repo", async () => {
@@ -251,4 +288,52 @@ test("Start this issue buttons are on every card and open the brief", async () =
   assert.match(panel.el("brief-body").innerHTML, /Countdown drifts on Windows/);
   panel.fn.closeIssueBrief();
   assert.equal(panel.el("contribute-browse").hidden, false);
+});
+
+// ── Staying current ──────────────────────────────────────────────────────────
+test("a brief built before a PR was linked catches up when the issue's page is opened, or on Refresh", async () => {
+  let timeline = [];
+  let conditional = 0;
+  const etagFor = () => `W/"${timeline.length}"`;
+  const gh = githubMock({
+    "": { default_branch: "main" },
+    "/git/trees/HEAD?recursive=1": TREE,
+    "/issues/7": { ...baseIssue },
+    "/issues/7/comments?per_page=100": [],
+    "/issues/7/timeline?per_page=100": (url, init) => {
+      if (init.headers?.["If-None-Match"]) conditional++;
+      if (init.headers?.["If-None-Match"] === etagFor()) return new Response(null, { status: 304 });
+      return new Response(JSON.stringify(timeline), { headers: { ETag: etagFor(), "X-RateLimit-Remaining": "4999", "X-RateLimit-Limit": "5000", "X-RateLimit-Reset": "9999999999" } });
+    },
+  }, { raw: RAW });
+  const panel = loadPanel({ fetch: gh.fetch });
+  panel.setRepo();
+
+  await panel.fn.showIssueBrief(baseIssue);
+  assert.match(panel.el("brief-body").innerHTML, /Free to work on/);
+
+  timeline = [prRef(29573, "open", false, "feiiiiii5")]; // linked a minute later
+  panel.fn.closeIssueBrief();
+  await panel.fn.showIssueBrief(baseIssue);
+  assert.match(panel.el("brief-body").innerHTML, /Free to work on/, "reopened from the list within 10 minutes: the saved brief, no requests");
+
+  await panel.fn.showIssueBrief(7, { auto: true }); // the user opens the issue on GitHub
+  assert.match(panel.el("brief-body").innerHTML, /Has an open PR[\s\S]*Open PR #29573 by @feiiiiii5/);
+  assert.ok(conditional >= 1, "re-checked with the saved ETag");
+
+  timeline = [];
+  panel.fn.refreshBrief();
+  await tick(20);
+  assert.match(panel.el("brief-body").innerHTML, /Free to work on/, "Refresh checks again");
+});
+
+test("a saved brief older than 10 minutes is rebuilt", async () => {
+  const { gh, panel } = briefPanel();
+  await panel.fn.showIssueBrief(baseIssue);
+  const calls = gh.apiCalls.length;
+  panel.run(`cacheFor(repoKey()).briefs[7].loadedAt -= 11 * 60 * 1000`);
+  panel.fn.closeIssueBrief();
+  await panel.fn.showIssueBrief(baseIssue);
+  assert.ok(panel.run("cacheFor(repoKey()).briefs[7].loadedAt") > Date.now() - 5000, "rebuilt");
+  assert.ok(gh.apiCalls.length >= calls, "served by the GitHub layer: re-checked only if its copy is stale too");
 });

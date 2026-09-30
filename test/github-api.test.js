@@ -222,3 +222,20 @@ test("PR queries always ask for newest first", async () => {
   assert.ok(sorted.length >= 2, sorted.join("\n"));
   for (const u of sorted) assert.match(u, /direction=desc/, u);
 });
+
+test("revalidate asks GitHub even when the saved copy is fresh — with its ETag, so unchanged is a free 304", async () => {
+  const sent = [];
+  const { panel, fetchGitHub } = setup({
+    "/issues/7/timeline": (url, init) => {
+      sent.push(init.headers?.["If-None-Match"] || null);
+      return init.headers?.["If-None-Match"] === 'W/"a"'
+        ? new Response(null, { status: 304 })
+        : json([{ event: "labeled" }], { headers: { ETag: 'W/"a"' } });
+    },
+  });
+  await fetchGitHub("/issues/7/timeline");
+  await fetchGitHub("/issues/7/timeline");
+  assert.equal(sent.length, 1, "fresh: served from the saved copy");
+  assert.deepEqual(plain(await panel.fn.fetchGitHub("/issues/7/timeline", undefined, { revalidate: true })), [{ event: "labeled" }]);
+  assert.deepEqual(sent, [null, 'W/"a"'], "re-checked with the ETag, body kept on 304");
+});
