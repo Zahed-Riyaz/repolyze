@@ -34,8 +34,12 @@ const GH_PERSIST_MS = 3 * 24 * 60 * 60 * 1000; // stored responses older than th
 const GH_PERSIST_MAX_CHARS = 4_000_000;       // total stored, so chat history keeps room in storage.local
 const ghMemCache = new Map();        // cache key → { status, body, etag, link, time }
 const ghInflight = new Map();        // cache key → Promise of the same
-// Core quota drives the badge/banner; search has its own (10/min anonymously)
-const ghState = { remaining: null, limit: null, resetAt: 0, badToken: false, search: { remaining: null, resetAt: 0 } };
+// Core quota drives the badge/banner. Search (issues/PRs, 10/min anonymously)
+// and code search (10/min) are separate quotas GitHub reports in the same
+// headers, named by X-RateLimit-Resource; they must never touch the core numbers.
+const ghState = { remaining: null, limit: null, resetAt: 0, badToken: false,
+  search: { remaining: null, resetAt: 0 }, codeSearch: { remaining: null, resetAt: 0 } };
+const otherLimits = {}; // any other resource GitHub names (graphql, …): tracked, never shown
 
 class GitHubError extends Error {
   constructor(message, status, { rateLimited = false, resetAt = 0, resource = "core" } = {}) {
@@ -47,8 +51,16 @@ class GitHubError extends Error {
   }
 }
 
-const resourceFor = (url) => (/^\/search\//.test(new URL(url).pathname) ? "search" : "core");
-const limitsFor = (resource) => (resource === "search" ? ghState.search : ghState);
+function resourceFor(url) {
+  const path = new URL(url).pathname;
+  return path.startsWith("/search/code") ? "code_search" : path.startsWith("/search/") ? "search" : "core";
+}
+function limitsFor(resource) {
+  if (resource === "core") return ghState;
+  if (resource === "search") return ghState.search;
+  if (resource === "code_search") return ghState.codeSearch;
+  return (otherLimits[resource] ??= { remaining: null, resetAt: 0 });
+}
 
 function isRateLimited(resource = "core") {
   const l = limitsFor(resource);
@@ -57,7 +69,7 @@ function isRateLimited(resource = "core") {
 
 function rateLimitError(resource = "core") {
   const { resetAt } = limitsFor(resource);
-  const message = resource === "search"
+  const message = resource !== "core"
     ? `GitHub's search limit is used up for a moment — it resets at ${formatTime(resetAt)}.`
     : `GitHub's hourly request limit is used up — it resets at ${formatTime(resetAt)}.`;
   return new GitHubError(message, 403, { rateLimited: true, resetAt, resource });
