@@ -70,7 +70,8 @@ github-repo-analyzer/
 ├── sidepanel.js        # Side panel UI, GitHub API layer, AI providers, chat, settings
 ├── retrieval.js        # Reading the repo: file tree, raw file reads, chat code retrieval
 ├── insights.js         # Maintainers, health signals & scoring, beginner-issue search
-├── brief.js            # "Start this issue" brief: availability, owners, verify commands, AI plan
+├── brief.js            # "Start this issue" brief: availability, where to start, owners
+├── flow.js             # From clone to PR: setup steps, CI checks, PR rules and template
 ├── pr-brief.js         # "Understand this PR": review state, CI, activity log, diff, AI summary
 ├── test/               # Node tests (see Running Tests) — not needed by Chrome
 ├── package.json        # `npm test` / `npm run check` — no dependencies

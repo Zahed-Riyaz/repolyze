@@ -96,24 +96,24 @@
           <text x="4" y="26" font-family="'SF Mono','Fira Code',Consolas,monospace" font-size="10.5" font-weight="700" fill="#58a6ff">&lt;/&gt;</text>
           <rect x="25" y="21.5" width="5" height="2" rx="1" fill="#3fb950"/>
         </svg>
-        <h2 class="welcome-title">Your co-pilot for open source</h2>
-        <p class="welcome-sub">Open any GitHub repository and this panel fills in automatically.</p>
+        <h2 class="welcome-title">Find an issue you can actually take</h2>
+        <p class="welcome-sub">Open any GitHub repo to start.</p>
         <div class="feature-grid">
           <div class="feature-card">
             <span class="feature-icon"><svg class="icon"><use href="#i-issue"/></svg></span>
-            <div><strong>Contribute</strong>Issues and PRs you can pick up</div>
+            <div><strong>Contribute</strong>Free issues, open PRs</div>
           </div>
           <div class="feature-card">
             <span class="feature-icon"><svg class="icon"><use href="#i-chat"/></svg></span>
-            <div><strong>Ask</strong>Questions answered from the code</div>
+            <div><strong>Ask</strong>Answers from the code</div>
           </div>
           <div class="feature-card">
             <span class="feature-icon"><svg class="icon"><use href="#i-pr"/></svg></span>
-            <div><strong>Briefs</strong>Is it free, where to start, who to ask</div>
+            <div><strong>Briefs</strong>Where to start, who to ask</div>
           </div>
           <div class="feature-card">
             <span class="feature-icon"><svg class="icon"><use href="#i-layers"/></svg></span>
-            <div><strong>Repo</strong>Health, stack &amp; maintainers</div>
+            <div><strong>Repo</strong>Health and maintainers</div>
           </div>
         </div>
       </div>
@@ -142,10 +142,10 @@
           </div>
 
           <h2 class="section-title repo-people-title">Active maintainers</h2>
-          <p class="tab-subtitle">People with maintainer access who replied on issues or PRs in the last 90 days — the best people to ask or tag.</p>
+          <p class="tab-subtitle" title="People with maintainer access who replied on issues or PRs in the last 90 days: the best people to ask or tag">Replied in the last 90 days</p>
           <ul id="maintainers-list" class="people-list"></ul>
           <p id="maintainer-teams" class="teams-line" hidden></p>
-          <h2 class="section-title">Top contributors · all time</h2>
+          <h2 class="section-title">Top contributors <span class="section-title-note">commits, all time</span></h2>
           <ul id="contributors-list" class="people-list"></ul>
         </section>
 
@@ -207,7 +207,7 @@
               <ul id="prs-list" class="row-list"></ul>
               <button id="prs-more" class="btn btn-ghost btn-block issues-more" hidden>Load more</button>
             </section>
-            <p class="brief-note pr-follow-note">Tip: open any issue or pull request on GitHub and its brief opens here.</p>
+            <p class="brief-note pr-follow-note">Open an issue or PR on GitHub and its brief opens here.</p>
           </div>
 
           <!-- "Start this issue" brief — filled in by brief.js -->
@@ -236,18 +236,22 @@
         <!-- Ask Tab (repo-wide chat) -->
         <section id="chat-tab" class="tab-pane">
           <div id="chat-header-bar">
-            <span id="chat-context-label">Reads the repo's source to answer</span>
+            <button id="chat-model" class="chat-model" title="Change the AI provider or model"></button>
             <button id="clear-chat-btn" class="btn btn-ghost btn-xs" title="Clear conversation"><svg class="icon icon-sm"><use href="#i-trash"/></svg>Clear</button>
           </div>
           <div id="chat-history" aria-live="polite"></div>
-          <div id="typing-indicator" style="display:none">
+          <!-- While an answer is on its way: which step, what it's doing, how long -->
+          <div id="typing-indicator" style="display:none" role="status">
             <div class="typing-dots"><span></span><span></span><span></span></div>
-            <span id="typing-status">Thinking…</span>
+            <span id="typing-stage" class="typing-stage">Finding files</span>
+            <span id="typing-status" class="typing-detail"></span>
+            <span id="typing-time" class="typing-time"></span>
           </div>
           <!-- The files being read for the answer on its way -->
           <div id="typing-files" class="msg-sources typing-files" hidden></div>
           <datalist id="repo-files"></datalist>
           <div id="chat-composer">
+            <button id="chat-jump" class="chat-jump" hidden><svg class="icon icon-sm" style="transform:rotate(90deg)"><use href="#i-arrow-right"/></svg>Latest</button>
             <!-- "@" file suggestions -->
             <ul id="file-suggest" class="file-suggest" role="listbox" aria-label="Files" hidden></ul>
             <!-- "About #123" — set from a brief; answers are grounded in that item (ask-focus.js) -->
@@ -255,8 +259,9 @@
             <div id="chat-input-container">
               <textarea id="chat-input" rows="1" placeholder="Ask about this repo…" aria-autocomplete="list" aria-controls="file-suggest"></textarea>
               <button id="send-btn" title="Send" aria-label="Send"><svg class="icon"><use href="#i-send"/></svg></button>
+              <button id="stop-btn" title="Stop (Esc)" aria-label="Stop the answer" hidden><span class="stop-square"></span></button>
             </div>
-            <p class="composer-hint"><kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line · <kbd>@</kbd> to name a file</p>
+            <p class="composer-hint"><kbd>@</kbd> a file · <kbd>⇧</kbd><kbd>⏎</kbd> new line</p>
           </div>
         </section>
 
@@ -268,8 +273,8 @@
           <div id="sp-quickstart-banner" class="sp-quickstart-banner" style="display:none">
             <div class="sp-qb-icon"><svg class="icon"><use href="#i-bolt"/></svg></div>
             <div class="sp-qb-text">
-              <div class="sp-qb-title">New here? Start with Groq — it's free</div>
-              <div class="sp-qb-sub">No credit card · about 2 minutes to set up</div>
+              <div class="sp-qb-title">Start with Groq: it's free</div>
+              <div class="sp-qb-sub">No card · 2 minutes</div>
             </div>
             <a href="https://console.groq.com/keys" target="_blank" class="sp-qb-link">Get key<svg class="icon icon-sm"><use href="#i-arrow-right"/></svg></a>
           </div>
@@ -293,7 +298,7 @@
             </div>
 
             <div id="sp-ollama-section" style="display:none">
-              <div class="sp-ollama-note">No key needed — the model runs on your machine. Pick one below, then run these in a terminal:</div>
+              <div class="sp-ollama-note">No key needed: it runs on your machine.</div>
             </div>
 
             <!-- Model: a short list per provider, or any model ID -->
@@ -312,7 +317,7 @@
           </div>
 
           <div class="card" id="sp-gh-card">
-            <p class="sp-section-label">GitHub <span class="sp-optional">optional · raises the limit from 60 to 5,000 requests/hour</span></p>
+            <p class="sp-section-label">GitHub <span class="sp-optional">optional · 5,000 requests/hour instead of 60</span></p>
 
             <!-- Signed in: who, and Sign out (auth.js) -->
             <div id="sp-gh-account" class="gh-account" hidden></div>
@@ -320,7 +325,7 @@
             <!-- Signed out: device-flow sign-in (auth.js) -->
             <div id="sp-gh-signin">
               <button id="sp-signin-btn" class="btn btn-primary btn-block"><svg class="icon icon-sm"><use href="#i-github"/></svg>Sign in with GitHub</button>
-              <p class="sp-help-links">Read-only: no permissions are requested. You'll approve a one-time code on GitHub.</p>
+              <p class="sp-help-links">Read-only, no permissions asked.</p>
               <div id="sp-signin-flow" class="signin-flow" hidden></div>
             </div>
 
@@ -335,7 +340,7 @@
                 <button id="sp-save-gh-btn" class="btn btn-primary">Save token</button>
                 <button id="sp-clear-gh-btn" class="btn btn-danger">Clear</button>
               </div>
-              <p class="sp-help-links">No scopes are needed for public repos: generate a classic token, leave every box unticked, then paste it above.</p>
+              <p class="sp-help-links">A classic token with no boxes ticked is enough.</p>
             </details>
             <div id="sp-gh-status" class="status-msg"></div>
           </div>
@@ -343,13 +348,13 @@
           <div class="card" id="sp-page-card">
             <label class="switch sp-page-switch">
               <input type="checkbox" id="sp-page-guide" checked><span class="switch-track"></span>
-              <span>Contributor guide on GitHub issue pages <span class="sp-optional">a small card with whether the issue is free and the files it needs</span></span>
+              <span>Guide card on GitHub issue pages <span class="sp-optional">is it free, which files</span></span>
             </label>
           </div>
 
           <!-- Your stack: what issues are matched against (stack.js); shown when signed in -->
           <div class="card" id="sp-stack-card" hidden>
-            <p class="sp-section-label">Your stack <span class="sp-optional">used to sort issues by fit · stays in this browser</span></p>
+            <p class="sp-section-label">Your stack <span class="sp-optional">for Best fit · stays in this browser</span></p>
             <div id="sp-stack-body"></div>
           </div>
         </section>
@@ -360,6 +365,7 @@
   <script src="retrieval.js"></script>
   <script src="insights.js"></script>
   <script src="brief.js"></script>
+  <script src="flow.js"></script>
   <script src="guide.js"></script>
   <script src="pr-brief.js"></script>
   <script src="ask-focus.js"></script>

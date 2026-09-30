@@ -210,16 +210,16 @@ test("Maintainers shows people who replied plus code owners, then all-time contr
   const { panel } = openRepo();
   await panel.fn.fetchMaintainers();
   const html = panel.el("maintainers-list").innerHTML;
-  assert.match(html, /ada[\s\S]*Owner[\s\S]*Code owner[\s\S]*Replied in 1 thread/);
+  assert.match(html, /title="Owner · replied in 1 thread, last 2 days ago · code owner of \*"[\s\S]*>ada<\/a>[\s\S]*person-row-tag">owner<[\s\S]*1 reply · 2 days ago/);
   assert.doesNotMatch(html, /bob/, "a non-maintainer comment doesn't make someone a maintainer");
   assert.match(panel.el("maintainer-teams").innerHTML, /@org\/docs/);
-  assert.match(panel.el("contributors-list").innerHTML, /ada[\s\S]*500 commits[\s\S]*bob/);
+  assert.match(panel.el("contributors-list").innerHTML, /ada[\s\S]*person-row-meta">500<[\s\S]*bob/);
 });
 
 test("a quiet repo is called out on the Maintainers tab", async () => {
   const { panel } = openRepo({ routes: { "/issues/comments": [] }, raw: {} });
   await panel.fn.fetchMaintainers();
-  assert.match(panel.el("maintainers-list").innerHTML, /Nobody with maintainer access replied/);
+  assert.match(panel.el("maintainers-list").innerHTML, /No maintainer replies in 90 days/);
 });
 
 test("the health card shows every signal with its evidence, and n/a where data is thin", async () => {
@@ -228,8 +228,8 @@ test("the health card shows every signal with its evidence, and n/a where data i
   const html = panel.el("health-card").innerHTML;
   for (const label of ["Maintainer response", "Merges outside PRs", "Merge speed", "Recent activity", "Onboarding"]) assert.match(html, new RegExp(label));
   assert.match(html, /n\/a/, "no recent PRs → merge signals unmeasured");
-  assert.match(html, /of 5 signals measured/);
-  assert.match(html, /Last push 1 day ago/);
+  assert.match(html, /· 2 of 5 measured/, "the unmeasured count is said; the evidence is on hover");
+  assert.match(html, /title="Last push 1 day ago[^"]*"[\s\S]*pushed 1 day ago/);
 });
 
 // ── Chat ─────────────────────────────────────────────────────────────────────

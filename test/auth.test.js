@@ -114,7 +114,7 @@ test("the rate-limit banner offers Sign in when it's available, a token otherwis
   withSignIn.panel.run(`ghState.remaining = 3; ghState.limit = 60; ghState.resetAt = Date.now() + 60000`);
   withSignIn.panel.fn.renderRateLimit();
   assert.equal(withSignIn.panel.el("rate-banner-btn").textContent, "Sign in");
-  assert.match(withSignIn.panel.el("rate-banner-sub").textContent, /Signing in raises the limit/);
+  assert.match(withSignIn.panel.el("rate-banner-sub").textContent, /Signing in gives 5,000\/hour/);
 
   const tokenOnly = loadPanel({ fetch: async () => json({}) });
   tokenOnly.run(`AUTH.clientId = ""`);

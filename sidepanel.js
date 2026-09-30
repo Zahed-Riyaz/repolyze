@@ -126,8 +126,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Chat controls
   document.getElementById("send-btn").addEventListener("click", () => { handleChat(); });
+  document.getElementById("stop-btn").addEventListener("click", stopAnswer);
+  document.getElementById("chat-model").addEventListener("click", () => switchTab("settings"));
   const chatInput = document.getElementById("chat-input");
   chatInput.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && activeReply) { e.preventDefault(); stopAnswer(); return; }
     if (fileSuggestKeydown(e)) return;
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); handleChat(); }
   });
@@ -141,6 +144,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   const chatHistory = document.getElementById("chat-history");
   chatHistory.addEventListener("click", handleSourcesClick);
   chatHistory.addEventListener("keydown", handleSourcesKeydown);
+  chatHistory.addEventListener("click", onStarterClick);
+  // Scrolled up while answers keep coming? A button brings you back down
+  const jump = document.getElementById("chat-jump");
+  chatHistory.addEventListener("scroll", () => { jump.hidden = isNearBottom(chatHistory, 120); });
+  jump.addEventListener("click", () => chatHistory.scrollTo({ top: chatHistory.scrollHeight, behavior: "smooth" }));
   document.getElementById("clear-chat-btn").addEventListener("click", clearChat);
   document.getElementById("chat-focus").addEventListener("click", (e) => {
     if (e.target.closest?.(".chat-focus-clear")) setChatFocus(null);
@@ -238,7 +246,7 @@ function switchTab(name) {
   applyView();
   loadTabData(name);
   moveTabIndicator();
-  if (name === "chat") autosizeChatInput();
+  if (name === "chat") { autosizeChatInput(); renderChatHeader(); }
 }
 
 // Settings must stay reachable off-repo, so it overrides the welcome screen
@@ -487,17 +495,16 @@ function renderRateLimit() {
   let title = "", sub = "", action = "";
   if (badToken) {
     title = "GitHub rejected your token";
-    sub = signInAvailable() ? "It may have expired or been revoked — sign in again." : "It may have expired or been revoked — generate a new one on GitHub.";
+    sub = "It may have expired or been revoked.";
     action = signInAvailable() ? "Sign in again" : "Get new token";
   } else if (limited) {
     const mins = Math.max(1, Math.ceil((ghState.resetAt - Date.now()) / 60000));
     title = "GitHub's hourly limit is used up";
-    sub = `Resumes at ${formatTime(ghState.resetAt)} (in ${mins} min).` +
-      (githubToken ? " Anything already loaded still works." : ` ${fix} raises the limit to 5,000/hour.`);
+    sub = `Back at ${formatTime(ghState.resetAt)} (${mins} min)` + (githubToken ? "" : ` · ${fix.toLowerCase()} gives 5,000/hour`);
     action = githubToken ? "" : signInAvailable() ? "Sign in" : "Get token";
   } else if (low && !githubToken) {
     title = `${remaining} GitHub request${remaining === 1 ? "" : "s"} left this hour`;
-    sub = `${fix} raises the limit to 5,000/hour.`;
+    sub = `${fix} gives 5,000/hour`;
     action = signInAvailable() ? "Sign in" : "Get token";
   }
   banner.hidden = !title;
@@ -1196,49 +1203,36 @@ function renderPeople({ maintainers, partialSample, contributors }) {
   if (maintainers.error) {
     mList.innerHTML = errorState(maintainers.error);
   } else if (!maintainers.people.length) {
-    mList.innerHTML = stateItem(`Nobody with maintainer access replied to issues or PRs in the last 90 days${partialSample ? " (in the latest comments)" : ""}. Expect slow responses.`);
+    mList.innerHTML = stateItem(`No maintainer replies in 90 days${partialSample ? " (latest comments)" : ""}. Expect slow responses.`);
   } else {
     mList.innerHTML = maintainers.people.slice(0, 8).map((p, i) => {
-      const chips = [
-        p.role ? `<span class="role-chip">${ROLE_NAMES[p.role] || p.role}</span>` : "",
-        p.codeOwner ? `<span class="role-chip role-owner" title="CODEOWNERS: ${escapeHtml(p.owns.join(", "))}">Code owner</span>` : "",
-      ].join("");
-      const sub = p.threads
-        ? `Replied in ${p.threads} thread${p.threads === 1 ? "" : "s"} · active ${daysAgo(p.lastActive)}`
-        : `Owns ${p.owns.map(o => `<code>${escapeHtml(o)}</code>`).join(", ")}`;
+      const what = p.threads ? `${p.threads} repl${p.threads === 1 ? "y" : "ies"} · ${daysAgo(p.lastActive)}` : "code owner";
+      const hover = [ROLE_NAMES[p.role] || p.role, p.threads ? `replied in ${p.threads} thread${p.threads === 1 ? "" : "s"}, last ${daysAgo(p.lastActive)}` : "",
+        p.codeOwner ? `code owner of ${p.owns.join(", ")}` : ""].filter(Boolean).join(" · ");
       return `
-        <li class="person" style="animation-delay:${i * 25}ms">
-          <img src="${avatarUrl(p.avatar_url, 64)}" class="contributor-avatar" alt="" loading="lazy">
-          <div class="contributor-info">
-            <div class="contributor-top">
-              <a href="${p.html_url}" target="_blank" class="contributor-name">${escapeHtml(p.login)}</a>
-              <span class="role-chips">${chips}</span>
-            </div>
-            <div class="person-sub">${sub}</div>
-          </div>
+        <li class="person-row" style="animation-delay:${i * 25}ms" title="${escapeHtml(hover)}">
+          <img src="${avatarUrl(p.avatar_url, 40)}" class="row-avatar" alt="" loading="lazy">
+          <a href="${p.html_url}" target="_blank" class="person-row-name">${escapeHtml(p.login)}</a>
+          ${p.codeOwner && p.threads ? `<span class="person-row-tag">owner</span>` : ""}
+          <span class="person-row-meta">${what}</span>
         </li>`;
     }).join("");
   }
   teamsEl.hidden = !maintainers.teams?.length;
   if (maintainers.teams?.length) {
-    teamsEl.innerHTML = `${icon("users", "icon-sm")}Code-owner teams: ${maintainers.teams.map(t => `<code>${escapeHtml(t)}</code>`).join(" ")}`;
+    teamsEl.innerHTML = `${icon("users", "icon-sm")}Teams: ${maintainers.teams.map(t => `<code>${escapeHtml(t)}</code>`).join(" ")}`;
   }
 
   const cList = document.getElementById("contributors-list");
   if (contributors.error) { cList.innerHTML = errorState(contributors.error); return; }
-  if (!contributors.length) { cList.innerHTML = stateItem("No contributor data available for this repo."); return; }
+  if (!contributors.length) { cList.innerHTML = stateItem("No contributor data."); return; }
   const top = contributors[0].contributions || 1;
   cList.innerHTML = contributors.slice(0, 8).map((user, i) => `
-    <li class="person" style="animation-delay:${i * 25}ms">
-      <span class="person-rank">${i + 1}</span>
-      <img src="${avatarUrl(user.avatar_url, 64)}" class="contributor-avatar" alt="" loading="lazy">
-      <div class="contributor-info">
-        <div class="contributor-top">
-          <a href="${user.html_url}" target="_blank" class="contributor-name">${escapeHtml(user.login)}</a>
-          <span class="contributor-commits">${formatNumber(user.contributions)} commits</span>
-        </div>
-        <div class="share-bar"><span style="width:${Math.max(3, (user.contributions / top) * 100)}%"></span></div>
-      </div>
+    <li class="person-row" style="animation-delay:${i * 25}ms">
+      <img src="${avatarUrl(user.avatar_url, 40)}" class="row-avatar" alt="" loading="lazy">
+      <a href="${user.html_url}" target="_blank" class="person-row-name">${escapeHtml(user.login)}</a>
+      <span class="share-bar row-share"><span style="width:${Math.max(3, (user.contributions / top) * 100)}%"></span></span>
+      <span class="person-row-meta">${formatNumber(user.contributions)}</span>
     </li>`).join("");
 }
 
@@ -1310,18 +1304,15 @@ function renderHealthCard({ score, factors, measured, signals }) {
       </div>
       <div>
         <div class="health-score-grade">${grade}</div>
-        <div class="health-score-sub">Contributor friendliness · ${measured} of ${factors.length} signals measured</div>
+        <div class="health-score-sub" title="${measured} of ${factors.length} signals could be measured; the rest don't count">Contributor friendliness${measured < factors.length ? ` · ${measured} of ${factors.length} measured` : ""}</div>
       </div>
     </div>
     <ul class="factor-list">
       ${factors.map(f => `
-        <li class="factor${f.points === null ? " is-na" : ""}">
-          <div class="factor-top">
-            <span class="factor-label">${f.label}</span>
-            <span class="factor-pts">${f.points === null ? "n/a" : `${f.points}<span>/${f.max}</span>`}</span>
-          </div>
-          <div class="factor-bar"><span style="width:${f.points === null ? 0 : (f.points / f.max) * 100}%"></span></div>
-          <div class="factor-detail">${escapeHtml(f.detail)}</div>
+        <li class="factor${f.points === null ? " is-na" : ""}" title="${escapeHtml(f.detail)}${f.points === null ? "" : ` · ${f.points}/${f.max} points`}">
+          <span class="factor-label">${f.label}</span>
+          <span class="factor-value">${escapeHtml(f.points === null ? "n/a" : f.value || "")}</span>
+          <span class="factor-bar"><span style="width:${f.points === null ? 0 : (f.points / f.max) * 100}%"></span></span>
         </li>`).join("")}
     </ul>
     ${facts ? `<div class="health-facts">${facts}</div>` : ""}
@@ -1334,13 +1325,28 @@ function renderHealthCard({ score, factors, measured, signals }) {
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
 // `files` (from editing an answer's file list) replaces file selection for this question
+let activeReply = null; // the AbortController of the answer on its way, if any
+
+function stopAnswer() {
+  activeReply?.abort();
+}
+
+// Send ⇄ Stop while an answer is on its way
+function setChatBusy(busy) {
+  const send = document.getElementById("send-btn");
+  send.disabled = busy;
+  send.hidden = busy;
+  document.getElementById("stop-btn").hidden = !busy;
+  document.getElementById("chat-history").classList.toggle("responding", busy);
+}
+
 async function handleChat({ files = null } = {}) {
   const input = document.getElementById("chat-input");
   const query = input.value.trim();
-  if (!query) return;
+  if (!query || activeReply) return;
 
-  if (aiProvider !== "ollama" && !aiApiKey) {
-    appendChatMessage("bot", "AI provider not configured. Open Settings to set it up.", false);
+  if (!aiConfigured()) {
+    appendChatMessage("bot", "Set up an AI provider in Settings first.", false);
     return;
   }
 
@@ -1363,17 +1369,28 @@ async function handleChat({ files = null } = {}) {
 
   const typingEl   = document.getElementById("typing-indicator");
   const chatHistEl = document.getElementById("chat-history");
+  const controller = new AbortController();
+  activeReply = controller;
+  setChatBusy(true);
 
-  // Show typing indicator with entrance animation
+  // Progress: the step (finding → reading → writing), what it's doing, and time taken
+  const started = Date.now();
+  const setStage = (t) => { if (!isStale()) document.getElementById("typing-stage").textContent = t; };
+  const setStatus = (t) => { if (!isStale()) document.getElementById("typing-status").textContent = t; };
+  const tick = () => {
+    const secs = Math.round((Date.now() - started) / 1000);
+    if (!isStale()) document.getElementById("typing-time").textContent = secs >= 2 ? `${secs}s` : "";
+  };
+  const timer = setInterval(tick, 1000);
+  setStage("Finding files");
+  setStatus("");
+  tick();
   typingEl.classList.remove("typing-anim");
   void typingEl.offsetWidth; // force reflow so animation replays
-  document.getElementById("typing-status").textContent = "Reading the repo…";
   typingEl.style.display = "flex";
   typingEl.classList.add("typing-anim");
   const typingFiles = document.getElementById("typing-files");
   typingFiles.hidden = true;
-  chatHistEl.classList.add("responding");
-  document.getElementById("send-btn").disabled = true;
 
   // Pre-create wrapper + bubble; wrapper is appended on the first streaming token
   const botWrap = document.createElement("div");
@@ -1387,10 +1404,24 @@ async function handleChat({ files = null } = {}) {
   botWrap.appendChild(botBubble);
   let streamStarted = false;
   let fullReply = "";
+  let meta = {};
+
+  // The answer (whole, stopped or cut off) is saved and drawn with its sources
+  const finish = (ending = null) => {
+    const botTime = Date.now();
+    const m = { ...meta, ...(ending ? { ending } : {}) };
+    messages.push({ role: "bot", text: fullReply, time: botTime, ...m });
+    saveChatHistory(repo, messages);
+    if (isStale()) return;
+    botBubble.classList.remove("streaming");
+    botBubble.innerHTML = linkifyCitations(renderMarkdown(fullReply), meta.cite || repo, meta.ref, meta.sources);
+    if (!streamStarted) chatHistEl.appendChild(botWrap); // empty reply: no chunk ever arrived
+    appendBotFooter(botWrap, botTime, query, { ...m, text: fullReply });
+    if (isNearBottom(chatHistEl)) chatHistEl.scrollTop = chatHistEl.scrollHeight;
+  };
 
   try {
     const previousQuestion = messages.slice(0, -1).reverse().find(m => m.role === "user")?.text;
-    const setStatus = (t) => { if (!isStale()) document.getElementById("typing-status").textContent = t; };
     // Files behind the previous answer stay in play for follow-up questions
     // about the same thing (not a PR's files, which may not exist on the default branch)
     const lastBot = messages.slice(0, -1).reverse().find(m => m.role === "bot" && m.sources);
@@ -1399,18 +1430,22 @@ async function handleChat({ files = null } = {}) {
     // The files being read show as chips while the answer is prepared
     const onFiles = (list) => {
       if (isStale() || !list.length) return;
-      typingFiles.innerHTML = `<span class="msg-sources-label">Reading ${list.length} file${list.length === 1 ? "" : "s"}</span>` +
-        list.map(f => `<span class="source-chip${FOLLOWED.has(f.via) ? " source-followed" : ""}" title="${escapeHtml(f.path)} — ${VIA_LABEL[f.via] || ""}">${icon("file", "icon-sm")}<span>${escapeHtml(f.path.split("/").pop())}</span></span>`).join("");
+      setStage(`Reading ${list.length} file${list.length === 1 ? "" : "s"}`);
+      typingFiles.innerHTML = list.map(f => `<span class="source-chip${FOLLOWED.has(f.via) ? " source-followed" : ""}" title="${escapeHtml(f.path)} — ${VIA_LABEL[f.via] || ""}">${icon("file", "icon-sm")}<span>${escapeHtml(f.path.split("/").pop())}</span></span>`).join("");
       typingFiles.hidden = false;
     };
     const { context, sources, ref, cite = null, focus = "" } = item
       ? await buildFocusedContext(repo, item, query, previousQuestion, setStatus, previousFiles, { files, onFiles })
       : await buildChatContext(repo, query, previousQuestion, setStatus, { previousFiles, files, onFiles });
+    meta = { sources, ref, ...(cite ? { cite } : {}), ...(tag ? { focus: tag } : {}) };
+    if (controller.signal.aborted) throw new DOMException("Stopped", "AbortError");
     const { system, contents } = buildChatPrompt({
       repo, context, question: query, focus,
       history: messages.slice(0, -1),
       historyBudget: Math.floor(contextBudget() * 0.25),
     });
+    setStage("Writing");
+    setStatus("");
 
     // Stream tokens directly into the bot bubble
     fullReply = await callAIStreaming(contents, (partial) => {
@@ -1426,23 +1461,25 @@ async function handleChat({ files = null } = {}) {
       }
       botBubble.innerHTML = renderMarkdown(partial) + '<span class="streaming-cursor"></span>';
       if (isNearBottom(chatHistEl)) chatHistEl.scrollTop = chatHistEl.scrollHeight;
-    }, { system });
-
-    const botTime = Date.now();
-    const meta = { sources, ref, ...(cite ? { cite } : {}), ...(tag ? { focus: tag } : {}) };
-    messages.push({ role: "bot", text: fullReply, time: botTime, ...meta });
-    saveChatHistory(repo, messages);
-    if (isStale()) return;
-
-    // Streaming done — remove glow, stamp time, render final content
-    botBubble.classList.remove("streaming");
-    botBubble.innerHTML = linkifyCitations(renderMarkdown(fullReply), cite || repo, ref, sources);
-    if (!streamStarted) chatHistEl.appendChild(botWrap); // empty reply: no chunk ever arrived
-    appendBotFooter(botWrap, botTime, query, { ...meta, text: fullReply });
-    if (isNearBottom(chatHistEl)) chatHistEl.scrollTop = chatHistEl.scrollHeight;
+      else document.getElementById("chat-jump").hidden = false;
+    }, { system, signal: controller.signal });
+    finish();
   } catch (err) {
     const ollamaErr = err.message === "OLLAMA_NOT_RUNNING" || err.message === "OLLAMA_CORS";
-    if (ollamaErr) {
+    if (controller.signal.aborted && !fullReply) {
+      // Stopped before a word arrived: the question goes back in the box
+      messages.pop();
+      if (!isStale()) {
+        const userWraps = chatHistEl.querySelectorAll(".msg-wrap-user");
+        userWraps[userWraps.length - 1]?.remove();
+        input.value = query;
+        autosizeChatInput();
+        renderChatStarters();
+      }
+    } else if (controller.signal.aborted || fullReply) {
+      // Stopped, or cut off mid-stream: keep what arrived so turns stay paired
+      finish(controller.signal.aborted ? "stopped" : "cut off");
+    } else if (ollamaErr) {
       // Errors happen before streaming starts — clean up and show guide
       messages.pop();
       if (!isStale()) {
@@ -1450,29 +1487,27 @@ async function handleChat({ files = null } = {}) {
         userWraps[userWraps.length - 1]?.remove(); // remove user bubble
         showOllamaGuide(err.message, query);
       }
-    } else if (fullReply) {
-      // Mid-stream error: keep the partial answer so user/bot turns stay paired
-      messages.push({ role: "bot", text: fullReply, time: Date.now() });
-      saveChatHistory(repo, messages);
-      if (!isStale()) botBubble.classList.remove("streaming");
     } else {
-      // Error before first token — show error bubble
+      // Error before first token — an error bubble with Try again
       const errText = err.rateLimited ? err.message : `Error: ${err.message}`;
-      messages.push({ role: "bot", text: errText, error: true });
+      const time = Date.now();
+      messages.push({ role: "bot", text: errText, error: true, time });
       saveChatHistory(repo, messages);
-      if (!isStale()) appendChatMessage("bot", errText, false);
+      if (!isStale()) appendChatMessage("bot", errText, false, true, time, query, { error: true });
     }
   } finally {
+    clearInterval(timer);
+    if (activeReply === controller) activeReply = null;
     typingEl.style.display = "none";
     typingFiles.hidden = true;
-    chatHistEl.classList.remove("responding");
-    document.getElementById("send-btn").disabled = false;
+    setChatBusy(false);
+    if (!isStale()) renderChatHeader();
   }
 }
 
 // Re-asks the question behind `botWrap`; `opts.files` re-runs it on an edited file list
 async function regenerateResponse(botWrap, query, opts = {}) {
-  if (document.getElementById("send-btn").disabled) return; // a reply is already streaming
+  if (activeReply) return; // a reply is already on its way
 
   const chatHistEl = document.getElementById("chat-history");
   const allMsgWraps = Array.from(chatHistEl.querySelectorAll(".msg-wrap"));
@@ -1521,7 +1556,7 @@ function appendChatMessage(role, text, save = true, animate = true, time = null,
   }
 
   const msg = document.createElement("div");
-  msg.className = `chat-msg chat-msg-${role}${animate ? " msg-entering" : ""}`;
+  msg.className = `chat-msg chat-msg-${role}${meta.error ? " chat-msg-error" : ""}${animate ? " msg-entering" : ""}`;
   if (role === "bot") {
     msg.innerHTML = currentRepo && meta.sources?.length
       ? linkifyCitations(renderMarkdown(text), meta.cite || currentRepo, meta.ref, meta.sources)
@@ -1817,10 +1852,26 @@ function appendBotFooter(wrap, time, query, meta = {}) {
     t.textContent = formatTime(time);
     actions.appendChild(t);
   }
+  if (meta.ending) {
+    const note = document.createElement("span");
+    note.className = "msg-ending";
+    note.textContent = meta.ending === "stopped" ? "Stopped" : "Cut off";
+    actions.appendChild(note);
+  }
+  if (meta.text && !meta.error) {
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "regen-btn";
+    copyBtn.innerHTML = `${icon("copy", "icon-sm")}Copy`;
+    copyBtn.addEventListener("click", () => navigator.clipboard.writeText(meta.text).then(() => {
+      copyBtn.innerHTML = `${icon("check", "icon-sm")}Copied`;
+      setTimeout(() => { copyBtn.innerHTML = `${icon("copy", "icon-sm")}Copy`; }, 1500);
+    }));
+    actions.appendChild(copyBtn);
+  }
   if (query) {
     const regenBtn = document.createElement("button");
-    regenBtn.className = "regen-btn";
-    regenBtn.innerHTML = `${icon("refresh", "icon-sm")}Regenerate`;
+    regenBtn.className = `regen-btn${meta.error || meta.ending ? " is-shown" : ""}`;
+    regenBtn.innerHTML = `${icon("refresh", "icon-sm")}${meta.error ? "Try again" : "Regenerate"}`;
     regenBtn.addEventListener("click", () => regenerateResponse(wrap, query));
     actions.appendChild(regenBtn);
   }
@@ -1833,43 +1884,72 @@ async function clearChat() {
   const key = `chat_${currentRepo?.owner}_${currentRepo?.repo}`;
   await chrome.storage.local.remove([key]);
   renderChatStarters();
+  renderChatHeader();
 }
 
 // ── Chat starter suggestions ──────────────────────────────────────────────────
 // Shows clickable prompt chips when the chat history is empty.
 // Clicking one fills the input and auto-sends, removing the starters.
+const PROVIDER_NAMES = { groq: "Groq", gemini: "Gemini", ollama: "Ollama", openai: "OpenAI", anthropic: "Anthropic" };
+
+// The Ask header: which model answers (click to change), and Clear when there's something to clear
+function renderChatHeader() {
+  const btn = document.getElementById("chat-model");
+  const ok = aiConfigured();
+  btn.innerHTML = ok
+    ? `<span class="chat-model-dot"></span>${PROVIDER_NAMES[aiProvider] || aiProvider} · ${escapeHtml(modelLabel(aiProvider))}`
+    : `${icon("alert", "icon-sm")}No AI provider · set one up`;
+  btn.classList.toggle("is-warn", !ok);
+  document.getElementById("clear-chat-btn").hidden = !chatMessages.length;
+}
+
+// Suggestions for an empty chat, shaped by this repo (repoStarters, ask-focus.js):
+// drawn at once from what's loaded, then again when the file tree arrives
 function renderChatStarters() {
-  if (chatMessages.length > 0) return;
-  if (document.getElementById("chat-starters")) return; // already shown
+  if (chatMessages.length > 0 || !currentRepo) return;
+  const history = document.getElementById("chat-history");
+  let el = document.getElementById("chat-starters");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "chat-starters";
+    el.className = "chat-starters";
+    history.appendChild(el);
+  }
+  const repo = currentRepo;
+  const draw = (paths) => {
+    if (!isCurrentRepo(repoKey(repo)) || chatMessages.length || el.isConnected === false) return; // gone once a question is asked
+    const starters = repoStarters({ repo, paths, issues: [...issueIndex.values()] });
+    el.innerHTML = `
+      <svg class="icon chat-starters-icon" aria-hidden="true"><use href="#i-compass"/></svg>
+      <p class="chat-starters-title">Ask about ${escapeHtml(repo.repo)}</p>
+      ${aiConfigured()
+        ? `<p class="chat-starters-label">Answered from its source, with links to the lines.</p>
+           <div class="chat-starters-grid">${starters.map(st => st.issue
+             ? `<button class="starter-chip starter-issue" data-issue="${st.issue}" title="${escapeHtml(`#${st.issue} ${st.title}`)}">${icon("issue", "icon-sm")}<span>${escapeHtml(st.label)}</span></button>`
+             : `<button class="starter-chip" data-q="${escapeHtml(st.q)}"><span>${escapeHtml(st.label)}</span></button>`).join("")}</div>`
+        : `<p class="chat-starters-label">Groq and Gemini are free.</p>
+           <button class="btn btn-primary chat-setup-btn">Set up an AI provider</button>`}`;
+  };
+  draw([]);
+  getRepoTree(repo).then(t => draw(t.entries.filter(e => e.type === "blob").map(e => e.path))).catch(() => {});
+}
 
-  const el = document.createElement("div");
-  el.id = "chat-starters";
-  el.className = "chat-starters";
-  const starters = [
-    ["What does this repo do and who is it for?", "What does this repo do?"],
-    ["How do I set up this project locally from scratch?", "How do I set it up locally?"],
-    ["What are the easiest issues I could work on as a new contributor?", "Which issues suit a newcomer?"],
-    ["Walk me through the project structure and the most important files", "Walk me through the structure"],
-    ["Where is the main entry point, and what happens at startup?", "What happens at startup?"],
-  ];
-  el.innerHTML = `
-    <svg class="icon chat-starters-icon" aria-hidden="true"><use href="#i-compass"/></svg>
-    <p class="chat-starters-title">Ask about ${escapeHtml(currentRepo?.repo || "this repo")}</p>
-    <p class="chat-starters-label">Answers come from its actual source files, with links to the lines they cite.</p>
-    <div class="chat-starters-grid">
-      ${starters.map(([q, label]) => `<button class="starter-chip" data-q="${escapeHtml(q)}">${label}${icon("arrow-right", "icon-sm")}</button>`).join("")}
-    </div>
-  `;
-
-  document.getElementById("chat-history").appendChild(el);
-
-  el.querySelectorAll(".starter-chip").forEach(btn => {
-    btn.addEventListener("click", () => {
-      el.remove();
-      document.getElementById("chat-input").value = btn.dataset.q;
-      handleChat();
-    });
-  });
+// A starter: ask it, or (for an issue) open its brief and ask where to start
+async function onStarterClick(e) {
+  if (e.target.closest?.(".chat-setup-btn")) { switchTab("settings"); return; }
+  const btn = e.target.closest?.(".starter-chip");
+  if (!btn || activeReply) return;
+  if (btn.dataset.issue) {
+    btn.disabled = true;
+    const number = Number(btn.dataset.issue);
+    const brief = await showIssueBrief(issueIndex.get(number) || number);
+    btn.disabled = false;
+    if (brief) askAboutBrief("issue", 1);
+    return;
+  }
+  document.getElementById("chat-starters")?.remove();
+  document.getElementById("chat-input").value = btn.dataset.q;
+  handleChat();
 }
 
 // Ollama isn't running (or is blocking the extension): the steps to fix it for
@@ -1887,11 +1967,11 @@ function showOllamaGuide(reason, retryQuery) {
     card.innerHTML = `
       <div class="ollama-guide-header">${icon("alert")}${isCors ? "Ollama is blocking the extension" : "Ollama isn't running"}</div>
       <p class="ollama-guide-desc">${isCors
-        ? "Ollama is running but blocking requests from the extension. Quit it, then start it again allowing Chrome extensions:"
-        : `Run these in a terminal, then press Send again:`}</p>
+        ? "Quit it, then start it again allowing Chrome extensions:"
+        : `Run these in a terminal, then Send again:`}</p>
       ${ollamaSetupHtml({ model, os, steps })}
-      ${!isCors ? `<p class="ollama-guide-link">Not installed? Get it at <a href="https://ollama.com" target="_blank">ollama.com</a>, or see Settings for the install command.</p>` : ""}
-      <p class="ollama-guide-ready">Your message is back in the box below — press Send once Ollama is up.</p>`;
+      ${!isCors ? `<p class="ollama-guide-link">Not installed? <a href="https://ollama.com" target="_blank">ollama.com</a></p>` : ""}
+      <p class="ollama-guide-ready">Your message is kept below.</p>`;
   };
   draw(detectOS());
   card.addEventListener("click", (e) => handleOllamaSetupClick(e, draw));
@@ -1935,9 +2015,10 @@ async function loadChatHistory() {
         if (chatMessages[j].role === "user") { query = chatMessages[j].text; break; }
       }
     }
-    appendChatMessage(m.role, m.text, false, false, m.time || null, query, { sources: m.sources, ref: m.ref, cite: m.cite, focus: m.focus });
+    appendChatMessage(m.role, m.text, false, false, m.time || null, query, { sources: m.sources, ref: m.ref, cite: m.cite, focus: m.focus, error: m.error, ending: m.ending });
   });
   renderChatStarters(); // shows only if chatMessages is empty
+  renderChatHeader();
   historyEl.scrollTop = historyEl.scrollHeight;
 }
 
@@ -2051,6 +2132,7 @@ function initSettingsTab() {
 
     // Quick Start banner: show only when nothing is configured
     if (banner) banner.style.display = configured ? "none" : "flex";
+    renderChatHeader();
   }
 
   // Initialise UI from current globals
@@ -2319,7 +2401,8 @@ async function callGeminiStreaming(contents, onChunk, opts = {}) {
       {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": aiApiKey },
-        body: JSON.stringify(providerBody("gemini", contents, opts))
+        body: JSON.stringify(providerBody("gemini", contents, opts)),
+        signal: opts.signal
       }
     );
   } catch {
@@ -2363,7 +2446,8 @@ async function callGroqStreaming(contents, onChunk, opts = {}) {
     response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${aiApiKey}` },
-      body: JSON.stringify(providerBody("groq", contents, opts))
+      body: JSON.stringify(providerBody("groq", contents, opts)),
+      signal: opts.signal
     });
   } catch { throw new Error("Could not reach Groq. Check your internet connection."); }
   if (!response.ok) {
@@ -2381,7 +2465,8 @@ async function callOpenAIStreaming(contents, onChunk, opts = {}) {
     response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${aiApiKey}` },
-      body: JSON.stringify(providerBody("openai", contents, opts))
+      body: JSON.stringify(providerBody("openai", contents, opts)),
+      signal: opts.signal
     });
   } catch { throw new Error("Could not reach OpenAI. Check your internet connection."); }
   if (!response.ok) {
@@ -2430,7 +2515,8 @@ async function callAnthropicStreaming(contents, onChunk, opts = {}) {
         "anthropic-version": "2023-06-01",
         "anthropic-dangerous-direct-browser-access": "true"
       },
-      body: JSON.stringify(providerBody("anthropic", contents, opts))
+      body: JSON.stringify(providerBody("anthropic", contents, opts)),
+      signal: opts.signal
     });
   } catch { throw new Error("Could not reach Anthropic. Check your internet connection."); }
   if (!response.ok) {
@@ -2471,7 +2557,8 @@ async function callOllamaStreaming(contents, onChunk, opts = {}) {
   const ollamaFetch = () => fetch("http://localhost:11434/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal: opts.signal
   });
 
   let response;

@@ -131,7 +131,7 @@ test("the page card only runs on issue pages", () => {
 test("the page card waits to be asked when signed out, and reads verdict → where to start → owners when ready", () => {
   const c = loadContent();
   const page = { owner: "o", repo: "r", number: 7 };
-  assert.match(c.guideCardHtml(page, { phase: "idle", open: true }), /Uses a few GitHub requests[\s\S]*data-act="load">Show/);
+  assert.match(c.guideCardHtml(page, { phase: "idle", open: true }), /Is it free, where to start, who owns it[\s\S]*data-act="load">Show/);
   assert.doesNotMatch(c.guideCardHtml(page, { phase: "idle", open: false }), /class="body"/, "collapsed: just the header");
   const data = {
     ref: "main", availability: { status: "free", verdict: "Looks free", advice: "Leave a short comment first.", reasons: ["No assignee, linked PR or recent claim"] },
@@ -144,7 +144,7 @@ test("the page card waits to be asked when signed out, and reads verdict → whe
   assert.match(html, /class="verdict tone-good">Looks free/);
   assert.match(html, /class="why-line">No assignee, linked PR or recent claim<\/p>\s*<p class="next">→ Leave a short comment first\./);
   assert.match(html, /Where to start<\/h3><span class="stack">TypeScript · CLI<\/span>/);
-  assert.match(html, /href="https:\/\/github\.com\/o\/r\/blob\/main\/src\/x\/a%20b\.ts"[^>]*>a b\.ts<\/a>\s*<span class="why">named in the issue<\/span>\s*<span class="dir"[^>]*>src\/x</);
+  assert.match(html, /href="https:\/\/github\.com\/o\/r\/blob\/main\/src\/x\/a%20b\.ts"[^>]*>a b\.ts<\/a>\s*<span class="why">named in the issue<\/span>\s*<\/li>/, "one line per file; the folder is in the link's title");
   assert.match(html, /<details><summary>1 guess by file name<\/summary>[\s\S]*conf-low/, "guesses folded when there's a real signal");
   assert.match(html, /Who owns it[\s\S]*title="@o\/maintainers">maintainers<\/span><span class="why">2 files/);
   assert.match(c.guideCardHtml(page, { phase: "ready", open: true, data: { ...data, start: [] } }), /Nothing in the issue or its PRs points at a file yet[\s\S]*<details open>/, "only guesses → shown open");

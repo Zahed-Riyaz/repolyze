@@ -110,12 +110,12 @@ test("ciRunCommands reads single-line and block run steps", () => {
     ["npm ci", "npm run lint", 'echo "starting"', "npm test -- --coverage", "cd docs", "echo ${{ secrets.TOKEN }}", "make build"]);
 });
 
-test("verifyCommands keeps real build/test commands from CI, then fills gaps from package.json", () => {
+test("verifyCommands keeps real build/test commands from CI (installs are setup, not checks), then fills gaps from package.json", () => {
   const cmds = plain(pure.verifyCommands({
     workflowText: WORKFLOW, workflowPath: ".github/workflows/ci.yml",
     packageJson: JSON.stringify({ scripts: { test: "jest", lint: "eslint .", typecheck: "tsc" } }), packageManager: "pnpm",
   }));
-  assert.deepEqual(cmds.map(c => c.cmd), ["npm ci", "npm run lint", "npm test -- --coverage", "make build", "pnpm run typecheck"]);
+  assert.deepEqual(cmds.map(c => c.cmd), ["npm run lint", "npm test -- --coverage", "make build", "pnpm run typecheck"]);
   assert.equal(cmds[0].from, ".github/workflows/ci.yml");
   assert.equal(cmds.at(-1).from, "package.json");
 });
@@ -147,7 +147,9 @@ test("briefMarkdown produces a shareable summary", () => {
   assert.match(md, /\*\*Looks free\*\*/);
   assert.match(md, /## Files it needs\n- src\/launch\/timer\.ts \(named in the issue\)/);
   assert.match(md, /- @ada — code owner of src\/launch\/timer\.ts/);
-  assert.match(md, /## Run before opening a PR\n```bash\nnpm test\n```/);
+  assert.match(md, /## Set up\n```bash\ngit clone https:\/\/github\.com\/YOUR-USERNAME\/r\.git && cd r\ngit checkout -b issue\/7-countdown-drifts-windows\n```/);
+  assert.match(md, /## Before you push\n```bash\nnpm test\n```/);
+  assert.match(md, /## Open the PR[\s\S]*\*\*Title:\*\* Countdown drifts on Windows/);
 });
 
 // ── Flow ─────────────────────────────────────────────────────────────────────
@@ -176,23 +178,26 @@ function briefPanel({ ai = true, comments = [], timeline = [] } = {}) {
   return { gh, panel, aiCalls: () => aiCalls };
 }
 
-test("the brief shows availability, likely files, code owners and verify commands for 2 API requests — and no AI", async () => {
+test("the brief shows availability, likely files, code owners and the steps from clone to PR for 3 API requests — and no AI", async () => {
   const { gh, panel, aiCalls } = briefPanel({ comments: [comment("bob", "MEMBER", "Timer bug, see tick()", 2)] });
   await panel.fn.showIssueBrief({ ...baseIssue, title: "Timer drifts during launch countdown" });
 
   const body = panel.el("brief-body").innerHTML;
-  assert.match(body, /class="verdict verdict-free"[\s\S]*<strong>Looks free<\/strong>[\s\S]*class="verdict-next"[\s\S]*Leave a short comment/);
-  assert.match(body, /Where to start[\s\S]*Nothing in the issue or its PRs points at a file yet[\s\S]*<details class="file-guesses" open>[\s\S]*href="https:\/\/github\.com\/o\/r\/blob\/HEAD\/src\/launch\/timer\.ts"[\s\S]*<code>timer\.ts<\/code>[\s\S]*name matches the issue[\s\S]*file-dir[^>]*>src\/launch</, "only guesses → shown open, labelled as guesses");
-  assert.match(body, /Run before opening a PR[\s\S]*npm test/);
-  assert.match(body, /From <code>\.github\/workflows\/test\.yml<\/code>/);
+  assert.match(body, /class="verdict verdict-free"[\s\S]*<strong>Looks free<\/strong>[\s\S]*class="verdict-next"[\s\S]*Comment that you'd like to take it/);
+  assert.match(body, /Where to start[\s\S]*Nothing in the issue or its PRs points at a file yet[\s\S]*<details class="file-guesses" open>[\s\S]*href="https:\/\/github\.com\/o\/r\/blob\/HEAD\/src\/launch\/timer\.ts"[^>]*title="src\/launch\/timer\.ts"><code>timer\.ts<\/code>[\s\S]*name matches the issue/, "only guesses → shown open, labelled as guesses; one line, the path on hover");
+  assert.match(body, /<details class="flow-step">\s*<summary class="flow-label"><span class="flow-num">1<\/span>Set up<span class="flow-sum">3 commands<\/span>/, "steps fold to a one-line summary");
+  assert.match(body, /From clone to pull request[\s\S]*Set up[\s\S]*npm ci[\s\S]*Before you push[\s\S]*npm test[\s\S]*Open the PR/);
+  assert.match(body, /What CI runs · from <code>\.github\/workflows\/test\.yml<\/code>/);
   const people = panel.el("brief-people").innerHTML;
-  assert.match(people, /github\.com\/ada"[^>]*>ada<\/a>[\s\S]*Code owner · timer\.ts/);
-  assert.match(people, /bob[\s\S]*replied 1× here/);
+  assert.match(people, /class="person-chip" href="https:\/\/github\.com\/ada"[^>]*title="@ada\nCode owner · timer\.ts[\s\S]*<span class="person-chip-name">ada<\/span><span class="person-chip-why">owner<\/span>/);
+  assert.match(people, /<span class="person-chip-name">bob<\/span><span class="person-chip-why">replied 1×<\/span>/);
   assert.equal(aiCalls(), 0, "briefs never call the AI");
 
   const issueCalls = gh.apiCalls.filter(u => u.startsWith("/issues/7/"));
   assert.deepEqual(issueCalls.sort(), ["/issues/7/comments?per_page=100", "/issues/7/timeline?per_page=100"]);
-  assert.ok(gh.apiCalls.length <= 4, `API calls: ${gh.apiCalls.join(", ")}`); // + repo metadata + tree, shared with other tabs
+  // + recent merged PRs (for title conventions; shared with the health score), repo metadata and tree (shared with other tabs)
+  assert.ok(gh.apiCalls.includes("/pulls?state=closed&sort=updated&direction=desc&per_page=50"));
+  assert.ok(gh.apiCalls.length <= 5, `API calls: ${gh.apiCalls.join(", ")}`);
 });
 
 test("the brief hands AI questions to Ask: suggestions and your own question", async () => {

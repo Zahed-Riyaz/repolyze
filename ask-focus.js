@@ -150,3 +150,43 @@ async function buildFocusedContext(repo, item, question, previousQuestion, onSta
   });
   return { context: `${issueFocusContext(item.brief)}\n\n${retrieved.context}`, sources: retrieved.sources, ref: retrieved.ref, cite: null, focus };
 }
+
+// ── Starter questions ────────────────────────────────────────────────────────
+// Shaped by the repo on screen, from data already loaded (the file tree and
+// the issue list): its biggest area of code, its entry point, a free issue.
+// → [{ label, q }] or { label, issue } (opens that issue's brief, then asks)
+const ENTRY_FILE = /^(main|index|cli|app|server|__main__)\.(ts|tsx|js|mjs|py|go|rs)$/;
+const CONTAINER_DIRS = new Set(["packages", "apps", "crates", "libs", "modules", "services", "plugins", "src", "lib", "pkg", "internal", "cmd"]);
+
+function repoStarters({ repo, paths = [], issues = [] }) {
+  const code = paths.filter(p => isCodeCandidate({ path: p, type: "blob", size: 0 }) && !TEST_PATH.test(p) && !NOISE_PATH.test(p) && !/\.(md|mdx|ya?ml|toml)$/i.test(p));
+  const out = [{ label: `What does ${repo.repo} do?`, q: "What does this repo do and who is it for?" }];
+
+  // A free issue that invites newcomers, else the first unassigned one
+  const open = issues.filter(i => i.state !== "closed" && !i.assignee && !i.assignees?.length && !i.pull_request);
+  const invited = open.find(i => i.labels?.some(l => ["good-first-issue", "help-wanted"].some(f => labelMatchesFilter(l.name || l, f))));
+  const issue = invited || open[0];
+  if (issue) out.push({ label: `Where do I start on #${issue.number}?`, issue: issue.number, title: issue.title });
+
+  // The area with the most code: one level into packages/, apps/, src/…
+  const areas = new Map();
+  for (const p of code) {
+    const parts = p.split("/");
+    if (parts.length < 2) continue;
+    const area = CONTAINER_DIRS.has(parts[0]) && parts.length > 2 ? `${parts[0]}/${parts[1]}` : parts[0];
+    areas.set(area, (areas.get(area) || 0) + 1);
+  }
+  const [area] = [...areas].sort((a, b) => b[1] - a[1])[0] || [];
+  if (area) out.push({ label: `How does ${area} work?`, q: `Explain how ${area}/ is organised: its main files, what each one does, and how they fit together.` });
+
+  // The entry point: the shallowest main/index/cli file
+  const entry = code.filter(p => ENTRY_FILE.test(p.split("/").pop()))
+    .sort((a, b) => a.split("/").length - b.split("/").length || (/cli|main/.test(b) - /cli|main/.test(a)))[0];
+  if (entry) out.push({ label: `What happens in ${entry.split("/").pop()}?`, q: `Walk me through ${entry}: what happens when it runs, and which files it calls into.` });
+
+  out.push({ label: "How do I set it up locally?", q: "How do I set up this project locally from scratch, and run its tests?" });
+  if (out.length < 5 && paths.some(p => TEST_PATH.test(p))) {
+    out.push({ label: "How are tests written here?", q: "How are tests organised and run here? Point me to a typical test I could copy." });
+  }
+  return out.slice(0, 5);
+}

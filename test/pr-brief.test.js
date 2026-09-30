@@ -51,7 +51,7 @@ const green = { passed: 3, failed: [], pending: [], total: 3 };
 test("prStatus: approved with green checks is ready to merge", () => {
   const s = pure.prStatus(basePr, [reviewed("ada", "approved", 1)], green, NOW);
   assert.equal(s.status, "ready");
-  assert.equal(s.verdict, "Approved — ready to merge");
+  assert.equal(s.verdict, "Ready to merge");
   assert.ok(s.reasons.some(r => /Approved by @ada/.test(r.text)) && s.reasons.some(r => /All 3 checks passed/.test(r.text)));
 });
 
@@ -60,8 +60,8 @@ test("prStatus: changes requested, then updated after review", () => {
   assert.equal(waiting.status, "changes");
   const updated = pure.prStatus(basePr, [reviewed("bob", "changes_requested", 3), committed(2, "address review"), committed(1, "tests")], green, NOW);
   assert.equal(updated.status, "review");
-  assert.equal(updated.verdict, "Updated — waiting on re-review");
-  assert.ok(updated.reasons.some(r => r.text === "2 commits pushed since — waiting on re-review"));
+  assert.equal(updated.verdict, "Waiting on re-review");
+  assert.ok(updated.reasons.some(r => r.text === "2 commits pushed since"));
 });
 
 test("prStatus: failing checks or conflicts block it; drafts stay drafts", () => {
@@ -76,9 +76,9 @@ test("prStatus: pending reviewers, no reviews and staleness are reported", () =>
   const s = pure.prStatus({ ...basePr, updated_at: iso(40), requested_reviewers: [user("ada")], requested_teams: [{ slug: "core" }] }, [], null, NOW);
   assert.equal(s.status, "review");
   const texts = s.reasons.map(r => r.text);
-  assert.ok(texts.includes("Waiting on review from @ada, @core"));
+  assert.ok(texts.includes("Waiting on @ada, @core"));
   assert.ok(texts.includes("No reviews yet"));
-  assert.ok(texts.some(t => /^No activity for 40 days$/.test(t)));
+  assert.ok(texts.some(t => /^Idle 40 days$/.test(t)));
   const approvedRunning = pure.prStatus(basePr, [reviewed("ada", "approved", 1)], { passed: 1, failed: [], pending: ["e2e"], total: 2 }, NOW);
   assert.equal(approvedRunning.status, "review", "not ready while checks are still running");
 });
@@ -161,14 +161,14 @@ test("the PR brief shows status, activity, files with owners and people for 5 AP
   const { gh, panel } = prPanel();
   await panel.fn.showPrBrief(basePr);
   const body = panel.el("pr-brief-body").innerHTML;
-  assert.match(body, /availability-maybe[\s\S]*Updated — waiting on re-review/);
+  assert.match(body, /class="verdict verdict-maybe"[\s\S]*<strong>Waiting on re-review<\/strong>[\s\S]*class="verdict-why">[^<]*@ada requested changes/, "reasons as one line");
   assert.match(body, /@ada requested changes/);
-  assert.match(body, /Waiting on review from @bob/);
+  assert.match(body, /Waiting on @bob/);
   assert.match(body, /All 1 checks passed/);
   assert.match(body, /<code>dev:fix-drift<\/code> → <code>main<\/code>/);
   assert.match(body, /Closes #1842/);
-  assert.match(body, /src\/launch\/timer\.ts<\/span>[\s\S]*#i-comment"\/><\/svg>1 <span class="add">\+30<\/span>[\s\S]*owned by @ada/);
-  assert.match(body, /ada[\s\S]*requested changes[\s\S]*bob[\s\S]*review requested/);
+  assert.match(body, /<li class="pr-file" title="src\/launch\/timer\.ts\nOwned by @ada">[\s\S]*timer\.ts<\/span><\/span>[\s\S]*#i-comment"\/><\/svg>1 <span class="add">\+30<\/span>/, "one line per file, owners on hover");
+  assert.match(body, /person-chip-name">ada<\/span><span class="person-chip-why tone-bad">requested changes[\s\S]*person-chip-name">bob<\/span><span class="person-chip-why tone-info">requested/);
   assert.match(body, /What it touches[\s\S]*<strong>TypeScript<\/strong> <code>src\/launch\/timer\.ts<\/code>/, "the stack of the files it actually changes");
   const prCalls = gh.apiCalls.filter(u => /\/(pulls|issues|commits)\//.test(u));
   assert.equal(prCalls.length, 5, prCalls.join("\n"));
@@ -181,7 +181,7 @@ test("the PR brief offers Ask suggestions instead of generating anything", async
   assert.match(panel.el("pr-brief-body").innerHTML, /Ask about this PR[\s\S]*data-kind="pr" data-ask="0">Summarise the PR[\s\S]*still open\?[\s\S]*How could I help\?/);
   const noAI = prPanel({ ai: false });
   await noAI.panel.fn.showPrBrief(basePr);
-  assert.match(noAI.panel.el("pr-brief-body").innerHTML, /Updated — waiting on re-review[\s\S]*Add an AI provider/);
+  assert.match(noAI.panel.el("pr-brief-body").innerHTML, /Waiting on re-review[\s\S]*Add an AI provider/);
 });
 
 test("reopening a PR brief is instant and a stale one never renders into another repo", async () => {
