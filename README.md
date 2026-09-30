@@ -208,7 +208,7 @@ async function callAIStreaming(contents, onChunk) {
 | **Gemini** | `generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash` | `x-goog-api-key` header | `gemini-2.5-flash` | Free tier |
 | **OpenAI** | `api.openai.com/v1/chat/completions` | `Authorization: Bearer {key}` | `gpt-4o-mini` | Pay-as-you-go |
 | **Anthropic** | `api.anthropic.com/v1/messages` | `x-api-key: {key}` | `claude-haiku-4-5-20251001` | Pay-as-you-go |
-| **Ollama** | `localhost:11434/api/chat` | None (local) | Configurable (default: `llama3.2`) | Free |
+| **Ollama** | `localhost:11434/api/chat` | None (local) | Configurable (default: `llama3.1:8b`, 128k-token context) | Free |
 
 ### Message Format Conversion
 
@@ -244,7 +244,7 @@ Ollama is the only provider that runs locally and requires manual setup. The ext
 
 **Setup guide** — if Ollama is not running (or is blocking the extension's origin), the chat shows a card with copy-paste commands for macOS/Linux and Windows, and puts your message back in the input box so you can resend once Ollama is up.
 
-**Auto-pull** — if Ollama is running but the requested model is not downloaded (HTTP 404 from `/api/chat`), the extension streams `POST /api/pull` and shows download progress in the typing indicator (e.g. *"Downloading llama3.2… 47%"*). Once complete, the original chat request is retried.
+**Auto-pull** — if Ollama is running but the requested model is not downloaded (HTTP 404 from `/api/chat`), the extension streams `POST /api/pull` and shows download progress in the typing indicator (e.g. *"Downloading llama3.1:8b… 47%"*). Once complete, the original chat request is retried.
 
 ---
 
@@ -296,7 +296,7 @@ Response and merges carry the most weight because a timely reply and a realistic
 |---|---|---|
 | `aiProvider` | `string` | `"groq"` \| `"gemini"` \| `"ollama"` \| `"openai"` \| `"anthropic"` |
 | `aiApiKey` | `string` | API key for the selected cloud provider |
-| `ollamaModel` | `string` | Ollama model name, e.g. `"llama3.2"` |
+| `ollamaModel` | `string` | Ollama model name, e.g. `"llama3.1:8b"` |
 | `githubToken` | `string` | GitHub personal access token (optional) |
 
 ### Chat History (written by sidepanel.js)
@@ -410,12 +410,13 @@ GitHub Actions runs both commands on every push and pull request (`.github/workf
 1. Install from [ollama.com](https://ollama.com)
 2. Start the server **with the Chrome extension origin allowed**:
    ```bash
-   OLLAMA_ORIGINS='*' ollama serve
+   ollama pull llama3.1:8b
+   OLLAMA_ORIGINS='chrome-extension://*' ollama serve
    ```
-   > Without `OLLAMA_ORIGINS='*'`, Ollama will return HTTP 403 for requests from the extension because Chrome extensions send an `Origin: chrome-extension://...` header that Ollama blocks by default.
+   > Without `OLLAMA_ORIGINS='chrome-extension://*'`, Ollama will return HTTP 403 for requests from the extension because Chrome extensions send an `Origin: chrome-extension://...` header that Ollama blocks by default.
 3. To make this permanent on macOS:
    ```bash
-   launchctl setenv OLLAMA_ORIGINS "*"
+   launchctl setenv OLLAMA_ORIGINS "chrome-extension://*"
    ```
    Then restart Ollama.
-4. The model (`llama3.2` by default) is downloaded automatically the first time you send a message. Download progress is shown live in the typing indicator.
+4. The model (`llama3.1:8b` by default) is downloaded automatically the first time you send a message. Download progress is shown live in the typing indicator.

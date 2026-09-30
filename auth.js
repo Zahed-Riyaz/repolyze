@@ -166,6 +166,7 @@ function cancelGitHubSignIn() {
 // secret, so the note points the user to GitHub's Applications page for that.)
 async function signOutOfGitHub() {
   await chrome.storage.local.remove(["githubToken", "githubUser", "stackProfile"]); // your stack edits are kept
+  await clearGitHubCache("auth"); // responses read with the token (private repos included) go too
   githubToken = "";
   githubUser = null;
   document.getElementById("sp-gh-token").placeholder = "ghp_...";

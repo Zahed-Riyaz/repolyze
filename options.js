@@ -14,8 +14,7 @@ const PROVIDER_META = {
   ollama: {
     label: null,
     placeholder: null,
-    helpHtml: 'Download Ollama at <a href="https://ollama.com" target="_blank">ollama.com</a>. ' +
-              'Run <code style="background:#0d1117;padding:1px 4px;border-radius:3px">ollama serve</code> and pull any model.',
+    helpHtml: 'Ollama at <a href="https://ollama.com" target="_blank">ollama.com</a>. The steps above install it, download the model and start it for the extension.',
   },
   openai: {
     label: "OpenAI API Key",
@@ -48,10 +47,19 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("ai-key").placeholder = maskKey(savedKey);
   }
 
-  // Populate ollama model
+  // Populate ollama model, and the terminal steps for it (ollama.js)
   if (savedModel) {
     document.getElementById("ollama-model").value = savedModel;
   }
+  let setupOS = detectOS();
+  const renderSetup = (os = setupOS) => {
+    setupOS = os;
+    const model = document.getElementById("ollama-model").value.trim() || "llama3.1:8b";
+    document.getElementById("ollama-setup").innerHTML = ollamaSetupHtml({ model, os, steps: ["install", "pull", "serve", "list"] });
+  };
+  renderSetup();
+  document.getElementById("ollama-model").addEventListener("input", () => renderSetup());
+  document.getElementById("ollama-setup").addEventListener("click", (e) => handleOllamaSetupClick(e, renderSetup));
 
   // Populate GitHub token
   if (stored.githubToken) {
@@ -92,7 +100,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const toSave = { aiProvider: selectedProvider };
 
     if (selectedProvider === "ollama") {
-      const model = document.getElementById("ollama-model").value.trim() || "llama3.2";
+      const model = document.getElementById("ollama-model").value.trim() || "llama3.1:8b";
       toSave.ollamaModel = model;
       toSave.aiApiKey = "";
     } else {

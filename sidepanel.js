@@ -1,26 +1,62 @@
 // ── State ────────────────────────────────────────────────────────────────────
 let currentRepo = null;
-let githubToken = "";
 let aiProvider = "groq";   // "groq" | "gemini" | "ollama" | "openai" | "anthropic"
 let aiApiKey = "";          // API key for cloud providers
-let ollamaModel = "llama3.2";
+// The local model when none is chosen: free, 128k-token context, runs on most laptops
+const DEFAULT_OLLAMA_MODEL = "llama3.1:8b";
+let ollamaModel = DEFAULT_OLLAMA_MODEL;
 let chatMessages = []; // [{role:"user"|"bot", text:"...", error?:true}]
 let panelWindowId = null; // the browser window this side panel belongs to
 
-// Model used for each provider — the one place to bump when a model is retired
-const MODELS = {
-  groq:      "llama-3.3-70b-versatile",
-  gemini:    "gemini-2.5-flash",
-  openai:    "gpt-4o-mini",
-  anthropic: "claude-haiku-4-5-20251001",
+// Models offered in Settings for each provider, first = the default. Providers
+// add and retire models often, so "Other…" in Settings takes any model ID too.
+// The one place to update when a model is retired or a better one arrives.
+const MODEL_CHOICES = {
+  groq: [
+    { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B", note: "Fast and reliable; the most generous free-tier limits." },
+    { id: "moonshotai/kimi-k2-instruct", label: "Kimi K2", note: "Moonshot's open model, strong at code. Lower free-tier limits, so long chats may pause." },
+    { id: "openai/gpt-oss-120b", label: "GPT-OSS 120B", note: "OpenAI's open-weight model; strong reasoning." },
+    { id: "qwen/qwen3-32b", label: "Qwen3 32B", note: "Good at code for its size." },
+    { id: "llama-3.1-8b-instant", label: "Llama 3.1 8B", note: "Fastest; weakest answers." },
+  ],
+  gemini: [
+    { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash", note: "Fast, with a generous free tier and the largest context budget here." },
+    { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro", note: "Stronger answers; much lower free-tier limits." },
+    { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite", note: "Fastest and cheapest; weaker answers." },
+  ],
+  openai: [
+    { id: "gpt-4o-mini", label: "GPT-4o mini", note: "Cheap and fast." },
+    { id: "gpt-4.1-mini", label: "GPT-4.1 mini", note: "Better at following instructions and code; still cheap." },
+    { id: "gpt-4.1", label: "GPT-4.1", note: "Stronger; costs more." },
+    { id: "gpt-5-mini", label: "GPT-5 mini", note: "Newer and stronger; slower to start answering." },
+  ],
+  anthropic: [
+    { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5", note: "Fast and cheap." },
+    { id: "claude-sonnet-5", label: "Claude Sonnet 5", note: "Stronger answers; costs more." },
+    { id: "claude-opus-5-5", label: "Claude Opus 5.5", note: "The strongest; costs the most." },
+  ],
+  ollama: [
+    { id: "llama3.1:8b", label: "Llama 3.1 8B", note: "128k-token context; runs on most laptops (~5 GB)." },
+    { id: "qwen2.5-coder:7b", label: "Qwen2.5 Coder 7B", note: "Tuned for code; ~5 GB." },
+    { id: "gemma3:12b", label: "Gemma 3 12B", note: "128k-token context; needs ~10 GB of memory." },
+    { id: "gpt-oss:20b", label: "GPT-OSS 20B", note: "128k-token context, strong reasoning; needs ~16 GB of memory." },
+    { id: "llama3.2", label: "Llama 3.2 3B", note: "Small and fast, but often ignores instructions like citing lines." },
+  ],
 };
+const MODELS = Object.fromEntries(Object.entries(MODEL_CHOICES).map(([p, list]) => [p, list[0].id]));
+let aiModels = {}; // provider → the model chosen in Settings (unset → the default)
 
-// Session cache keyed by "owner/repo"
-// Stores: { repoData, issues, languages, contributors, health, prs, … }
-const repoCache = {};
+// The model in use for a provider
+function modelFor(provider = aiProvider) {
+  if (provider === "ollama") return ollamaModel || DEFAULT_OLLAMA_MODEL;
+  return aiModels[provider] || MODELS[provider];
+}
 
-function repoKey(repo = currentRepo) { return `${repo.owner}/${repo.repo}`; }
-function cacheFor(key) { return (repoCache[key] ??= {}); }
+// "moonshotai/kimi-k2-instruct" → "Kimi K2" (an ID not in the list shows as itself)
+function modelLabel(provider, id = modelFor(provider)) {
+  return MODEL_CHOICES[provider]?.find(m => m.id === id)?.label || id;
+}
+
 // Async work captures the repo it started for and checks this before touching
 // the UI, so a slow response never renders into a different repo's view.
 function isCurrentRepo(key) { return !!currentRepo && repoKey() === key; }
@@ -111,12 +147,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // Load saved settings — also migrate legacy geminiApiKey → aiApiKey
-  const stored = await chrome.storage.local.get(["githubToken", "githubUser", "aiProvider", "aiApiKey", "ollamaModel", "geminiApiKey"]);
+  const stored = await chrome.storage.local.get(["githubToken", "githubUser", "aiProvider", "aiApiKey", "aiModels", "ollamaModel", "ollamaDefaultMoved", "geminiApiKey"]);
   githubToken  = stored.githubToken  || "";
   githubUser   = stored.githubUser   || null;
   aiProvider   = stored.aiProvider   || "groq";
   aiApiKey     = stored.aiApiKey     || "";
-  ollamaModel  = stored.ollamaModel  || "llama3.2";
+  ollamaModel  = stored.ollamaModel  || DEFAULT_OLLAMA_MODEL;
+  aiModels     = stored.aiModels     || {};
+  // The old default (llama3.2, 3B) was too small to follow citation rules; move
+  // anyone still on it to the new default, once (choosing it again later sticks)
+  if (stored.ollamaModel === "llama3.2" && !stored.ollamaDefaultMoved) {
+    ollamaModel = DEFAULT_OLLAMA_MODEL;
+    await chrome.storage.local.set({ ollamaModel, ollamaDefaultMoved: true });
+  }
 
   // One-time migration: if old Gemini key exists but new key doesn't, adopt it
   if (!aiApiKey && stored.geminiApiKey) {
@@ -409,195 +452,6 @@ function reloadCurrentRepo() {
   loadTabData(lastContentTab);
 }
 
-// ── GitHub API layer ──────────────────────────────────────────────────────────
-// Without a token GitHub allows 60 requests an hour per IP, so every request
-// counts:
-//  • responses (404s included — most probed files don't exist) are cached for
-//    the browser session in chrome.storage.session, so reopening the panel is free
-//  • while fresh they're served without touching the network; after that they're
-//    revalidated with If-None-Match, and GitHub doesn't count 304 replies
-//  • once the quota is spent, requests stop until the reset time instead of
-//    each tab collecting its own 403
-const GH_FRESH_MS = 10 * 60 * 1000;
-const GH_MAX_CACHED_CHARS = 400_000; // skip persisting huge bodies (e.g. file trees)
-const ghMemCache = new Map();        // cache key → { status, body, etag, link, time }
-const ghInflight = new Map();        // cache key → Promise of the same
-// Core quota drives the badge/banner; search has its own (10/min anonymously)
-const ghState = { remaining: null, limit: null, resetAt: 0, badToken: false, search: { remaining: null, resetAt: 0 } };
-
-class GitHubError extends Error {
-  constructor(message, status, { rateLimited = false, resetAt = 0, resource = "core" } = {}) {
-    super(message);
-    this.status = status;
-    this.rateLimited = rateLimited;
-    this.resetAt = resetAt;
-    this.resource = resource;
-  }
-}
-
-const resourceFor = (url) => (/^\/search\//.test(new URL(url).pathname) ? "search" : "core");
-const limitsFor = (resource) => (resource === "search" ? ghState.search : ghState);
-
-function isRateLimited(resource = "core") {
-  const l = limitsFor(resource);
-  return l.remaining === 0 && Date.now() < l.resetAt;
-}
-
-function rateLimitError(resource = "core") {
-  const { resetAt } = limitsFor(resource);
-  const message = resource === "search"
-    ? `GitHub's search limit is used up for a moment — it resets at ${formatTime(resetAt)}.`
-    : `GitHub's hourly request limit is used up — it resets at ${formatTime(resetAt)}.`;
-  return new GitHubError(message, 403, { rateLimited: true, resetAt, resource });
-}
-
-function repoApiUrl(endpoint, repo) {
-  return endpoint.startsWith("http")
-    ? endpoint
-    : `https://api.github.com/repos/${repo.owner}/${repo.repo}${endpoint}`;
-}
-
-function githubHeaders(url, token = githubToken) {
-  const headers = { "Accept": "application/vnd.github+json" };
-  // Send the token only to GitHub's own API host — endpoint may be a full URL
-  // that came from response data, and the token must not follow it elsewhere.
-  let host = "";
-  try { host = new URL(url).host; } catch { throw new GitHubError(`Invalid GitHub API URL: ${url}`, 0); }
-  if (token && host === "api.github.com") headers["Authorization"] = `Bearer ${token}`;
-  return headers;
-}
-
-// Cache keys include whether a token was used: a private repo that 404s
-// anonymously must not stay "missing" once a token is added.
-function ghCacheKey(url) { return `gh:${githubToken ? "auth" : "anon"}:${url}`; }
-
-async function ghCacheGet(key) {
-  if (ghMemCache.has(key)) return ghMemCache.get(key);
-  try {
-    const stored = (await chrome.storage.session?.get(key))?.[key];
-    if (stored) ghMemCache.set(key, stored);
-    return stored || null;
-  } catch { return null; }
-}
-
-function ghCacheSet(key, entry) {
-  ghMemCache.set(key, entry);
-  if (JSON.stringify(entry).length > GH_MAX_CACHED_CHARS) return;
-  chrome.storage.session?.set({ [key]: entry }).catch(() => {}); // quota full → memory only
-}
-
-function noteRateLimitHeaders(res, resource) {
-  const remaining = res.headers.get("X-RateLimit-Remaining");
-  if (remaining === null) return;
-  const l = limitsFor(res.headers.get("X-RateLimit-Resource") || resource);
-  l.remaining = Number(remaining);
-  l.limit = Number(res.headers.get("X-RateLimit-Limit"));
-  l.resetAt = Number(res.headers.get("X-RateLimit-Reset")) * 1000;
-  if (l === ghState) renderRateLimit();
-}
-
-function isRateLimitResponse(res, body, resource = "core") {
-  if (res.status !== 403 && res.status !== 429) return false;
-  const quotaGone = res.headers.get("X-RateLimit-Remaining") === "0";
-  const retryAfter = Number(res.headers.get("Retry-After")) || 0;
-  if (!quotaGone && !retryAfter && res.status !== 429 && !/rate limit/i.test(body?.message || "")) return false;
-  // Secondary limits don't zero the quota — pause for Retry-After (or a minute).
-  // Not until X-RateLimit-Reset: that's the primary window, often an hour away.
-  if (!quotaGone) {
-    const l = limitsFor(resource);
-    l.remaining = 0;
-    l.resetAt = Date.now() + (retryAfter || 60) * 1000;
-    if (l === ghState) renderRateLimit();
-  }
-  return true;
-}
-
-// GET a GitHub API URL → { status, body, link }. Cached, de-duplicated and
-// rate-limit aware; a stale cached copy is preferred over failing.
-async function githubRequest(url) {
-  const key = ghCacheKey(url);
-  const cached = await ghCacheGet(key);
-  if (cached && Date.now() - cached.time < GH_FRESH_MS) return cached;
-  if (ghInflight.has(key)) return ghInflight.get(key);
-
-  const resource = resourceFor(url);
-  const request = (async () => {
-    if (isRateLimited(resource)) {
-      if (cached) return cached;
-      throw rateLimitError(resource);
-    }
-    const headers = githubHeaders(url);
-    if (cached?.etag) headers["If-None-Match"] = cached.etag;
-
-    let res;
-    try {
-      // no-store: we do our own conditional requests, so skip the HTTP cache
-      res = await fetch(url, { headers, cache: "no-store" });
-    } catch {
-      if (cached) return cached;
-      throw new GitHubError("Couldn't reach GitHub — check your connection.", 0);
-    }
-    noteRateLimitHeaders(res, resource);
-
-    if (res.status === 304 && cached) {
-      const refreshed = { ...cached, time: Date.now() };
-      ghCacheSet(key, refreshed);
-      return refreshed;
-    }
-
-    const body = await res.json().catch(() => null);
-    if (isRateLimitResponse(res, body, resource)) {
-      if (cached) return cached;
-      throw rateLimitError(resource);
-    }
-    if (res.status === 401 && githubToken) {
-      ghState.badToken = true;
-      renderRateLimit();
-      throw new GitHubError("GitHub rejected your token — update or clear it in Settings.", 401);
-    }
-
-    const entry = { status: res.status, body, etag: res.headers.get("ETag"), link: res.headers.get("Link"), time: Date.now() };
-    if (res.ok || res.status === 404) ghCacheSet(key, entry);
-    return entry;
-  })().finally(() => ghInflight.delete(key));
-
-  ghInflight.set(key, request);
-  return request;
-}
-
-// `repo` defaults to the current repo; callers that have already awaited
-// something must pass the repo they captured, since currentRepo may have moved on.
-async function fetchGitHub(endpoint, repo = currentRepo) {
-  return (await fetchGitHubPage(endpoint, repo)).data;
-}
-
-// Like fetchGitHub, but also returns the Link header (for page counts)
-async function fetchGitHubPage(endpoint, repo = currentRepo) {
-  const { status, body, link } = await githubRequest(repoApiUrl(endpoint, repo));
-  if (status < 200 || status >= 300) {
-    throw new GitHubError(`GitHub API ${status}: ${body?.message || "request failed"}`, status);
-  }
-  return { data: body, link };
-}
-
-// Does this path exist? 404 → false; rate limits and other errors propagate.
-function githubExists(endpoint, repo) {
-  return fetchGitHub(endpoint, repo).then(() => true, err => {
-    if (err.status === 404) return false;
-    throw err;
-  });
-}
-
-// GET /rate_limit doesn't count against the limit, so it's a free way to show
-// the real quota on open and to validate a token before saving it.
-async function checkRateLimit(token = githubToken) {
-  const url = "https://api.github.com/rate_limit";
-  const res = await fetch(url, { headers: githubHeaders(url, token), cache: "no-store" });
-  if (res.status === 401) return { valid: false };
-  const core = (await res.json().catch(() => null))?.resources?.core;
-  return { valid: true, core };
-}
-
 async function refreshRateLimit() {
   try {
     const { valid, core } = await checkRateLimit();
@@ -664,6 +518,7 @@ function renderRateLimit() {
   if (wasRateLimited && !limited && !badToken) reloadCurrentRepo();
   wasRateLimited = limited;
 }
+onRateLimitChange = renderRateLimit; // github.js reports quota changes here
 
 const GITHUB_TOKEN_URL = "https://github.com/settings/tokens";
 
@@ -700,17 +555,6 @@ function getGitHubToken() {
   showSpStatus("sp-gh-status", "Paste your new token here and press Save token.", false, 0);
 }
 
-// ── Repo metadata ─────────────────────────────────────────────────────────────
-// Returns a shared promise for the repo metadata so the header and the health
-// score (which needs pushed_at / open_issues_count) wait on the same request.
-function loadRepoData(repo = currentRepo) {
-  const cache = cacheFor(repoKey(repo));
-  if (cache.repoData) return Promise.resolve(cache.repoData);
-  cache.repoDataPromise ??= fetchGitHub("", repo)
-    .then(data => (cache.repoData = data))
-    .finally(() => { delete cache.repoDataPromise; });
-  return cache.repoDataPromise;
-}
 
 async function fetchRepoData() {
   const cacheKey = repoKey();
@@ -1565,7 +1409,7 @@ async function handleChat({ files = null } = {}) {
     const { system, contents } = buildChatPrompt({
       repo, context, question: query, focus,
       history: messages.slice(0, -1),
-      historyBudget: Math.floor((CONTEXT_BUDGET[aiProvider] || 20000) * 0.25),
+      historyBudget: Math.floor(contextBudget() * 0.25),
     });
 
     // Stream tokens directly into the bot bubble
@@ -1701,14 +1545,18 @@ function appendChatMessage(role, text, save = true, animate = true, time = null,
   if (save) saveChatHistory();
 }
 
-const BOT_LABEL_HTML = `${icon("sparkles", "icon-sm")}Assistant`;
+const BOT_LABEL_HTML = `${icon("compass", "icon-sm")}Assistant`;
 
 // How each file came to be read (retrieval.js sets `via`)
 const VIA_LABEL = {
-  named: "named in the question", picked: "chosen for the question", chosen: "chosen by you",
-  import: "imported by a file that was read", search: "found by code search",
+  named: "named in the question or issue", issue: "from the issue's brief", picked: "chosen for the question", chosen: "chosen by you",
+  import: "imported by a file that was read", search: "found by code search", name: "found by name",
+  changed: "changed by the PR (at its head)",
 };
-const FOLLOWED = new Set(["import", "search"]);
+const FOLLOWED = new Set(["import", "search", "name"]);
+
+// Where a source lives: its own `at` (a PR's head, maybe in a fork) or the repo's default branch
+const sourceHome = (s, repo, ref) => (s?.at ? { repo: { owner: s.at.owner, repo: s.at.repo }, ref: s.at.ref } : { repo, ref });
 
 // Files the answer was grounded in, linked to the exact lines on GitHub. When
 // `editable`, each file can be left out (✕) or another added, then re-run.
@@ -1716,9 +1564,11 @@ function sourcesHtml(sources, ref, { editable = false } = {}) {
   if (!sources?.length || !currentRepo) return "";
   const byFile = new Map();
   for (const s of sources) {
+    if (s.via === "diff") continue; // a PR's whole diff: counted as read, not listed
     if (!byFile.has(s.path)) byFile.set(s.path, []);
     byFile.get(s.path).push(s);
   }
+  if (!byFile.size) return "";
   const chips = [...byFile].map(([path, ranges]) => sourceChipHtml(path, ranges, ref, editable)).join("");
   const edit = editable
     ? `<button class="source-add" title="Add a file and re-run">${icon("file", "icon-sm")}Add file</button>` +
@@ -1733,8 +1583,9 @@ function sourceChipHtml(path, ranges, ref, editable, extraClass = "") {
   const lines = ranges.map(x => (!x.start || (x.start === 1 && ranges.length === 1) ? "" : `L${x.start}–${x.end}`)).filter(Boolean).join(", ");
   const name = path.split("/").pop();
   const title = `${path}${lines ? ` (${lines})` : ""}${VIA_LABEL[via] ? ` — ${VIA_LABEL[via]}` : ""}`;
+  const home = sourceHome(r, currentRepo, ref);
   return `<span class="source-chip${FOLLOWED.has(via) ? " source-followed" : ""}${extraClass}" data-path="${escapeHtml(path)}">` +
-    `<a class="source-link" href="${sourceUrl(currentRepo, ref, path, r.start, r.end)}" target="_blank" title="${escapeHtml(title)}">` +
+    `<a class="source-link" href="${sourceUrl(home.repo, home.ref, path, r.start, r.end)}" target="_blank" title="${escapeHtml(title)}">` +
     `${icon("file", "icon-sm")}<span>${escapeHtml(name)}</span>${lines ? `<em>${lines}</em>` : ""}</a>` +
     (editable ? `<button class="source-remove" title="Leave ${escapeHtml(name)} out" aria-label="Leave ${escapeHtml(path)} out">${icon("x", "icon-sm")}</button>` : "") +
     `</span>`;
@@ -1746,7 +1597,7 @@ function sourceChipHtml(path, ranges, ref, editable, extraClass = "") {
 function linkifyCitations(html, repo, ref, sources) {
   const list = sources || [];
   if (!list.length) return html;
-  return html.replace(/<code>([^<\s]+?)(?::(\d+)(?:[-–](\d+))?)?<\/code>/g, (m, rawPath, start, end) => {
+  const linked = html.replace(/<code>([^<\s]+?)(?::(\d+)(?:[-–](\d+))?)?<\/code>/g, (m, rawPath, start, end) => {
     const path = resolveCitedPath(rawPath, list);
     if (!path) {
       return start && /[./]/.test(rawPath) && !/^https?:/.test(rawPath)
@@ -1754,15 +1605,48 @@ function linkifyCitations(html, repo, ref, sources) {
         : m;
     }
     const ok = citationInRange(list, path, start && +start, end ? +end : start && +start);
-    return `<a class="cite${ok ? "" : " cite-unverified"}" href="${sourceUrl(repo, ref, path, start && +start, end && +end)}" target="_blank"` +
+    const home = sourceHome(list.find(s => s.path === path && s.at), repo, ref);
+    return `<a class="cite${ok ? "" : " cite-unverified"}" href="${sourceUrl(home.repo, home.ref, path, start && +start, end && +end)}" target="_blank"` +
       `${ok ? "" : ` title="Line ${start} wasn't in the code read for this answer — check it"`}>${m}</a>`;
+  });
+  return linkifyProseCitations(linked, repo, ref, list);
+}
+
+// "In <code>provider.ts</code>, change line 58" → "line 58" becomes a link to
+// that file's line, when the paragraph or list item names exactly one file that
+// was read and has no `path:line` citation of its own (see proseCitations)
+function linkifyProseCitations(html, repo, ref, sources) {
+  return html.replace(/(<(p|li|h[2-5])>)([\s\S]*?)(<\/\2>)/g, (m, open, tag, inner, close) => {
+    if (/class="cite[^"]*" href="[^"]*#L\d/.test(inner)) return m; // already cites a line properly
+    const named = new Set();
+    for (const c of inner.matchAll(/<code>([^<\s]+)<\/code>|([\w./-]+\.[A-Za-z][A-Za-z0-9]{0,7})\b/g)) {
+      const p = resolveCitedPath((c[1] || c[2]).replace(/:\d+.*$/, ""), sources);
+      if (p) named.add(p);
+    }
+    if (named.size !== 1) return m;
+    const [path] = named;
+    const home = sourceHome(sources.find(s => s.path === path && s.at), repo, ref);
+    // Only text between tags; code spans and existing links are left alone
+    let depth = 0;
+    const out = inner.replace(/(<\/?(?:code|a|pre)\b[^>]*>)|(<[^>]+>)|\b((?:lines?|L)\s?(\d+)(?:\s*(?:-|–|to)\s*(\d+))?)\b/g, (x, guard, tagm, txt, a, b) => {
+      if (guard) { depth += guard.startsWith("</") ? -1 : 1; return guard; }
+      if (tagm || depth > 0) return x;
+      const start = +a, end = b ? +b : +a;
+      const ok = citationInRange(sources, path, start, end);
+      return `<a class="cite cite-prose${ok ? "" : " cite-unverified"}" href="${sourceUrl(home.repo, home.ref, path, start, end)}" target="_blank" title="${escapeHtml(path)}${ok ? "" : " — this line wasn't in the code read for this answer"}">${txt}</a>`;
+    });
+    return open + out + close;
   });
 }
 
 // A note under answers that cite code which wasn't sent to the model
 function citationNoteHtml(text, sources) {
-  const { outOfRange, unread } = checkCitations(text, sources || []);
+  const { total, outOfRange, unread } = checkCitations(text, sources || []);
   const n = outOfRange.length + unread.length;
+  // Code was read, but a substantial answer never points at a line of it
+  if (!total && (sources || []).some(s => s.start) && (text || "").length > 400) {
+    return `<p class="citation-note">${icon("alert", "icon-sm")}<span>This answer doesn't point to specific lines, so check it against the files read before relying on it.</span></p>`;
+  }
   if (!n) return "";
   return `<p class="citation-note">${icon("alert", "icon-sm")}<span>${n} citation${n === 1 ? "" : "s"} point${n === 1 ? "s" : ""} to code that wasn't read for this answer ` +
     `(${[...outOfRange, ...unread].slice(0, 3).map(c => `<code>${escapeHtml(c)}</code>`).join(", ")}${n > 3 ? "…" : ""}). Open ${n === 1 ? "it" : "them"} to check before relying on ${n === 1 ? "it" : "them"}.</span></p>`;
@@ -1969,7 +1853,7 @@ function renderChatStarters() {
     ["Where is the main entry point, and what happens at startup?", "What happens at startup?"],
   ];
   el.innerHTML = `
-    <svg class="icon chat-starters-icon" aria-hidden="true"><use href="#i-sparkles"/></svg>
+    <svg class="icon chat-starters-icon" aria-hidden="true"><use href="#i-compass"/></svg>
     <p class="chat-starters-title">Ask about ${escapeHtml(currentRepo?.repo || "this repo")}</p>
     <p class="chat-starters-label">Answers come from its actual source files, with links to the lines they cite.</p>
     <div class="chat-starters-grid">
@@ -1988,52 +1872,32 @@ function renderChatStarters() {
   });
 }
 
+// Ollama isn't running (or is blocking the extension): the steps to fix it for
+// the model in use, from ollama.js, with the user's message kept for a retry
 function showOllamaGuide(reason, retryQuery) {
   const isCors = reason === "OLLAMA_CORS";
   const history = document.getElementById("chat-history");
+  const model = modelFor("ollama");
+  // Not running → download the model (if needed) and start it; blocking → only restart it
+  const steps = isCors ? ["serve"] : ["pull", "serve"];
 
   const card = document.createElement("div");
   card.className = "ollama-guide msg-entering";
-  card.innerHTML = `
-    <div class="ollama-guide-header">${icon("alert")}${isCors ? "Ollama is blocking the extension" : "Ollama isn't running"}</div>
-    <p class="ollama-guide-desc">${
-      isCors
-        ? "Ollama is running but blocking browser extension requests. Restart it with the <code>OLLAMA_ORIGINS</code> flag:"
-        : "Start Ollama in your terminal, then press Send again:"
-    }</p>
-
-    <div class="cmd-block">
-      <span class="cmd-os">macOS / Linux</span>
-      <div class="cmd-row">
-        <code class="cmd-code">OLLAMA_ORIGINS='*' ollama serve</code>
-        <button class="copy-btn" data-cmd="OLLAMA_ORIGINS='*' ollama serve">${icon("copy", "icon-sm")}Copy</button>
-      </div>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-os">Windows (PowerShell)</span>
-      <div class="cmd-row">
-        <code class="cmd-code">$env:OLLAMA_ORIGINS='*'; ollama serve</code>
-        <button class="copy-btn" data-cmd="$env:OLLAMA_ORIGINS='*'; ollama serve">${icon("copy", "icon-sm")}Copy</button>
-      </div>
-    </div>
-
-    ${!isCors ? `<p class="ollama-guide-link">Not installed? Get it at <a href="https://ollama.com" target="_blank">ollama.com</a></p>` : ""}
-    <p class="ollama-guide-ready">Your message is back in the box below — press Send once Ollama is up.</p>
-  `;
+  const draw = (os) => {
+    card.innerHTML = `
+      <div class="ollama-guide-header">${icon("alert")}${isCors ? "Ollama is blocking the extension" : "Ollama isn't running"}</div>
+      <p class="ollama-guide-desc">${isCors
+        ? "Ollama is running but blocking requests from the extension. Quit it, then start it again allowing Chrome extensions:"
+        : `Run these in a terminal, then press Send again:`}</p>
+      ${ollamaSetupHtml({ model, os, steps })}
+      ${!isCors ? `<p class="ollama-guide-link">Not installed? Get it at <a href="https://ollama.com" target="_blank">ollama.com</a>, or see Settings for the install command.</p>` : ""}
+      <p class="ollama-guide-ready">Your message is back in the box below — press Send once Ollama is up.</p>`;
+  };
+  draw(detectOS());
+  card.addEventListener("click", (e) => handleOllamaSetupClick(e, draw));
 
   history.appendChild(card);
   history.scrollTop = history.scrollHeight;
-
-  // Wire up copy buttons
-  card.querySelectorAll(".copy-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      navigator.clipboard.writeText(btn.dataset.cmd).then(() => {
-        btn.innerHTML = `${icon("check", "icon-sm")}Copied`;
-        setTimeout(() => { btn.innerHTML = `${icon("copy", "icon-sm")}Copy`; }, 2000);
-      });
-    });
-  });
 
   // Restore the user's message to the input so they can just press Send
   if (retryQuery) {
@@ -2096,11 +1960,11 @@ function initSettingsTab() {
     openai: "sk-...", anthropic: "sk-ant-...",
   };
   const PROVIDER_HELP = {
-    groq:      'Free key at <a href="https://console.groq.com/keys" target="_blank">console.groq.com</a>. Uses <strong>Llama 3.3 70B</strong> — 14,400 req/day.',
-    gemini:    'Free key at <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a>. Uses <strong>Gemini 2.5 Flash</strong> — generous free tier.',
-    ollama:    'Download at <a href="https://ollama.com" target="_blank">ollama.com</a>. Models pull automatically on first use.',
-    openai:    'Key at <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com</a>. Uses <strong>GPT-4o mini</strong>.',
-    anthropic: 'Key at <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com</a>. Uses <strong>Claude Haiku 4.5</strong>.',
+    groq:      'Free key at <a href="https://console.groq.com/keys" target="_blank">console.groq.com</a>. Free-tier limits differ per model.',
+    gemini:    'Free key at <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a>. Free-tier limits differ per model.',
+    ollama:    'Download at <a href="https://ollama.com" target="_blank">ollama.com</a>. Runs on your machine; nothing leaves it.',
+    openai:    'Key at <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com</a>. Paid per use.',
+    anthropic: 'Key at <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com</a>. Paid per use.',
   };
 
   let settingsProvider = aiProvider;
@@ -2123,6 +1987,47 @@ function initSettingsTab() {
       }
     }
     document.getElementById("sp-help-links").innerHTML = PROVIDER_HELP[provider] || "";
+    renderModelPicker(provider);
+  }
+
+  // The model list for a provider: its choices plus "Other…" for any model ID;
+  // shows the one in use (or the saved choice), and a note on what it's good for
+  function renderModelPicker(provider) {
+    const select = document.getElementById("sp-model");
+    const custom = document.getElementById("sp-model-custom");
+    const current = modelFor(provider);
+    const choices = MODEL_CHOICES[provider] || [];
+    const known = choices.some(m => m.id === current);
+    select.innerHTML = choices.map((m, i) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.label)}${i === 0 ? " (default)" : ""}</option>`).join("") +
+      `<option value="__other">Other…</option>`;
+    select.value = known ? current : "__other";
+    custom.value = known ? "" : current;
+    custom.hidden = known;
+    showModelNote(provider);
+    renderOllamaSetup(provider);
+  }
+
+  // Ollama only: install / download / start commands for the model picked above
+  let setupOS = detectOS();
+  function renderOllamaSetup(provider, os = setupOS) {
+    setupOS = os;
+    const el = document.getElementById("sp-ollama-setup");
+    el.innerHTML = provider === "ollama" ? ollamaSetupHtml({ model: pickedModel("ollama"), os, steps: ["install", "pull", "serve", "list"] }) : "";
+  }
+
+  function showModelNote(provider) {
+    const value = document.getElementById("sp-model").value;
+    const note = value === "__other"
+      ? `Any ${provider === "ollama" ? "Ollama model name (it downloads on first use)" : "model ID your key can use"}.`
+      : MODEL_CHOICES[provider]?.find(m => m.id === value)?.note || "";
+    document.getElementById("sp-model-note").textContent = note;
+  }
+
+  // The model picked in the form (empty → the provider's default)
+  function pickedModel(provider) {
+    const value = document.getElementById("sp-model").value;
+    const model = value === "__other" ? document.getElementById("sp-model-custom").value.trim() : value;
+    return model || (provider === "ollama" ? DEFAULT_OLLAMA_MODEL : MODELS[provider]);
   }
 
   // Expected key prefixes for each provider — used for instant format validation
@@ -2136,14 +2041,10 @@ function initSettingsTab() {
   function refreshBadge() {
     const badge  = document.getElementById("sp-active-badge");
     const banner = document.getElementById("sp-quickstart-banner");
-    const names  = {
-      groq: "Groq — Llama 3.3 70B", gemini: "Gemini 2.5 Flash",
-      ollama: `Ollama — ${ollamaModel || "llama3.2"}`,
-      openai: "OpenAI — GPT-4o mini", anthropic: "Anthropic — Claude Haiku 4.5",
-    };
+    const names  = { groq: "Groq", gemini: "Gemini", ollama: "Ollama", openai: "OpenAI", anthropic: "Anthropic" };
     const configured = aiProvider === "ollama" || !!aiApiKey;
     badge.textContent = configured
-      ? `Active: ${names[aiProvider] || aiProvider}`
+      ? `Active: ${names[aiProvider] || aiProvider} — ${modelLabel(aiProvider)}`
       : "Not configured — choose a provider";
     badge.classList.toggle("is-ok", configured);
     badge.classList.toggle("is-warn", !configured);
@@ -2155,13 +2056,27 @@ function initSettingsTab() {
   // Initialise UI from current globals
   updateSettingsUI(settingsProvider);
   if (aiApiKey) document.getElementById("sp-api-key").placeholder = maskApiKey(aiApiKey);
-  if (ollamaModel) document.getElementById("sp-ollama-model").value = ollamaModel;
   if (githubToken) document.getElementById("sp-gh-token").placeholder = maskApiKey(githubToken);
   renderGitHubAccount();
+  // The guide on GitHub's issue pages (content.js) — on unless switched off
+  const pageGuide = document.getElementById("sp-page-guide");
+  chrome.storage.local.get(["pageGuide"]).then(({ pageGuide: on }) => { pageGuide.checked = on !== false; });
+  pageGuide.addEventListener("change", () => chrome.storage.local.set({ pageGuide: pageGuide.checked }));
   const stackCard = document.getElementById("sp-stack-card");
   stackCard.addEventListener("click", handleStackCardClick);
   stackCard.addEventListener("keydown", handleStackCardKeydown);
   refreshBadge();
+
+  // Model picker: "Other…" reveals the field for any model ID
+  document.getElementById("sp-model").addEventListener("change", (e) => {
+    const custom = document.getElementById("sp-model-custom");
+    custom.hidden = e.target.value !== "__other";
+    if (!custom.hidden) custom.focus();
+    showModelNote(settingsProvider);
+    renderOllamaSetup(settingsProvider);
+  });
+  document.getElementById("sp-model-custom").addEventListener("input", () => renderOllamaSetup(settingsProvider));
+  document.getElementById("sp-ollama-setup").addEventListener("click", (e) => handleOllamaSetupClick(e, (os) => renderOllamaSetup(settingsProvider, os)));
 
   // Provider pill clicks
   document.querySelectorAll(".sp-pill").forEach(pill => {
@@ -2184,14 +2099,18 @@ function initSettingsTab() {
   // Save AI settings
   document.getElementById("sp-save-btn").addEventListener("click", async () => {
     const toSave = { aiProvider: settingsProvider };
+    const model = pickedModel(settingsProvider);
     if (settingsProvider === "ollama") {
-      const model = document.getElementById("sp-ollama-model").value.trim() || "llama3.2";
       toSave.ollamaModel = model;
       toSave.aiApiKey    = "";
       ollamaModel = model;
       aiApiKey    = "";
     } else {
-      const key = document.getElementById("sp-api-key").value.trim();
+      aiModels = { ...aiModels, [settingsProvider]: model };
+      toSave.aiModels = aiModels;
+      // Same provider, key left blank → keep the saved key (e.g. only the model changed)
+      const typed = document.getElementById("sp-api-key").value.trim();
+      const key = typed || (settingsProvider === aiProvider ? aiApiKey : "");
       if (!key) { showSpStatus("sp-status", "Enter an API key.", true); return; }
 
       // Validate key format before saving — catches the most common mistake
@@ -2253,7 +2172,8 @@ function initSettingsTab() {
     if (area !== "local") return;
     if (changes.aiProvider)  aiProvider  = changes.aiProvider.newValue  || "groq";
     if (changes.aiApiKey)    aiApiKey    = changes.aiApiKey.newValue    || "";
-    if (changes.ollamaModel) ollamaModel = changes.ollamaModel.newValue || "llama3.2";
+    if (changes.ollamaModel) ollamaModel = changes.ollamaModel.newValue || DEFAULT_OLLAMA_MODEL;
+    if (changes.aiModels) aiModels = changes.aiModels.newValue || {};
     // A token saved elsewhere (options page) without its account → no stale name
     if (changes.githubUser) githubUser = changes.githubUser.newValue || null;
     else if (changes.githubToken) githubUser = null;
@@ -2263,12 +2183,11 @@ function initSettingsTab() {
       onGitHubTokenChanged();
     }
     if (changes.githubToken || changes.githubUser) renderGitHubAccount();
-    if (changes.aiProvider || changes.aiApiKey || changes.ollamaModel) {
+    if (changes.aiProvider || changes.aiApiKey || changes.ollamaModel || changes.aiModels) {
       settingsProvider = aiProvider;
       updateSettingsUI(aiProvider);
       document.getElementById("sp-api-key").placeholder =
         aiApiKey ? maskApiKey(aiApiKey) : PROVIDER_PLACEHOLDERS[aiProvider] || "";
-      document.getElementById("sp-ollama-model").value = ollamaModel;
       refreshBadge();
     }
   });
@@ -2318,7 +2237,7 @@ async function pullOllamaModel(model) {
       body: JSON.stringify({ name: model, stream: true })
     });
   } catch {
-    throw new Error("Ollama is not running. Start it with: ollama serve");
+    throw new Error(`Ollama is not running. Start it with: ${ollamaSteps(modelFor("ollama")).serve.cmd}`);
   }
   if (!pullResponse.ok) throw new Error(`Ollama: could not pull model "${model}".`);
 
@@ -2375,15 +2294,15 @@ function providerBody(provider, contents, { system, temperature = 0.2 } = {}) {
       return { contents, ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}), generationConfig: { temperature } };
     case "groq":
     case "openai":
-      return { model: MODELS[provider], messages: withSystem, temperature, stream: true };
+      return { model: modelFor(provider), messages: withSystem, temperature, stream: true };
     case "anthropic":
-      return { model: MODELS.anthropic, max_tokens: 2048, ...(system ? { system } : {}), temperature, messages: chat, stream: true };
+      return { model: modelFor("anthropic"), max_tokens: 2048, ...(system ? { system } : {}), temperature, messages: chat, stream: true };
     case "ollama": {
       const chars = (system || "").length + chat.reduce((n, m) => n + m.content.length, 0);
       const needed = Math.ceil(chars / 3.5) + 1536; // prompt tokens + room for the answer
       let numCtx = 8192;
       while (numCtx < needed && numCtx < 32768) numCtx *= 2;
-      return { model: ollamaModel || "llama3.2", messages: withSystem, stream: true, options: { temperature, num_ctx: numCtx } };
+      return { model: modelFor("ollama"), messages: withSystem, stream: true, options: { temperature, num_ctx: numCtx } };
     }
   }
   throw new Error(`Unknown provider ${provider}`);
@@ -2396,7 +2315,7 @@ async function callGeminiStreaming(contents, onChunk, opts = {}) {
   let response;
   try {
     response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${MODELS.gemini}:streamGenerateContent?alt=sse`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelFor("gemini"))}:streamGenerateContent?alt=sse`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": aiApiKey },
@@ -2547,7 +2466,7 @@ async function callAnthropicStreaming(contents, onChunk, opts = {}) {
 // Final line has "done":true. Auto-pulls missing models via pullOllamaModel.
 async function callOllamaStreaming(contents, onChunk, opts = {}) {
   const body = providerBody("ollama", contents, opts);
-  const model    = ollamaModel || "llama3.2";
+  const model    = ollamaModel || DEFAULT_OLLAMA_MODEL;
 
   const ollamaFetch = () => fetch("http://localhost:11434/api/chat", {
     method: "POST",
@@ -2602,14 +2521,6 @@ function geminiToOpenAI(contents) {
   }));
 }
 
-// ── File decoding ─────────────────────────────────────────────────────────────
-// The contents API returns base64 of the raw bytes; atob() alone yields Latin-1,
-// which garbles any UTF-8 (emoji, CJK, accents), so decode the bytes properly.
-function decodeGitHubContent(data) {
-  const binary = atob((data.content || "").replace(/\n/g, ""));
-  const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
-  return new TextDecoder("utf-8").decode(bytes);
-}
 
 // ── Markdown renderer ─────────────────────────────────────────────────────────
 function renderMarkdown(text) {
@@ -2659,15 +2570,4 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
-function formatTime(ts) {
-  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
 
-function daysAgo(dateStr) {
-  const days = Math.floor((Date.now() - new Date(dateStr)) / (1000 * 60 * 60 * 24));
-  if (days === 0) return "today";
-  if (days === 1) return "1 day ago";
-  if (days < 30) return `${days} days ago`;
-  if (days < 365) return `${Math.floor(days / 30)}mo ago`;
-  return `${Math.floor(days / 365)}y ago`;
-}

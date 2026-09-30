@@ -122,8 +122,9 @@ test("follow-ups keep the previous answer's files: flagged for the picker, and u
 });
 
 test("the picker shortlist is sized to the model", async () => {
-  for (const [provider, max] of [["ollama", 60], ["groq", 120], ["openai", 250]]) {
+  for (const [provider, max, model] of [["ollama", 60, "llama3.2"], ["ollama", 120, "llama3.1:8b"], ["groq", 120], ["openai", 250]]) {
     const { panel, requests } = chatPanel({ provider, ai: (body) => (provider === "ollama" ? new Response(JSON.stringify({ message: { content: "[]" }, done: true }) + "\n") : sseReply("[]")) });
+    if (model) panel.run(`ollamaModel = ${JSON.stringify(model)}`);
     await panel.fn.buildChatContext({ owner: "o", repo: "r" }, "how does misc work", null);
     const user = (requests[0].messages || []).find(m => m.role === "user")?.content || "";
     const listed = user.split("\n").filter(l => /^src\/|^README/.test(l)).length;
@@ -154,4 +155,102 @@ test("a chat turn sends rules as a system prompt and the question last, and carr
   assert.match(picker.messages.find(m => m.role === "user").content, /timer\.ts \(1 KB\) — read for the previous answer/);
   const followUp = requests.find(b => b.messages[0].content.startsWith("You are an expert"));
   assert.deepEqual(followUp.messages.slice(1, 3).map(m => m.role), ["user", "assistant"], "the earlier turn is included as history");
+});
+
+test("Ollama's budget follows the model: small local models stay tight, 7B+ get the cloud providers' room", () => {
+  const { fn, run } = loadPanel();
+  run(`aiProvider = "ollama"`);
+  for (const [model, budget] of [["llama3.1:8b", 40000], ["qwen2.5-coder:7b", 40000], ["gpt-oss:20b", 40000],
+    ["llama3.2", 10000], ["llama3.2:3b", 10000], ["qwen2.5:1.5b", 10000], ["phi3:mini-4b", 10000], ["gemma3:1b", 10000]]) {
+    run(`ollamaModel = ${JSON.stringify(model)}`);
+    assert.equal(fn.contextBudget(), budget, model);
+  }
+  assert.equal(fn.contextBudget("groq"), 14000);
+  assert.equal(fn.contextBudget("gemini"), 48000);
+});
+
+test("Ollama setup: install, download the chosen model, and start it allowing only Chrome extensions, per OS", () => {
+  const { fn } = loadPanel();
+  const mac = plain(fn.ollamaSteps("gemma3:12b", "mac"));
+  assert.equal(mac.install.cmd, "brew install ollama");
+  assert.equal(mac.pull.cmd, "ollama pull gemma3:12b");
+  assert.equal(mac.serve.cmd, "OLLAMA_ORIGINS='chrome-extension://*' ollama serve");
+  assert.match(mac.serve.note, /quit it from the menu bar first/);
+  assert.equal(mac.list.cmd, "ollama list");
+  assert.equal(fn.ollamaSteps("x", "linux").install.cmd, "curl -fsSL https://ollama.com/install.sh | sh");
+  const win = plain(fn.ollamaSteps("gpt-oss:20b", "windows"));
+  assert.equal(win.install.cmd, "winget install Ollama.Ollama");
+  assert.equal(win.serve.cmd, "$env:OLLAMA_ORIGINS='chrome-extension://*'; ollama serve");
+  for (const os of ["mac", "linux", "windows"]) assert.doesNotMatch(fn.ollamaSteps("m", os).serve.cmd, /ORIGINS='\*'/, "never every website");
+
+  const html = fn.ollamaSetupHtml({ model: "llama3.1:8b", os: "linux", steps: ["install", "pull", "serve"] });
+  assert.match(html, /class="ollama-os active" data-os="linux"/);
+  assert.match(html, /Install Ollama \(skip if you have it\)[\s\S]*Download llama3\.1:8b \(once\)[\s\S]*data-cmd="ollama pull llama3\.1:8b"[\s\S]*Start Ollama for the extension/);
+  assert.doesNotMatch(fn.ollamaSetupHtml({ model: "m", os: "mac", steps: ["serve"] }), /ollama pull|brew install/, "only the steps asked for");
+  assert.equal(fn.DEFAULT_OLLAMA_MODEL, "llama3.1:8b");
+});
+
+test("the chat's Ollama help shows the steps for the model in use; blocked-by-origin shows only the restart", () => {
+  const { fn, run, el } = loadPanel();
+  run(`ollamaModel = "qwen2.5-coder:7b"`);
+  const made = [];
+  run("document").createElement = () => { const e = { className: "", innerHTML: "", listeners: {}, addEventListener(t, f) { this.listeners[t] = f; } }; made.push(e); return e; };
+  el("chat-history").appendChild = (c) => c;
+  fn.showOllamaGuide("OLLAMA_NOT_RUNNING", "hi");
+  assert.match(made[0].innerHTML, /Ollama isn't running[\s\S]*ollama pull qwen2\.5-coder:7b[\s\S]*ollama serve/);
+  fn.showOllamaGuide("OLLAMA_CORS", "");
+  assert.match(made[1].innerHTML, /blocking the extension[\s\S]*ollama serve/);
+  assert.doesNotMatch(made[1].innerHTML, /ollama pull/);
+});
+
+// ── Choosing a model ─────────────────────────────────────────────────────────
+test("each provider has a default model and a short list, Kimi K2 among Groq's", () => {
+  const { fn, run } = loadPanel();
+  assert.equal(fn.modelFor("groq"), "llama-3.3-70b-versatile");
+  assert.equal(fn.modelFor("anthropic"), "claude-haiku-4-5-20251001");
+  assert.equal(fn.modelFor("ollama"), "llama3.1:8b");
+  assert.ok(run("MODEL_CHOICES.groq").some(m => m.id === "moonshotai/kimi-k2-instruct" && m.label === "Kimi K2"));
+  assert.equal(fn.modelLabel("groq", "moonshotai/kimi-k2-instruct"), "Kimi K2");
+  assert.equal(fn.modelLabel("groq", "some/new-model"), "some/new-model", "an ID not in the list shows as itself");
+});
+
+test("the chosen model is what every provider is asked for", async () => {
+  const { fn, run } = loadPanel();
+  run(`aiModels = { groq: "moonshotai/kimi-k2-instruct", openai: "gpt-4.1-mini", anthropic: "claude-sonnet-5" }; ollamaModel = "qwen2.5-coder:7b"`);
+  assert.equal(fn.providerBody("groq", contents, {}).model, "moonshotai/kimi-k2-instruct");
+  assert.equal(fn.providerBody("openai", contents, {}).model, "gpt-4.1-mini");
+  assert.equal(fn.providerBody("anthropic", contents, {}).model, "claude-sonnet-5");
+  assert.equal(fn.providerBody("ollama", contents, {}).model, "qwen2.5-coder:7b");
+
+  let url = "";
+  const gem = loadPanel({ fetch: async (u) => { url = u; return new Response('data: {"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}\n\n'); } });
+  gem.run(`aiProvider = "gemini"; aiApiKey = "AIza-test"; aiModels = { gemini: "gemini-2.5-pro" }`);
+  await gem.fn.callAIStreaming(contents, () => {}, {});
+  assert.match(url, /\/models\/gemini-2\.5-pro:streamGenerateContent/);
+});
+
+test("Settings: pick a model from the list or any ID, and changing only the model keeps the saved key", async () => {
+  const panel = loadPanel({ fetch: async () => new Response("{}") });
+  panel.run(`aiProvider = "groq"; aiApiKey = "gsk_saved"`);
+  panel.fn.initSettingsTab();
+  const select = panel.el("sp-model");
+  assert.match(select.innerHTML, /<option value="llama-3\.3-70b-versatile">Llama 3\.3 70B \(default\)<\/option>[\s\S]*value="moonshotai\/kimi-k2-instruct">Kimi K2<[\s\S]*value="__other">Other…/);
+  assert.equal(select.value, "llama-3.3-70b-versatile");
+  assert.equal(panel.el("sp-model-custom").hidden, true);
+
+  select.value = "moonshotai/kimi-k2-instruct";
+  select.dispatch("change", { target: select });
+  assert.match(panel.el("sp-model-note").textContent, /strong at code/);
+  panel.el("sp-api-key").value = ""; // not re-typed
+  await panel.el("sp-save-btn").listeners.click[0]();
+  assert.equal(panel.chrome.storage.local.data.aiModels.groq, "moonshotai/kimi-k2-instruct");
+  assert.equal(panel.chrome.storage.local.data.aiApiKey, "gsk_saved", "the saved key is kept");
+  assert.match(panel.el("sp-active-badge").textContent, /Active: Groq — Kimi K2/);
+
+  select.value = "__other";
+  select.dispatch("change", { target: select });
+  assert.equal(panel.el("sp-model-custom").hidden, false);
+  panel.el("sp-model-custom").value = "deepseek-r1-distill-llama-70b";
+  await panel.el("sp-save-btn").listeners.click[0]();
+  assert.equal(panel.run("modelFor('groq')"), "deepseek-r1-distill-llama-70b");
 });

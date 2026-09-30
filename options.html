@@ -137,11 +137,12 @@
       <!-- Ollama config -->
       <div id="ollama-section" style="display:none">
         <div class="ollama-notice">
-          Ollama runs on your machine. Start it with <code>ollama serve</code> — the model downloads
-          automatically on first use. No API key required.
+          Ollama runs the model on your machine — no API key, and nothing leaves it.
         </div>
         <label for="ollama-model">Model name</label>
-        <input type="text" id="ollama-model" class="input model-input" placeholder="llama3.2" autocomplete="off">
+        <input type="text" id="ollama-model" class="input model-input" placeholder="llama3.1:8b" autocomplete="off">
+        <!-- Install / download / start commands for the model above (ollama.js) -->
+        <div id="ollama-setup"></div>
       </div>
 
       <div class="actions">
@@ -175,6 +176,7 @@
     </section>
   </div>
 
+  <script src="ollama.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

@@ -89,28 +89,64 @@ ${diff.text || "(no diff available)"}${diff.skipped.length ? `\n(Not shown: ${di
 </diff>`;
 }
 
+// The issue or PR is the source of truth; these rules go into the system prompt
+const FOCUS_RULES = {
+  issue: [
+    "Treat the issue as the source of truth. To reproduce it, use the steps the issue gives, not generic setup commands from the README.",
+    "If the issue names functions or files, or suggests a fix, find them in the context and cite them as `path:line`. If one isn't in the context, say so; never name a different function in its place.",
+  ],
+  pr: [
+    "The PR's changed files appear twice: as a diff (new line numbers, \"42+|\" added) and at the PR's head commit in <changed_files_at_head>. <related_code> is unchanged code from the default branch.",
+    "Cite code as `path:line` and attribute points in the discussion to people (@name).",
+  ],
+};
+
 // → { context, sources, ref, cite, focus } for a question about the focused item.
-// `cite` (PRs only) is the repo citations link into: the PR's head, in the
-// author's fork if it's one. `focus` goes into the system prompt.
-// `opts` ({ files, onFiles }) pass through to buildChatContext for issues.
+// Both kinds retrieve the files that matter, not just the item's own text:
+//   issue — the question *and* the issue's text drive retrieval; the brief's
+//           "Where to start" files are read first; names the issue mentions are
+//           traced to their definitions (code search, or name search without a token)
+//   PR    — its discussion and diff, the changed files read at the PR's head around
+//           what changed, and related unchanged code (the changed files' imports and
+//           names the PR mentions) from the default branch
+// Sources carry `at` when they live somewhere other than the default branch (a
+// PR's head, often in the author's fork), so citations link to the right place.
+// `opts` ({ files, onFiles }) pass through to buildChatContext.
 async function buildFocusedContext(repo, item, question, previousQuestion, onStatus, previousFiles, opts = {}) {
   const isPr = item.kind === "pr";
   const noun = isPr ? "pull request" : "issue";
-  const focus = `The user is asking about ${noun} #${item.number} ("${item.title}"), shown in the <${isPr ? "pull_request" : "issue"}> block of the context. Answer about this ${noun} specifically.` +
-    (isPr ? " Cite changed code as `path:line` using the new line numbers from the diff, and attribute points in the discussion to people (@name)." : "");
-  const budget = CONTEXT_BUDGET[aiProvider] || 20000;
+  const focus = [`The user is asking about ${noun} #${item.number} ("${item.title}"), shown in the <${isPr ? "pull_request" : "issue"}> block of the context. Answer about this ${noun} specifically.`,
+    ...FOCUS_RULES[item.kind]].join("\n- ");
+  const budget = contextBudget();
 
   if (isPr) {
-    onStatus("Reading the PR's conversation and diff…");
     const { pr, files } = item.brief;
     const [owner, name] = (pr.head?.repo?.full_name || `${repo.owner}/${repo.repo}`).split("/");
+    const head = { owner, repo: name, ref: pr.head?.sha || pr.head?.ref };
+    onStatus("Reading the PR's conversation and diff…");
+    const prBlock = prFocusContext(item.brief, Math.floor(budget * 0.5));
+    onStatus("Reading the changed files…");
+    const atHead = head.ref ? await prHeadSnippets(head, files, Math.floor(budget * 0.2)) : { text: "", sources: [], files: [] };
+    const related = await buildChatContext(repo, question, previousQuestion || pr.title, onStatus, {
+      ...opts, previousFiles, about: `PR #${pr.number}: ${pr.title}\n${pr.body || ""}`,
+      exclude: files.map(f => f.filename), followFrom: atHead.files, budgetShare: 0.25, docs: false, picker: false,
+    }).catch(() => ({ context: "", sources: [], ref: null }));
     return {
-      context: prFocusContext(item.brief, budget),
-      sources: files.slice(0, 100).map(f => ({ path: f.filename })),
-      ref: pr.head?.sha, cite: { owner, repo: name }, focus,
+      context: [prBlock,
+        atHead.text && `<changed_files_at_head>\n${atHead.text}\n</changed_files_at_head>`,
+        related.context && `<related_code>\n${related.context}\n</related_code>`].filter(Boolean).join("\n\n"),
+      // Every changed file counts as read (the diff), at the PR's head; the read
+      // excerpts and related files add their exact line ranges
+      sources: [...files.slice(0, 100).map(f => ({ path: f.filename, via: "diff", at: head })), ...atHead.sources, ...related.sources],
+      ref: related.ref, cite: null, focus,
     };
   }
-  const retrieved = await buildChatContext(repo, question, previousQuestion || item.title, onStatus,
-    { ...opts, previousFiles: previousFiles.length ? previousFiles : item.brief.likelyFiles || [] });
+  const { issue, fileSources = [] } = item.brief;
+  const retrieved = await buildChatContext(repo, question, previousQuestion || item.title, onStatus, {
+    ...opts, previousFiles,
+    about: `Issue #${issue.number}: ${issue.title}\n${issue.body || ""}`,
+    seedFiles: fileSources.filter(f => f.confidence !== "low").map(f => f.path),
+    budgetShare: 0.85,
+  });
   return { context: `${issueFocusContext(item.brief)}\n\n${retrieved.context}`, sources: retrieved.sources, ref: retrieved.ref, cite: null, focus };
 }
