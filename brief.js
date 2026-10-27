@@ -378,7 +378,7 @@ function briefHeaderHtml(issue) {
   const labels = issue.labels.map(labelDotHtml).join("");
   return `
     <div class="brief-head">
-      <a href="${issue.html_url}" target="_blank" class="brief-title"><span class="issue-number">#${issue.number}</span> ${escapeHtml(issue.title)}</a>
+      <a href="${escapeHtml(issue.html_url)}" target="_blank" class="brief-title"><span class="issue-number">#${issue.number}</span> ${escapeHtml(issue.title)}</a>
       <div class="issue-meta">
         <span title="Comments">${icon("comment", "icon-sm")}${issue.comments}</span>
         <span class="issue-age">opened ${daysAgo(issue.created_at)}${issue.user ? ` by ${escapeHtml(issue.user.login)}` : ""}</span>
@@ -392,7 +392,7 @@ const REASON_ICONS = { good: "check", bad: "x", warn: "alert", info: "inbox" };
 function renderBrief(repo, issue, brief) {
   const a = brief.availability;
   // Reasons as one quiet line (links kept); the verdict and the next step lead
-  const why = a.reasons.map(r => (r.url ? `<a href="${r.url}" target="_blank">${escapeHtml(r.text)}</a>` : escapeHtml(r.text))).join(" · ");
+  const why = a.reasons.map(r => (r.url ? `<a href="${escapeHtml(r.url)}" target="_blank">${escapeHtml(r.text)}</a>` : escapeHtml(r.text))).join(" · ");
   document.getElementById("brief-body").innerHTML = `
     ${briefHeaderHtml(issue)}
     <section class="verdict verdict-${a.status}">
@@ -591,7 +591,7 @@ function renderBriefPeople({ owners, inThread }) {
         ${isTeam ? `<span class="chip-avatar team">${icon("users", "icon-xs")}</span>` : `<img src="https://github.com/${encodeURIComponent(name)}.png?size=40" class="chip-avatar" alt="" loading="lazy">`}
         <span class="person-chip-name">${escapeHtml(ownerDisplay(o.handle, currentRepo?.owner))}</span><span class="person-chip-why">owner</span></a></li>`;
     }).join("")}
-    ${inThread.map(p => `<li><a class="person-chip" href="${p.html_url}" target="_blank" title="${escapeHtml(`${ROLE_NAMES[p.role] || p.role} · replied ${p.replies}× here`)}">
+    ${inThread.map(p => `<li><a class="person-chip" href="${escapeHtml(p.html_url)}" target="_blank" title="${escapeHtml(`${ROLE_NAMES[p.role] || p.role} · replied ${p.replies}× here`)}">
         <img src="${avatarUrl(p.avatar_url, 40)}" class="chip-avatar" alt="" loading="lazy">
         <span class="person-chip-name">${escapeHtml(p.login)}</span><span class="person-chip-why">replied ${p.replies}×</span></a></li>`).join("")}
   </ul>`;

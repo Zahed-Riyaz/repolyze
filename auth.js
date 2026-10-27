@@ -102,7 +102,7 @@ function renderGitHubAccount() {
   if (signedIn) {
     const who = githubUser
       ? `${githubUser.avatar_url ? `<img src="${avatarUrl(githubUser.avatar_url, 64)}" class="gh-account-avatar" alt="">` : ""}` +
-        `<span>Signed in as <a href="${githubUser.html_url || `https://github.com/${encodeURIComponent(githubUser.login)}`}" target="_blank">@${escapeHtml(githubUser.login)}</a></span>`
+        `<span>Signed in as <a href="${escapeHtml(githubUser.html_url || `https://github.com/${encodeURIComponent(githubUser.login)}`)}" target="_blank">@${escapeHtml(githubUser.login)}</a></span>`
       : `<span>Using a GitHub token</span>`;
     account.innerHTML = `<div class="gh-account-who">${who}</div>` +
       `<button id="sp-signout-btn" class="btn btn-ghost btn-xs">Sign out</button>`;

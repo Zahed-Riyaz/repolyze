@@ -312,7 +312,7 @@ function prHeaderHtml(pr, full = null) {
   const size = full ? `<span>+${full.additions} −${full.deletions}</span><span>${full.changed_files} files</span><span>${full.commits} commits</span>` : "";
   return `
     <div class="brief-head">
-      <a href="${p.html_url}" target="_blank" class="brief-title"><span class="issue-number">#${p.number}</span> ${escapeHtml(p.title)}</a>
+      <a href="${escapeHtml(p.html_url)}" target="_blank" class="brief-title"><span class="issue-number">#${p.number}</span> ${escapeHtml(p.title)}</a>
       <div class="issue-meta">
         <span><img src="${avatarUrl(p.user.avatar_url, 32)}" class="avatar-sm" alt="" loading="lazy">${escapeHtml(p.user.login)}</span>
         ${p.draft ? `<span class="chip">Draft</span>` : ""}
@@ -554,7 +554,7 @@ function prCard(pr) {
         </span>
         ${stackLineHtml(stackFor(pr.number, "pr"))}
       </button>
-      <a class="row-external" href="${pr.html_url}" target="_blank" title="Open on GitHub" aria-label="Open PR #${pr.number} on GitHub">${icon("external", "icon-sm")}</a>
+      <a class="row-external" href="${escapeHtml(pr.html_url)}" target="_blank" title="Open on GitHub" aria-label="Open PR #${pr.number} on GitHub">${icon("external", "icon-sm")}</a>
     </li>`;
 }
 
