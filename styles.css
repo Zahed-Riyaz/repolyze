@@ -49,13 +49,12 @@
   gap: 10px;
 }
 
-#ext-logo { flex-shrink: 0; width: 26px; height: 26px; border-radius: 7px; }
+#ext-logo { flex-shrink: 0; height: 26px; width: auto; }
 /* The repo owner's avatar replaces the logo once the repo loads */
 .header-avatar { width: 26px; height: 26px; flex-shrink: 0; margin-top: 1px; border-radius: 50%; background: var(--bg-subtle); }
 .header-avatar.is-org { border-radius: 7px; }
 .header-avatar[hidden], body.no-repo .header-avatar { display: none; }
 body.no-repo #ext-logo { display: block !important; }
-#logo-cursor { animation: cursor-blink 1.2s steps(1) infinite; }
 @keyframes cursor-blink { 50% { opacity: 0; } }
 
 #header-text { flex: 1; min-width: 0; }
@@ -967,7 +966,7 @@ kbd {
   text-align: center;
   animation: pane-in 260ms var(--ease);
 }
-.welcome-logo { border-radius: 12px; box-shadow: var(--shadow-md); margin-bottom: 16px; }
+.welcome-logo { height: 52px; width: auto; margin-bottom: 16px; }
 .welcome-title { margin: 0 0 4px; font-size: 17px; font-weight: 600; }
 .welcome-sub { margin: 0 0 22px; font-size: 13px; color: var(--fg-muted); max-width: 280px; }
 .feature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; text-align: left; }
