@@ -160,6 +160,30 @@ test("search has its own quota: exhausting it doesn't block core requests or the
   assert.equal(gh.apiCalls.length, 2);
 });
 
+test("code search has its own quota too: its 10/min never shows on the badge or pauses core requests", async () => {
+  const codeSearch = (remaining) => json({ items: [] }, { headers: { "X-RateLimit-Resource": "code_search", "X-RateLimit-Remaining": String(remaining), "X-RateLimit-Limit": "10", "X-RateLimit-Reset": resetIn(50) } });
+  let left = 8;
+  const { gh, panel, fetchGitHub } = setup({
+    "/search/code": () => (left > 0 ? codeSearch(left--) : json({ message: "API rate limit exceeded" }, { status: 403, headers: { "X-RateLimit-Resource": "code_search", "X-RateLimit-Remaining": "0", "X-RateLimit-Limit": "10", "X-RateLimit-Reset": resetIn(50) } })),
+    "/languages": { ok: 1 },
+    "/labels": { ok: 2 },
+  });
+  panel.setToken("ghp_ok");
+  await fetchGitHub("/languages");
+  await fetchGitHub("https://api.github.com/search/code?q=a");
+  assert.equal(panel.run("ghState.remaining"), 4999, "the badge keeps the core numbers, not 8/10");
+  assert.equal(panel.run("ghState.limit"), 5000);
+  assert.equal(panel.run("ghState.codeSearch.remaining"), 8);
+
+  left = 0;
+  const e = await fetchGitHub("https://api.github.com/search/code?q=b").catch(e => e);
+  assert.equal(e.rateLimited, true);
+  assert.equal(e.resource, "code_search");
+  assert.equal(panel.run("isRateLimited()"), false, "core isn't paused by code search running out");
+  assert.deepEqual(plain(await fetchGitHub("/labels")), { ok: 2 });
+  assert.ok(gh.apiCalls.includes("/labels"), "core requests still go out");
+});
+
 test("a rejected token (401) is flagged for the banner", async () => {
   const { panel, fetchGitHub } = setup({ "/issues": json({ message: "Bad credentials" }, { status: 401 }) });
   panel.setToken("ghp_bad");
@@ -197,4 +221,21 @@ test("PR queries always ask for newest first", async () => {
   const sorted = gh.apiCalls.filter(u => u.startsWith("/pulls?") && u.includes("sort="));
   assert.ok(sorted.length >= 2, sorted.join("\n"));
   for (const u of sorted) assert.match(u, /direction=desc/, u);
+});
+
+test("revalidate asks GitHub even when the saved copy is fresh — with its ETag, so unchanged is a free 304", async () => {
+  const sent = [];
+  const { panel, fetchGitHub } = setup({
+    "/issues/7/timeline": (url, init) => {
+      sent.push(init.headers?.["If-None-Match"] || null);
+      return init.headers?.["If-None-Match"] === 'W/"a"'
+        ? new Response(null, { status: 304 })
+        : json([{ event: "labeled" }], { headers: { ETag: 'W/"a"' } });
+    },
+  });
+  await fetchGitHub("/issues/7/timeline");
+  await fetchGitHub("/issues/7/timeline");
+  assert.equal(sent.length, 1, "fresh: served from the saved copy");
+  assert.deepEqual(plain(await panel.fn.fetchGitHub("/issues/7/timeline", undefined, { revalidate: true })), [{ event: "labeled" }]);
+  assert.deepEqual(sent, [null, 'W/"a"'], "re-checked with the ETag, body kept on 304");
 });

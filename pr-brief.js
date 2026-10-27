@@ -75,7 +75,7 @@ function prStatus(pr, timeline, checks, now) {
     const since = Math.min(...changes.map(c => Date.parse(c.at)));
     const pushedAfter = commitTimes.filter(t => Date.parse(t) > since).length;
     reasons.push({ tone: "bad", text: `${changes.map(c => `@${c.login}`).join(", ")} requested changes ${daysAgo(changes[0].at)}` });
-    if (pushedAfter) reasons.push({ tone: "info", text: `${pushedAfter} commit${pushedAfter === 1 ? "" : "s"} pushed since — waiting on re-review` });
+    if (pushedAfter) reasons.push({ tone: "info", text: `${pushedAfter} commit${pushedAfter === 1 ? "" : "s"} pushed since` });
     status ??= pushedAfter ? "review" : "changes";
   }
   if (checks?.failed.length) {
@@ -83,7 +83,7 @@ function prStatus(pr, timeline, checks, now) {
     status ??= "blocked";
   }
   if (pr.mergeable_state === "dirty") {
-    reasons.push({ tone: "bad", text: "Has merge conflicts with the base branch" });
+    reasons.push({ tone: "bad", text: "Merge conflicts" });
     status ??= "blocked";
   }
   if (approvals.length) {
@@ -95,30 +95,30 @@ function prStatus(pr, timeline, checks, now) {
 
   const pending = [...(pr.requested_reviewers || []).map(u => `@${u.login}`), ...(pr.requested_teams || []).map(t => `@${t.slug || t.name}`)];
   const open = pr.state !== "closed";
-  if (pending.length && open) reasons.push({ tone: "info", text: `Waiting on review from ${pending.join(", ")}` });
+  if (pending.length && open) reasons.push({ tone: "info", text: `Waiting on ${pending.join(", ")}` });
   if (!reviewed.length && open) reasons.push({ tone: "info", text: "No reviews yet" });
 
   const idleDays = lastActivity ? Math.floor((now - Date.parse(lastActivity)) / DAY_MS) : 0;
-  if (idleDays >= 21 && pr.state !== "closed") reasons.push({ tone: "warn", text: `No activity for ${idleDays} days` });
+  if (idleDays >= 21 && pr.state !== "closed") reasons.push({ tone: "warn", text: `Idle ${idleDays} days` });
 
   status ??= "review";
   const verdict = {
-    ready: "Approved — ready to merge",
-    review: changes.length ? "Updated — waiting on re-review" : "Waiting for review",
+    ready: "Ready to merge",
+    review: changes.length ? "Waiting on re-review" : "Waiting for review",
     changes: "Changes requested",
     blocked: checks?.failed.length ? "Checks failing" : "Merge conflicts",
-    draft: "Draft — still in progress",
+    draft: "Draft",
     merged: "Merged",
     closed: "Closed without merging",
   }[status];
   const advice = {
-    ready: "Nothing left for contributors to do — a maintainer just needs to merge it.",
-    review: "Reviews are welcome from anyone: try the branch locally and leave feedback.",
-    changes: "It's waiting on the author to address the requested changes.",
-    blocked: "The author needs to fix the failing checks or conflicts before it can merge.",
-    draft: "The author is still working on it — hold off on detailed review unless asked.",
-    merged: "Already merged — a good example of how changes like this get accepted here.",
-    closed: "Read the conversation for why it was closed before attempting similar work.",
+    ready: "Nothing to do; a maintainer just needs to merge it.",
+    review: "Anyone can review: try the branch and leave feedback.",
+    changes: "Waiting on the author to address the changes.",
+    blocked: "The author needs to fix this before it can merge.",
+    draft: "Still in progress; hold off on detailed review.",
+    merged: "A good example of what gets accepted here.",
+    closed: "Read why it was closed before trying something similar.",
   }[status];
   return { status, verdict, advice, reasons, approvals, changes, reviewed, pendingReviewers: pending, idleDays };
 }
@@ -328,44 +328,66 @@ const PR_TONE = { ready: "free", merged: "free", review: "maybe", draft: "maybe"
 
 function renderPrBrief(repo, brief) {
   const { pr, status, files, reviewComments } = brief;
-  const reasons = status.reasons.map(r => `
-    <li class="reason reason-${r.tone}">${icon(REASON_ICONS[r.tone], "icon-sm")}<span>${escapeHtml(r.text)}</span></li>`).join("");
+  const tone = PR_TONE[status.status] || "maybe";
+  const why = status.reasons.map(r => escapeHtml(r.text)).join(" · ");
 
-  // Key events only — the AI summary covers the discussion itself
+  // Key events, newest last: the latest few, the rest folded away
   const { events } = prEventLog(pr, brief.timeline, reviewComments, 200);
   const keyEvents = events.filter(e => (e.kind === "review" && e.state !== "COMMENTED") || e.kind === "commits" || e.kind === "meta");
-  const shown = keyEvents.slice(-12);
-  const activity = shown.length ? `
-    ${keyEvents.length > shown.length ? `<p class="brief-note">${keyEvents.length - shown.length} earlier events not shown</p>` : ""}
-    <ul class="pr-activity">${shown.map(e => {
-      const text = e.kind === "commits" ? `${e.count} commit${e.count === 1 ? "" : "s"} pushed` : e.head;
-      const tone = e.state === "APPROVED" ? "good" : e.state === "CHANGES_REQUESTED" ? "bad" : "info";
-      return `<li class="reason reason-${tone}">${icon(e.kind === "commits" ? "pr" : REASON_ICONS[tone], "icon-sm")}<span>${escapeHtml(text)}${e.at ? ` <em>${daysAgo(e.at)}</em>` : ""}</span></li>`;
-    }).join("")}</ul>` : `<p class="brief-note">No reviews or updates yet.</p>`;
+  const eventRow = (e) => {
+    const text = e.kind === "commits" ? `${e.count} commit${e.count === 1 ? "" : "s"} pushed` : e.head;
+    const t = e.state === "APPROVED" ? "good" : e.state === "CHANGES_REQUESTED" ? "bad" : "info";
+    return `<li class="event-row event-${t}"><span class="event-text">${escapeHtml(text)}</span>${e.at ? `<span class="event-when">${daysAgo(e.at)}</span>` : ""}</li>`;
+  };
+  const recent = keyEvents.slice(-4);
+  const earlier = keyEvents.slice(0, -4);
+  const activity = keyEvents.length
+    ? `${earlier.length ? `<details class="fold"><summary>${earlier.length} earlier</summary><ul class="event-list">${earlier.map(eventRow).join("")}</ul></details>` : ""}
+       <ul class="event-list">${recent.map(eventRow).join("")}</ul>`
+    : `<p class="brief-note">No reviews or updates yet.</p>`;
 
+  // One line per file; owners and full path on hover; the first 8, the rest folded
   const discussed = new Map();
   for (const c of reviewComments) discussed.set(c.path, (discussed.get(c.path) || 0) + 1);
-  const fileRows = files.slice(0, 20).map(f => {
+  const same = repeatedNames(files.map(f => ({ path: f.filename })));
+  const fileRow = (f) => {
     const owners = codeOwnersFor(f.filename, brief.codeOwnerRules);
-    return `<li class="pr-file">
-      <span class="pr-file-name" title="${escapeHtml(f.filename)}"><span class="pr-file-status pr-file-${f.status}">${f.status[0].toUpperCase()}</span><span class="pr-file-path">${escapeHtml(f.filename)}</span></span>
-      <span class="pr-file-meta">${discussed.get(f.filename) ? `${icon("comment", "icon-sm")}${discussed.get(f.filename)} ` : ""}<span class="add">+${f.additions}</span> <span class="del">−${f.deletions}</span></span>
-      ${owners.length ? `<span class="pr-file-owners">owned by ${owners.map(o => escapeHtml(o)).join(", ")}</span>` : ""}
+    const { name, dir } = splitPath(f.filename);
+    const folder = dir && same.has(name) ? `<span class="file-dir">${escapeHtml(dir.split("/").pop())}/</span>` : "";
+    return `<li class="pr-file" title="${escapeHtml(f.filename + (owners.length ? `\nOwned by ${owners.join(", ")}` : ""))}">
+      <span class="pr-file-name"><span class="pr-file-status pr-file-${f.status}">${f.status[0].toUpperCase()}</span><span class="pr-file-path">${folder}${escapeHtml(name)}</span></span>
+      <span class="pr-file-meta">${discussed.get(f.filename) ? `${icon("comment", "icon-xs")}${discussed.get(f.filename)} ` : ""}<span class="add">+${f.additions}</span> <span class="del">−${f.deletions}</span></span>
     </li>`;
-  }).join("");
+  };
+  const shownFiles = files.slice(0, 8);
+  const moreFiles = files.slice(8, 40);
+  const total = pr.changed_files ?? files.length;
 
+  // People: one chip each, their review state as the word
   const people = [
     ...status.reviewed.map(r => ({ login: r.login, avatar: r.user?.avatar_url, note: REVIEW_STATES[r.state] || r.state.toLowerCase(), tone: r.state === "APPROVED" ? "good" : r.state === "CHANGES_REQUESTED" ? "bad" : "info" })),
-    ...(pr.requested_reviewers || []).filter(u => !status.reviewed.some(r => r.login === u.login)).map(u => ({ login: u.login, avatar: u.avatar_url, note: "review requested", tone: "info" })),
+    ...(pr.requested_reviewers || []).filter(u => !status.reviewed.some(r => r.login === u.login)).map(u => ({ login: u.login, avatar: u.avatar_url, note: "requested", tone: "info" })),
   ];
   const owners = [...new Set(files.flatMap(f => codeOwnersFor(f.filename, brief.codeOwnerRules)))];
+  const chips = [
+    ...people.map(p => `<li><a class="person-chip" href="https://github.com/${encodeURIComponent(p.login)}" target="_blank">
+        <img src="${avatarUrl(p.avatar || `https://github.com/${encodeURIComponent(p.login)}.png`, 40)}" class="chip-avatar" alt="" loading="lazy">
+        <span class="person-chip-name">${escapeHtml(p.login)}</span><span class="person-chip-why tone-${p.tone}">${escapeHtml(p.note)}</span></a></li>`),
+    ...owners.filter(o => !people.some(p => `@${p.login}` === o)).map(o => {
+      const name = o.slice(1);
+      const isTeam = name.includes("/");
+      return `<li><a class="person-chip" href="https://github.com/${isTeam ? `orgs/${name.split("/")[0]}/teams/${name.split("/")[1]}` : encodeURIComponent(name)}" target="_blank" title="${escapeHtml(`${o}\nCode owner of changed files`)}">
+        ${isTeam ? `<span class="chip-avatar team">${icon("users", "icon-xs")}</span>` : `<img src="https://github.com/${encodeURIComponent(name)}.png?size=40" class="chip-avatar" alt="" loading="lazy">`}
+        <span class="person-chip-name">${escapeHtml(ownerDisplay(o, repo.owner))}</span><span class="person-chip-why">owner</span></a></li>`;
+    }),
+  ];
 
   document.getElementById("pr-brief-body").innerHTML = `
     ${prHeaderHtml(pr, pr)}
-    <section class="card availability availability-${PR_TONE[status.status]}">
-      <div class="availability-head"><span class="availability-dot"></span><strong>${status.verdict}</strong></div>
-      <ul class="reason-list">${reasons}</ul>
-      <p class="brief-note">${escapeHtml(status.advice)}</p>
+    <section class="verdict verdict-${tone}">
+      <p class="verdict-line"><strong>${escapeHtml(status.verdict)}</strong></p>
+      ${why ? `<p class="verdict-why">${why}</p>` : ""}
+      <p class="verdict-next">${icon("arrow-right", "icon-sm")}<span>${escapeHtml(status.advice)}</span></p>
     </section>
     ${askRowHtml("pr")}
     ${stackSectionHtml(prStack(pr, files), stackProfile, "What it touches")}
@@ -374,21 +396,14 @@ function renderPrBrief(repo, brief) {
       ${activity}
     </section>
     <section class="brief-section">
-      <h2 class="section-title">Files changed · ${pr.changed_files ?? files.length}</h2>
-      <ul class="pr-files">${fileRows}</ul>
-      ${files.length > 20 || (pr.changed_files || 0) > files.length ? `<p class="brief-note"><a href="${pr.html_url}/files" target="_blank">See all ${pr.changed_files} files on GitHub</a></p>` : ""}
+      <h2 class="section-title">Files changed · ${total}</h2>
+      <ul class="pr-files">${shownFiles.map(fileRow).join("")}</ul>
+      ${moreFiles.length ? `<details class="fold"><summary>${moreFiles.length} more</summary><ul class="pr-files">${moreFiles.map(fileRow).join("")}</ul></details>` : ""}
+      ${total > files.slice(0, 40).length ? `<p class="brief-note"><a href="${pr.html_url}/files" target="_blank">All ${total} on GitHub</a></p>` : ""}
     </section>
     <section class="brief-section">
       <h2 class="section-title">People</h2>
-      ${people.length || owners.length ? `<ul class="people-list">
-        ${people.map(p => `<li class="person">
-          <img src="${avatarUrl(p.avatar || `https://github.com/${encodeURIComponent(p.login)}.png`, 64)}" class="contributor-avatar" alt="" loading="lazy">
-          <div class="contributor-info"><div class="contributor-top">
-            <a href="https://github.com/${encodeURIComponent(p.login)}" target="_blank" class="contributor-name">${escapeHtml(p.login)}</a>
-            <span class="role-chips"><span class="role-chip reason-${p.tone}">${escapeHtml(p.note)}</span></span></div></div></li>`).join("")}
-      </ul>` : ""}
-      ${owners.length ? `<p class="brief-note">Code owners of the changed files: ${owners.map(o => `<code>${escapeHtml(o)}</code>`).join(" ")}</p>` : ""}
-      ${!people.length && !owners.length ? `<p class="brief-note">No reviewers yet.</p>` : ""}
+      ${chips.length ? `<ul class="people-chips">${chips.join("")}</ul>` : `<p class="brief-note">No reviewers yet.</p>`}
     </section>`;
 }
 

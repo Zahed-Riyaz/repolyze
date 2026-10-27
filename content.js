@@ -34,7 +34,7 @@ function guideCardHtml(page, state) {
   if (!state.open) return head;
   let body = "";
   if (state.phase === "idle") {
-    body = `<p class="note">Whether it's free, where to start and who owns the code. Uses a few GitHub requests.</p>
+    body = `<p class="note">Is it free, where to start, who owns it.</p>
       <button class="btn" data-act="load">Show</button>`;
   } else if (state.phase === "loading") {
     body = `<p class="note">Reading the issue and the repo…</p>`;
@@ -46,7 +46,6 @@ function guideCardHtml(page, state) {
       <li class="file conf-${f.confidence}">
         <a href="${base}${f.path.split("/").map(encodeURIComponent).join("/")}" title="${esc(f.path)}">${esc(f.name)}</a>
         <span class="why">${esc(f.why)}</span>
-        ${f.dir ? `<span class="dir" title="${esc(f.path)}">${esc(f.dir)}</span>` : ""}
       </li>`;
     const guesses = d.guesses.length
       ? `<details${d.start.length ? "" : " open"}><summary>${d.guesses.length} ${d.guesses.length === 1 ? "guess" : "guesses"} by file name</summary><ul class="files">${d.guesses.map(row).join("")}</ul></details>`
@@ -58,7 +57,7 @@ function guideCardHtml(page, state) {
       ${d.start.length ? `<ul class="files">${d.start.map(row).join("")}</ul>` : `<p class="note">Nothing in the issue or its PRs points at a file yet.</p>`}
       ${guesses}
       ${d.owners.length ? `<h3>Who owns it</h3><ul class="owners">${d.owners.map(o => `<li><span class="owner" title="${esc(o.handle)}">${esc(o.display)}</span><span class="why">${o.files.length === 1 ? "1 file" : `${o.files.length} files`}</span></li>`).join("")}</ul>` : ""}
-      <button class="btn" data-act="panel">Open the full brief in the panel</button>`;
+      <button class="btn" data-act="panel">Open the full brief</button>`;
   }
   return head + `<div class="body">${body}</div>`;
 }

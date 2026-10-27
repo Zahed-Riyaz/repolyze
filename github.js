@@ -34,8 +34,12 @@ const GH_PERSIST_MS = 3 * 24 * 60 * 60 * 1000; // stored responses older than th
 const GH_PERSIST_MAX_CHARS = 4_000_000;       // total stored, so chat history keeps room in storage.local
 const ghMemCache = new Map();        // cache key → { status, body, etag, link, time }
 const ghInflight = new Map();        // cache key → Promise of the same
-// Core quota drives the badge/banner; search has its own (10/min anonymously)
-const ghState = { remaining: null, limit: null, resetAt: 0, badToken: false, search: { remaining: null, resetAt: 0 } };
+// Core quota drives the badge/banner. Search (issues/PRs, 10/min anonymously)
+// and code search (10/min) are separate quotas GitHub reports in the same
+// headers, named by X-RateLimit-Resource; they must never touch the core numbers.
+const ghState = { remaining: null, limit: null, resetAt: 0, badToken: false,
+  search: { remaining: null, resetAt: 0 }, codeSearch: { remaining: null, resetAt: 0 } };
+const otherLimits = {}; // any other resource GitHub names (graphql, …): tracked, never shown
 
 class GitHubError extends Error {
   constructor(message, status, { rateLimited = false, resetAt = 0, resource = "core" } = {}) {
@@ -47,8 +51,16 @@ class GitHubError extends Error {
   }
 }
 
-const resourceFor = (url) => (/^\/search\//.test(new URL(url).pathname) ? "search" : "core");
-const limitsFor = (resource) => (resource === "search" ? ghState.search : ghState);
+function resourceFor(url) {
+  const path = new URL(url).pathname;
+  return path.startsWith("/search/code") ? "code_search" : path.startsWith("/search/") ? "search" : "core";
+}
+function limitsFor(resource) {
+  if (resource === "core") return ghState;
+  if (resource === "search") return ghState.search;
+  if (resource === "code_search") return ghState.codeSearch;
+  return (otherLimits[resource] ??= { remaining: null, resetAt: 0 });
+}
 
 function isRateLimited(resource = "core") {
   const l = limitsFor(resource);
@@ -57,7 +69,7 @@ function isRateLimited(resource = "core") {
 
 function rateLimitError(resource = "core") {
   const { resetAt } = limitsFor(resource);
-  const message = resource === "search"
+  const message = resource !== "core"
     ? `GitHub's search limit is used up for a moment — it resets at ${formatTime(resetAt)}.`
     : `GitHub's hourly request limit is used up — it resets at ${formatTime(resetAt)}.`;
   return new GitHubError(message, 403, { rateLimited: true, resetAt, resource });
@@ -131,6 +143,18 @@ async function clearGitHubCache(mode = null) {
   if (keys.length) await chrome.storage.local.remove(keys);
 }
 
+// Sign-in first used a GitHub App, then moved to an OAuth App. That app's user
+// tokens (ghu_…) can't see pull-request events in issue timelines, so a brief
+// would call an issue free when a PR is linked to it — they're dropped once and
+// the user signs in again. OAuth (gho_…) and pasted (ghp_…, github_pat_…) stay.
+async function retireGitHubAppToken(token) {
+  if (!/^ghu_/.test(token || "")) return token;
+  await chrome.storage.local.remove(["githubToken", "githubUser", "stackProfile"]);
+  await clearGitHubCache("auth");
+  await chrome.storage.local.set({ signInMoved: true });
+  return "";
+}
+
 function noteRateLimitHeaders(res, resource) {
   const remaining = res.headers.get("X-RateLimit-Remaining");
   if (remaining === null) return;
@@ -159,10 +183,12 @@ function isRateLimitResponse(res, body, resource = "core") {
 
 // GET a GitHub API URL → { status, body, link }. Cached, de-duplicated and
 // rate-limit aware; a stale cached copy is preferred over failing.
-async function githubRequest(url) {
+// `revalidate`: ask GitHub even if the saved copy is fresh (with its ETag, so
+// an unchanged answer is a free 304) — for when the user is looking at the thing itself
+async function githubRequest(url, { revalidate = false } = {}) {
   const key = ghCacheKey(url);
   const cached = await ghCacheGet(key);
-  if (cached && Date.now() - cached.time < GH_FRESH_MS) return cached;
+  if (cached && !revalidate && Date.now() - cached.time < GH_FRESH_MS) return cached;
   if (ghInflight.has(key)) return ghInflight.get(key);
 
   const resource = resourceFor(url);
@@ -212,13 +238,13 @@ async function githubRequest(url) {
 
 // `repo` defaults to the current repo; callers that have already awaited
 // something must pass the repo they captured, since currentRepo may have moved on.
-async function fetchGitHub(endpoint, repo = currentRepo) {
-  return (await fetchGitHubPage(endpoint, repo)).data;
+async function fetchGitHub(endpoint, repo = currentRepo, opts = {}) {
+  return (await fetchGitHubPage(endpoint, repo, opts)).data;
 }
 
 // Like fetchGitHub, but also returns the Link header (for page counts)
-async function fetchGitHubPage(endpoint, repo = currentRepo) {
-  const { status, body, link } = await githubRequest(repoApiUrl(endpoint, repo));
+async function fetchGitHubPage(endpoint, repo = currentRepo, opts = {}) {
+  const { status, body, link } = await githubRequest(repoApiUrl(endpoint, repo), opts);
   if (status < 200 || status >= 300) {
     throw new GitHubError(`GitHub API ${status}: ${body?.message || "request failed"}`, status);
   }

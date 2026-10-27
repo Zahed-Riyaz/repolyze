@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "GitHub Repo Analyzer & RAG Chat",
+  "name": "Repolyze – contributor guide for GitHub",
   "version": "1.2",
-  "description": "Analyze GitHub repos: issues, tech stack, maintainers, contributor health, and chat grounded in the repo's files.",
+  "description": "Find GitHub issues you can actually work on, see where to start and who to ask, and get answers cited from the repo's own code.",
   "permissions": [
     "sidePanel",
     "storage",
@@ -18,7 +18,7 @@
     "http://localhost:11434/*"
   ],
   "action": {
-    "default_title": "Open Repo Analyzer"
+    "default_title": "Open Repolyze"
   },
   "side_panel": {
     "default_path": "sidepanel.html"
@@ -37,5 +37,6 @@
       ],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "short_name": "Repolyze"
 }

@@ -232,6 +232,7 @@ function scoreHealth(sig) {
     const speed = r.medianHours === null ? 0 : tier(r.medianHours, [[24, 20], [72, 16], [168, 10], [720, 4]]);
     const coverage = r.rate >= 0.8 ? 10 : r.rate >= 0.5 ? 6 : r.rate >= 0.25 ? 3 : 0;
     factors.push({ key: "response", label: "Maintainer response", max: 30, points: speed + coverage,
+      value: `${r.medianHours !== null ? `${fmtHours(r.medianHours)} · ` : ""}${pct(r.rate)} answered`,
       detail: `${pct(r.rate)} of ${r.sample} new issues/PRs got a reply${r.medianHours !== null ? ` · median ${fmtHours(r.medianHours)}` : ""}` });
   } else {
     factors.push({ key: "response", label: "Maintainer response", max: 30, points: null, detail: "Not enough recent issues to measure" });
@@ -243,6 +244,7 @@ function scoreHealth(sig) {
     const share = p.outsideShare === null ? 0 : p.outsideShare >= 0.3 ? 15 : p.outsideShare >= 0.1 ? 10 : p.outsideShare > 0 ? 5 : 0;
     const accept = p.outsideAcceptance >= 0.6 ? 10 : p.outsideAcceptance >= 0.3 ? 6 : p.outsideAcceptance > 0 ? 3 : 0;
     factors.push({ key: "outside", label: "Merges outside PRs", max: 25, points: share + accept,
+      value: `${p.outsideMerged} of ${p.outsideClosed}`,
       detail: `${p.outsideMerged} of ${p.outsideClosed} recent PRs from outside contributors merged` });
   } else {
     factors.push({ key: "outside", label: "Merges outside PRs", max: 25, points: null, detail: "Too few recent outside PRs to judge" });
@@ -251,6 +253,7 @@ function scoreHealth(sig) {
   // Merge speed (15)
   if (p && p.merged >= 3 && p.medianMergeDays !== null) {
     factors.push({ key: "merge", label: "Merge speed", max: 15, points: tier(p.medianMergeDays, [[2, 15], [7, 11], [14, 7], [30, 3]]),
+      value: p.medianMergeDays < 1 ? "<1 day" : `${Math.round(p.medianMergeDays)} day${Math.round(p.medianMergeDays) === 1 ? "" : "s"}`,
       detail: `Median ${p.medianMergeDays < 1 ? "<1 day" : `${Math.round(p.medianMergeDays)} days`} from open to merge (${p.merged} PRs)` });
   } else {
     factors.push({ key: "merge", label: "Merge speed", max: 15, points: null, detail: "Too few recent merges to judge" });
@@ -260,6 +263,7 @@ function scoreHealth(sig) {
   if (sig.repoData?.pushed_at) {
     const days = (sig.now - Date.parse(sig.repoData.pushed_at)) / DAY_MS;
     factors.push({ key: "activity", label: "Recent activity", max: 15, points: tier(days, [[7, 15], [30, 11], [90, 6], [180, 2]]),
+      value: sig.repoData.archived ? "archived" : `pushed ${daysAgo(sig.repoData.pushed_at)}`,
       detail: `Last push ${daysAgo(sig.repoData.pushed_at)}${sig.repoData.archived ? " · archived" : ""}` });
   } else {
     factors.push({ key: "activity", label: "Recent activity", max: 15, points: null, detail: "Unknown" });
@@ -279,6 +283,7 @@ function scoreHealth(sig) {
     const got = items.reduce((n, [, v, w]) => n + (v ? w : 0), 0);
     const missing = items.filter(([, v]) => !v).map(([name]) => name);
     factors.push({ key: "onboarding", label: "Onboarding", max: 15, points: Math.round((got / avail) * 15),
+      value: missing.length ? `no ${missing[0]}${missing.length > 1 ? ` +${missing.length - 1}` : ""}` : "all there",
       detail: missing.length ? `Missing: ${missing.join(", ")}` : "Guide, templates and beginner issues all present" });
   } else {
     factors.push({ key: "onboarding", label: "Onboarding", max: 15, points: null, detail: "Unknown" });

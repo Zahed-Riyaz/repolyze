@@ -176,8 +176,9 @@ function ownerSummary(files, rules, repoOwner) {
 async function issueGuide({ owner, repo: name, number }) {
   const repo = { owner, repo: name };
   const [issue, thread, owners, meta] = await Promise.all([
-    fetchGitHub(`/issues/${number}`, repo),
-    loadIssueThread(repo, number),
+    // The card sits on the issue's own page: check what's there now (free when unchanged)
+    fetchGitHub(`/issues/${number}`, repo, { revalidate: true }),
+    loadIssueThread(repo, number, { revalidate: true }),
     loadCodeOwners(repo).catch(() => ({ rules: [] })),
     loadRepoData(repo).catch(() => ({})),
   ]);

@@ -10,8 +10,11 @@
 // github.com/settings/developers (any homepage URL; the callback URL isn't
 // used), tick "Enable Device Flow", and put its Client ID below. A client ID
 // isn't a secret. While it's empty, Settings shows only the paste-a-token form.
+// It must be an OAuth App (Ov23li…), not a GitHub App (Iv23li…): an App's
+// user token can't see pull-request events in issue timelines without
+// permissions, and expires after 8 hours.
 const AUTH = {
-  clientId: "Iv23liarORnQeoxhJ8gO",
+  clientId: "Ov23li1IRP1EEhQWyHNE",
   deviceCodeUrl: "https://github.com/login/device/code",
   tokenUrl: "https://github.com/login/oauth/access_token",
   verifyUrl: "https://github.com/login/device",
@@ -173,6 +176,14 @@ async function signOutOfGitHub() {
   renderGitHubAccount();
   showSpStatus("sp-gh-status", "Signed out. To revoke access too, remove the app under GitHub → Settings → Applications.", false, 6000);
   onGitHubTokenChanged();
+}
+
+// Once, after retireGitHubAppToken dropped a token from the old GitHub App
+async function noteSignInMoved() {
+  const { signInMoved } = await chrome.storage.local.get(["signInMoved"]);
+  if (!signInMoved) return;
+  await chrome.storage.local.remove(["signInMoved"]);
+  showSpStatus("sp-gh-status", "Sign-in has moved to a new GitHub app — sign in again to see linked pull requests.", false, 0);
 }
 
 function handleGitHubCardClick(e) {

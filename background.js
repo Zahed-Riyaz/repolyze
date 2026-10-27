@@ -14,11 +14,13 @@ chrome.sidePanel
   .catch((error) => console.error(error));
 
 chrome.runtime.onInstalled.addListener(() => {
-  console.log("GitHub Repo Analyzer & RAG Chat extension installed.");
+  console.log("Repolyze installed.");
 });
 
 // The worker can be stopped at any time, so the token is re-read on wake-up
-const tokenReady = chrome.storage.local.get(["githubToken"]).then(({ githubToken: t }) => { githubToken = t || ""; });
+const tokenReady = chrome.storage.local.get(["githubToken"])
+  .then(({ githubToken: t }) => retireGitHubAppToken(t || ""))
+  .then((t) => { githubToken = t; });
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.githubToken) githubToken = changes.githubToken.newValue || "";
 });
