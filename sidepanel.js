@@ -586,7 +586,7 @@ function applyRepoData(data) {
   // Fork detection — show upstream repo link if this is a fork
   const forkBadge = document.getElementById("repo-fork-badge");
   if (data.fork && data.parent) {
-    forkBadge.innerHTML = `${icon("fork", "icon-sm")}fork of <a href="${data.parent.html_url}" target="_blank">${escapeHtml(data.parent.full_name)}</a>`;
+    forkBadge.innerHTML = `${icon("fork", "icon-sm")}fork of <a href="${escapeHtml(data.parent.html_url)}" target="_blank">${escapeHtml(data.parent.full_name)}</a>`;
     forkBadge.style.display = "";
   } else {
     forkBadge.style.display = "none";
@@ -614,9 +614,9 @@ function repoIdentityHtml(data) {
     <div class="repo-identity-main">
       ${owner.avatar_url ? `<img src="${avatarUrl(owner.avatar_url, 96)}" class="repo-avatar${isOrg ? " is-org" : ""}" alt="">` : ""}
       <div class="repo-identity-text">
-        <a href="${data.html_url}" target="_blank" class="repo-identity-name">${escapeHtml(data.full_name || "")}</a>
+        <a href="${escapeHtml(data.html_url)}" target="_blank" class="repo-identity-name">${escapeHtml(data.full_name || "")}</a>
         <div class="repo-identity-owner">
-          by <a href="${owner.html_url}" target="_blank">${escapeHtml(owner.login || "")}</a>
+          by <a href="${escapeHtml(owner.html_url)}" target="_blank">${escapeHtml(owner.login || "")}</a>
           <span class="chip">${isOrg ? "Organization" : "User"}</span>
           ${data.archived ? `<span class="chip chip-closed">Archived</span>` : ""}
         </div>
@@ -813,7 +813,7 @@ function issueCard(issue) {
         </span>
         ${stackLineHtml(stackFor(issue.number, "issue"))}
       </button>
-      <a class="row-external" href="${issue.html_url}" target="_blank" title="Open on GitHub" aria-label="Open #${issue.number} on GitHub">${icon("external", "icon-sm")}</a>
+      <a class="row-external" href="${escapeHtml(issue.html_url)}" target="_blank" title="Open on GitHub" aria-label="Open #${issue.number} on GitHub">${icon("external", "icon-sm")}</a>
     </li>`;
 }
 
@@ -1214,7 +1214,7 @@ function renderPeople({ maintainers, partialSample, contributors }) {
       return `
         <li class="person-row" style="animation-delay:${i * 25}ms" title="${escapeHtml(hover)}">
           <img src="${avatarUrl(p.avatar_url, 40)}" class="row-avatar" alt="" loading="lazy">
-          <a href="${p.html_url}" target="_blank" class="person-row-name">${escapeHtml(p.login)}</a>
+          <a href="${escapeHtml(p.html_url)}" target="_blank" class="person-row-name">${escapeHtml(p.login)}</a>
           ${p.codeOwner && p.threads ? `<span class="person-row-tag">owner</span>` : ""}
           <span class="person-row-meta">${what}</span>
         </li>`;
@@ -1232,7 +1232,7 @@ function renderPeople({ maintainers, partialSample, contributors }) {
   cList.innerHTML = contributors.slice(0, 8).map((user, i) => `
     <li class="person-row" style="animation-delay:${i * 25}ms">
       <img src="${avatarUrl(user.avatar_url, 40)}" class="row-avatar" alt="" loading="lazy">
-      <a href="${user.html_url}" target="_blank" class="person-row-name">${escapeHtml(user.login)}</a>
+      <a href="${escapeHtml(user.html_url)}" target="_blank" class="person-row-name">${escapeHtml(user.login)}</a>
       <span class="share-bar row-share"><span style="width:${Math.max(3, (user.contributions / top) * 100)}%"></span></span>
       <span class="person-row-meta">${formatNumber(user.contributions)}</span>
     </li>`).join("");
