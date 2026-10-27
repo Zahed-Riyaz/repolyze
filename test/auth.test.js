@@ -122,3 +122,27 @@ test("the rate-limit banner offers Sign in when it's available, a token otherwis
   tokenOnly.fn.renderRateLimit();
   assert.equal(tokenOnly.el("rate-banner-btn").textContent, "Get token");
 });
+
+// ── Moving from the GitHub App to an OAuth App ───────────────────────────────
+test("a token from the old GitHub App is dropped with what it read; OAuth and pasted tokens stay", async () => {
+  const panel = loadPanel({ chrome: { local: {
+    githubToken: "ghu_old", githubUser: { login: "ada" }, stackProfile: { langs: {} },
+    "gh:auth:https://api.github.com/repos/o/r": { status: 200, body: {}, time: Date.now() },
+    "gh:anon:https://api.github.com/repos/o/r": { status: 200, body: {}, time: Date.now() },
+  } } });
+  assert.equal(await panel.fn.retireGitHubAppToken("ghu_old"), "");
+  const data = panel.chrome.storage.local.data;
+  for (const k of ["githubToken", "githubUser", "stackProfile", "gh:auth:https://api.github.com/repos/o/r"]) assert.equal(data[k], undefined, k);
+  assert.ok(data["gh:anon:https://api.github.com/repos/o/r"], "anonymous responses stay");
+
+  await panel.fn.noteSignInMoved();
+  assert.match(panel.el("sp-gh-status").textContent, /sign in again/);
+  assert.equal(panel.chrome.storage.local.data.signInMoved, undefined, "the note shows once");
+
+  for (const t of ["gho_x", "ghp_x", "github_pat_x", ""]) assert.equal(await panel.fn.retireGitHubAppToken(t), t);
+});
+
+test("the shipped client ID is an OAuth App's, not a GitHub App's", () => {
+  const id = loadPanel({ fetch: async () => json({}) }).run("AUTH.clientId");
+  assert.doesNotMatch(id, /^Iv/, "GitHub App user tokens can't see PR events in issue timelines");
+});

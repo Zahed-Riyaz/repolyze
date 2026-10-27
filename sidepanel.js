@@ -157,8 +157,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Load saved settings — also migrate legacy geminiApiKey → aiApiKey
   const stored = await chrome.storage.local.get(["githubToken", "githubUser", "aiProvider", "aiApiKey", "aiModels", "ollamaModel", "ollamaDefaultMoved", "geminiApiKey"]);
-  githubToken  = stored.githubToken  || "";
-  githubUser   = stored.githubUser   || null;
+  githubToken  = await retireGitHubAppToken(stored.githubToken || "");
+  githubUser   = githubToken ? stored.githubUser || null : null;
   aiProvider   = stored.aiProvider   || "groq";
   aiApiKey     = stored.aiApiKey     || "";
   ollamaModel  = stored.ollamaModel  || DEFAULT_OLLAMA_MODEL;
@@ -179,6 +179,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   initSettingsTab();
+  noteSignInMoved();
 
   document.getElementById("rate-banner-btn").addEventListener("click", signInOrGetToken);
   document.getElementById("sp-gh-card").addEventListener("click", handleGitHubCardClick);

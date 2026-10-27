@@ -143,6 +143,18 @@ async function clearGitHubCache(mode = null) {
   if (keys.length) await chrome.storage.local.remove(keys);
 }
 
+// Sign-in first used a GitHub App, then moved to an OAuth App. That app's user
+// tokens (ghu_…) can't see pull-request events in issue timelines, so a brief
+// would call an issue free when a PR is linked to it — they're dropped once and
+// the user signs in again. OAuth (gho_…) and pasted (ghp_…, github_pat_…) stay.
+async function retireGitHubAppToken(token) {
+  if (!/^ghu_/.test(token || "")) return token;
+  await chrome.storage.local.remove(["githubToken", "githubUser", "stackProfile"]);
+  await clearGitHubCache("auth");
+  await chrome.storage.local.set({ signInMoved: true });
+  return "";
+}
+
 function noteRateLimitHeaders(res, resource) {
   const remaining = res.headers.get("X-RateLimit-Remaining");
   if (remaining === null) return;
