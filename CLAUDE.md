@@ -279,7 +279,7 @@ Where it's used:
 - **Conventions:** keep pure logic (verdicts, scoring, parsing, prompts) separate from rendering and unit-test it; escape everything interpolated into `innerHTML`; guard async renders with `isCurrentRepo(key)`; go through `fetchGitHub`/`fetchGitHubPage` (never raw `fetch`) for GitHub API calls; always pass `direction=desc` when sorting GitHub lists (it defaults to ascending); put AI instructions in `opts.system`.
 - **GitHub sign-in** needs an OAuth App's Client ID in `AUTH.clientId` (`auth.js`), with "Enable Device Flow" ticked and "Expire user access tokens" off (refreshing needs the secret); empty → token form only. Not a GitHub App (`Iv23li…`): its user tokens hide PR events in issue timelines — tokens from the old one (`ghu_…`) are dropped on start (`retireGitHubAppToken`, panel and worker) with a one-time "sign in again" note.
 - **Model IDs** live in `MODEL_CHOICES` (`sidepanel.js`; first per provider = default, `MODELS` derived from it; `modelFor(provider)` = the one in use, from `aiModels` in storage), and Ollama's default in `DEFAULT_OLLAMA_MODEL` (`llama3.1:8b`; setups still on the old `llama3.2` are moved once); the Ollama setup steps come from `ollama.js` (`ollamaSteps(model, os)`, `ollamaSetupHtml`; shared by the panel and the options page, no DOM globals) — install, pull the model, then `OLLAMA_ORIGINS='chrome-extension://*' ollama serve` (extensions only, not `*`); context budgets in `CONTEXT_BUDGET` and picker sizes in `PICKER_SHORTLIST` (`retrieval.js`).
-- **Not yet done:** extension icons, private-repo warning, Web Store packaging, real-model answer evaluation.
+- **Not yet done:** private-repo warning, Web Store packaging, real-model answer evaluation.
 
 ---
 
