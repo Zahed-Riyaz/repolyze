@@ -800,26 +800,49 @@ function labelDotHtml(l) {
   return `<span class="label-dot" style="--lc:#${color}">${escapeHtml(l.name)}</span>`;
 }
 
-// The whole row opens the brief; ↗ opens the issue on GitHub
+// An issue's kind from its labels ("bug", "type: feature", "documentation"…), for the ticket's quiet tag; "" when unclear
+function issueKind(labels) {
+  const names = (labels || []).map(l => normalizeLabel(l.name || ""));
+  const has = (re) => names.some(n => re.test(n));
+  if (has(/\b(bug|defect|regression|crash)\b/)) return "Bug";
+  if (has(/\b(feature|enhancement|feat|proposal|feature request)\b/)) return "Feature";
+  if (has(/\bdoc(s|umentation)?\b/)) return "Docs";
+  if (has(/\b(question|support)\b/)) return "Question";
+  return "";
+}
+
+// The ticket: a stub (number + one status word, tinted by status) torn from the body (title, then one line of
+// kind, stack, age and comments). A good-first issue gets a seal stamped on the tear.
+// The whole ticket opens the brief; ↗ opens the issue on GitHub.
+const TICKET_OLD_DAYS = 365; // older than this, the age shows in amber: it may be stale
+function ticketAge(iso) {
+  const old = Date.now() - Date.parse(iso) > TICKET_OLD_DAYS * DAY_MS;
+  return `<span class="ticket-age${old ? " is-old" : ""}"${old ? ' title="Over a year old: it may be stale"' : ""}>${daysAgo(iso)}</span>`;
+}
 function issueCard(issue) {
-  const labels = issue.labels.slice(0, 3).map(labelDotHtml).join("") +
-    (issue.labels.length > 3 ? `<span class="label-more" title="${escapeHtml(issue.labels.slice(3).map(l => l.name).join(", "))}">+${issue.labels.length - 3}</span>` : "");
-  const reactions = issue.reactions?.total_count || 0;
   const assignee = issue.assignees?.[0] || issue.assignee;
+  const kind = issueKind(issue.labels);
+  const open = issue.state !== "closed";
+  const first = open && issue.labels.some(l => labelMatchesFilter(l.name, "good-first-issue"));
+  const labels = issue.labels.map(l => l.name).join(", ");
+  const [tone, word] = issueTicketState(issue);
+  const who = assignee && open ? `<span class="ticket-meta">assigned to <img src="${avatarUrl(assignee.avatar_url, 32)}" class="avatar-sm" alt="">${escapeHtml(assignee.login)}</span>` : "";
   return `
-    <li class="list-row">
-      <button class="row-open start-issue-btn" data-issue="${issue.number}" title="Start this issue">
-        <span class="row-title"><span class="issue-number">#${issue.number}</span> ${escapeHtml(issue.title)}</span>
-        <span class="row-meta">
-          ${issue.state === "closed" ? `<span class="chip chip-closed">Closed</span>` : ""}
-          <span title="${issue.comments} comments">${icon("comment", "icon-xs")}${issue.comments}</span>
-          ${reactions ? `<span title="${reactions} reactions">${icon("heart", "icon-xs")}${reactions}</span>` : ""}
-          ${assignee ? `<span title="Assigned to ${escapeHtml(assignee.login)}"><img src="${avatarUrl(assignee.avatar_url, 32)}" class="avatar-sm" alt="">assigned</span>` : ""}
-          ${labels}
-          <span class="row-age">${daysAgo(issue.created_at)}</span>
+    <li class="list-row${first ? " has-seal" : ""}">
+      <button class="row-open start-issue-btn ${tone}" data-issue="${issue.number}" title="Start this issue${labels ? ` · ${escapeHtml(labels)}` : ""}">
+        <span class="ticket-stub"><span class="ticket-num">#${issue.number}</span><span class="ticket-status">${word}</span></span>
+        <span class="ticket-body">
+          <span class="row-title">${escapeHtml(issue.title)}</span>
+          <span class="ticket-line">
+            ${kind ? `<span class="ticket-kind">${kind}</span>` : ""}
+            ${stackLineHtml(stackFor(issue.number, "issue"))}
+            ${who}
+            ${ticketAge(issue.created_at)}
+            <span class="ticket-meta" title="${issue.comments} comments">${issue.comments} comment${issue.comments === 1 ? "" : "s"}</span>
+          </span>
         </span>
-        ${stackLineHtml(stackFor(issue.number, "issue"))}
       </button>
+      ${first ? `<span class="ticket-seal" aria-label="Good first issue">Good<br>first<br>issue</span>` : ""}
       <a class="row-external" href="${escapeHtml(issue.html_url)}" target="_blank" title="Open on GitHub" aria-label="Open #${issue.number} on GitHub">${icon("external", "icon-sm")}</a>
     </li>`;
 }

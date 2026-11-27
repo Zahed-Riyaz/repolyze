@@ -425,7 +425,8 @@ test("the Repo tab card says where the app starts and offers the map, with no bl
   await panel.fn.fetchRepoMap();
   const html = panel.el("repo-map").innerHTML;
   assert.match(text(html), /How it runs/);
-  assert.match(text(html), /Starts in src\/index\.ts · index\.ts → a\.ts/);
+  assert.match(text(html), /▶ index\.ts → a\.ts/);
+  assert.match(html, /title="Starts in src\/index\.ts"/);
   assert.match(text(html), /2 files read/);
   assert.match(html, /id="map-open"/);
   assert.match(html, /id="map-explain"/);
@@ -517,7 +518,7 @@ test("a private repo waits for a click", async () => {
   assert.ok(!gh.apiCalls.some(u => u.startsWith("/contents/src/")), "no source files read yet");
   await panel.fn.fetchRepoMap({ allowPrivate: true });
   assert.ok(gh.apiCalls.some(u => u.startsWith("/contents/src/")));
-  assert.match(text(panel.el("repo-map").innerHTML), /Starts in src\/index\.ts/);
+  assert.match(panel.el("repo-map").innerHTML, /title="Starts in src\/index\.ts"/);
 });
 test("Try again after a failed private load keeps waiting for the click", async () => {
   const { gh } = mapPanel(SMALL_REPO, { private: true });
@@ -547,7 +548,7 @@ test("Try again after a failed clicked private load keeps its consent", async ()
   await panel.fn.fetchRepoMap({ allowPrivate: true });
   assert.match(panel.el("repo-map").innerHTML, /id="map-retry"[^>]*data-private="1"/);
   await panel.fn.handleMapClick({ target: { closest: (s) => (s === "#map-retry" ? { dataset: { private: "1" } } : null) } });
-  assert.match(text(panel.el("repo-map").innerHTML), /Starts in src\/index\.ts/);
+  assert.match(panel.el("repo-map").innerHTML, /title="Starts in src\/index\.ts"/);
 });
 
 // ── What a file says about itself ────────────────────────────────────────────

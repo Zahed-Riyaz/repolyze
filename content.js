@@ -64,9 +64,9 @@ function guideCardHtml(page, state) {
 
 const GUIDE_CSS = `
   :host { all: initial; display: block; font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
-  .card { --bg:#fff; --fg:#1f2328; --muted:#59636e; --subtle:#818b98; --line:#d8dee4; --hover:#f6f8fa; --accent:#0969da; --good:#1a7f37; --warn:#9a6700; --bad:#cf222e;
+  .card { --bg:#fff; --fg:#1f2328; --muted:#59636e; --subtle:#818b98; --line:#d8dee4; --hover:#f6f8fa; --accent:#7c3aed; --good:#1a7f37; --warn:#9a6700; --bad:#cf222e;
     background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
-  .card.dark { --bg:#0d1117; --fg:#e6edf3; --muted:#9198a1; --subtle:#6e7681; --line:#30363d; --hover:#151b23; --accent:#4493f8; --good:#3fb950; --warn:#d29922; --bad:#f85149; }
+  .card.dark { --bg:#0d1117; --fg:#e6edf3; --muted:#9198a1; --subtle:#6e7681; --line:#30363d; --hover:#151b23; --accent:#a78bfa; --good:#3fb950; --warn:#d29922; --bad:#f85149; }
   .card.floating { position: fixed; right: 16px; bottom: 16px; width: 320px; max-height: 70vh; overflow: auto; z-index: 99; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
   .card.inline { margin: 0 0 16px; }
   button { font: inherit; color: inherit; cursor: pointer; }

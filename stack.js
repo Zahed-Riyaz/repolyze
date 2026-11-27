@@ -355,13 +355,19 @@ function stackLineHtml(stack, profile = stackProfile) {
   }).join("")}</span>`;
 }
 
+// A long path keeps its end, where the file is: libs/partners/openrouter/langchain_openrouter/data/_profiles.py → …/data/_profiles.py
+function stackPathTail(path) {
+  const segs = String(path).split("/");
+  return segs.length > 3 ? `…/${segs.slice(-3).join("/")}` : path;
+}
+
 // The brief's section: what it requires (or touches), with the file behind each language
 function stackSectionHtml(stack, profile = stackProfile, title = "What it requires") {
   if (!stack?.length) return "";
   return `<section class="brief-section">
       <h2 class="section-title">${escapeHtml(title)}</h2>
       <ul class="stack-needs">${stack.map(item => `
-        <li class="${knowsStackItem(item, profile) ? "is-known" : ""}"><strong>${escapeHtml(item.name)}</strong>${item.from ? ` <code>${escapeHtml(item.from)}</code>` : item.kind === "lang" ? ` <span>named in the text</span>` : ""}</li>`).join("")}
+        <li class="${knowsStackItem(item, profile) ? "is-known" : ""}"><strong>${escapeHtml(item.name)}</strong>${item.from ? ` <code title="${escapeHtml(item.from)}">${escapeHtml(stackPathTail(item.from))}</code>` : item.kind === "lang" ? ` <span>named in the text</span>` : ""}</li>`).join("")}
       </ul>
     </section>`;
 }

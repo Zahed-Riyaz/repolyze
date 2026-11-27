@@ -1099,19 +1099,25 @@ async function drawBriefMap(repo, brief, live = () => true) {
 // How the app starts in one line, and the buttons: the map itself lives in its own tab (map.html)
 let mapState = null; // { key, graph } of the card on screen
 
+// The Repo tab's hero: how it runs as a short chain of pills, and the way onto the map
 function mapCardHtml(graph) {
   const core = rankCore(graph);
   const steps = readingPath(graph, core);
   // A package's front file reads as its folder (`prompts/`); the start is the reading path's
-  const name = (p) => `<code>${escapeHtml(mapShortName(p, graph))}</code>`;
   const start = steps[0]?.path || graph.entries[0]?.path;
-  const chain = steps.slice(0, 4).map(s => name(s.path)).join(" → ") + (steps.length > 4 ? " → …" : "");
+  const pill = (p, cls = "") => `<code${cls ? ` class="${cls}"` : ""}>${escapeHtml(mapShortName(p, graph))}</code>`;
+  const arrow = `<span class="map-arrow" aria-hidden="true">→</span>`;
+  const chain = start ? [`<code class="is-start">▶ ${escapeHtml(mapShortName(start, graph))}</code>`,
+    ...steps.slice(1, 4).map(st => pill(st.path)), ...(steps.length > 4 ? ["<code>…</code>"] : [])].join(` ${arrow} `) : "";
+  const parts = Math.min(MAP_PARTS_LIMIT, Object.keys(graph.parts || {}).length);
+  const facts = [steps.length > 1 && `${steps.length} files explain it`, `${graph.read} files read`,
+    parts > 1 && `${parts} main parts`, globalScripts(graph) && "scripts share one global scope"].filter(Boolean).join(" · ");
   return `<div class="map-card-head"><h2 class="section-title">How it runs</h2></div>
-    <p class="map-card-line">${start ? `Starts in <code>${escapeHtml(start)}</code>${steps.length > 1 ? ` · ${chain}` : ""}` : "Couldn't find where this app starts."}</p>
-    <p class="map-card-sub">${graph.read} files read${core.length ? ` · ${core.length} used by many files` : ""}${globalScripts(graph) ? " · scripts share one global scope" : ""}</p>
+    <p class="map-card-sub">${facts}</p>
+    ${chain ? `<div class="map-chain" title="Starts in ${escapeHtml(start)}">${chain}</div>` : `<p class="map-card-line">Couldn't find where this app starts.</p>`}
     <div class="map-card-actions">
-      <button type="button" id="map-open" class="btn btn-xs btn-primary">Open the map ↗</button>
-      <button type="button" id="map-explain" class="btn btn-xs">Explain this map</button>
+      <button type="button" id="map-open" class="btn btn-primary">Open the map ↗</button>
+      <button type="button" id="map-explain" class="btn">Explain it</button>
     </div>`;
 }
 
@@ -1128,7 +1134,7 @@ async function fetchRepoMap({ allowPrivate = false } = {}) {
     if (graph.needsClick) {
       el.innerHTML = `<div class="map-card-head"><h2 class="section-title">How it runs</h2></div>
         <p class="map-card-sub">A private repo: the map reads its files with GitHub requests (about ${graph.cost}).</p>
-        <div class="map-card-actions"><button type="button" id="map-open" class="btn btn-xs btn-primary">Open the map ↗</button></div>`;
+        <div class="map-card-actions"><button type="button" id="map-open" class="btn btn-primary">Open the map ↗</button></div>`;
       return true;
     }
     mapState = { key, graph };

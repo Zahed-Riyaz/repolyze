@@ -280,7 +280,7 @@ test("Start this issue buttons are on every card and open the brief", async () =
   const panel = loadPanel({ fetch: gh.fetch });
   panel.setRepo();
   await panel.fn.fetchIssues();
-  assert.match(panel.el("issues-list").innerHTML, /class="row-open start-issue-btn" data-issue="7"/);
+  assert.match(panel.el("issues-list").innerHTML, /class="row-open start-issue-btn[^"]*" data-issue="7"/);
   panel.fn.openIssueBriefFromList("7");
   await tick(20);
   assert.equal(panel.el("contribute-browse").hidden, true);
@@ -408,4 +408,25 @@ test("a map problem never replaces the rendered brief", async () => {
   const html = panel.el("brief-body").innerHTML;
   assert.match(html, /Where to start[\s\S]*From clone to pull request/);
   assert.doesNotMatch(html, /draw failed|state-error|Something went wrong/);
+});
+test("files that share a name are told apart by as many folders as it takes", () => {
+  const f = plain(Object.fromEntries(pure.distinctFolders([
+    "libs/partners/openrouter/data/_profiles.py", "libs/partners/anthropic/data/_profiles.py", "libs/partners/groq/data/_profiles.py",
+    "core/errors.ts", "cli/errors.ts", "src/unique.ts"])));
+  assert.equal(f["libs/partners/openrouter/data/_profiles.py"], "…/openrouter/data/");
+  assert.equal(f["libs/partners/groq/data/_profiles.py"], "…/groq/data/");
+  assert.equal(f["core/errors.ts"], "core/");
+  assert.equal(f["src/unique.ts"], undefined, "a unique name needs no folder");
+});
+test("a long run of open PRs, closed PRs or offers folds into one line with the count and the latest", () => {
+  const reasons = [
+    ...[1, 2, 3, 4].map(n => ({ tone: "bad", group: "open-pr", text: `Open PR #${n} by @u${n}`, num: n, who: `u${n}`, when: `2026-0${n}-01T00:00:00Z`, url: `https://github.com/o/r/pull/${n}` })),
+    { tone: "info", group: "closed-pr", text: "PR #9 by @z closed unmerged", num: 9, who: "z", when: "2026-01-01T00:00:00Z", url: "https://github.com/o/r/pull/9" },
+    { tone: "info", text: "No maintainer reply yet" },
+  ];
+  const html = pure.reasonsHtml(reasons);
+  assert.match(html, /<details class="verdict-fold"><summary><strong>4 open PRs<\/strong><span> · newest #4 by @u4<\/span>/);
+  assert.match(html, /verdict-fold-items">[\s\S]*#4 @u4[\s\S]*#1 @u1/, "the full list, newest first");
+  assert.match(html, /PR #9 by @z closed unmerged[\s\S]*No maintainer reply yet/, "fewer than 3 of a kind stay inline");
+  assert.doesNotMatch(html, /Open PR #1 by @u1 ·/, "folded reasons are not repeated inline");
 });
