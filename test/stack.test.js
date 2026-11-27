@@ -172,7 +172,7 @@ test("the issue brief says what it requires, with the file behind each language"
   const panel = loadPanel();
   panel.run(`stackProfile = ${JSON.stringify(PROFILE)}`);
   const html = panel.fn.stackSectionHtml(pure.issueStack(issue("Allocator panics in Docker"), ["core/alloc.rs"]));
-  assert.match(html, /What it requires[\s\S]*<li class=""><strong>Rust<\/strong> <code>core\/alloc\.rs<\/code><\/li>[\s\S]*<li class="is-known"><strong>Docker<\/strong><\/li>/);
+  assert.match(html, /What it requires[\s\S]*<li class=""><strong>Rust<\/strong> <code title="core\/alloc\.rs">core\/alloc\.rs<\/code><\/li>[\s\S]*<li class="is-known"><strong>Docker<\/strong><\/li>/);
   assert.equal(panel.fn.stackSectionHtml([]), "");
 });
 
@@ -226,5 +226,5 @@ test("prStack reads the PR's real changed files: languages by size of change, th
   assert.equal(stack[0].from, "web/graph.ts", "the most-changed file for each language");
   const panel = loadPanel();
   panel.run(`stackProfile = ${JSON.stringify(PROFILE)}`);
-  assert.match(panel.fn.stackSectionHtml(stack, undefined, "What it touches"), /What it touches[\s\S]*<li class="is-known"><strong>TypeScript<\/strong> <code>web\/graph\.ts<\/code>/);
+  assert.match(panel.fn.stackSectionHtml(stack, undefined, "What it touches"), /What it touches[\s\S]*<li class="is-known"><strong>TypeScript<\/strong> <code title="web\/graph\.ts">web\/graph\.ts<\/code>/);
 });

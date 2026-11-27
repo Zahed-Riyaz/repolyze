@@ -84,6 +84,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   document.getElementById("issue-sort").addEventListener("change", (e) => { issueView.sort = e.target.value; fetchIssues(); });
   document.getElementById("issue-unclaimed").addEventListener("change", (e) => setUnclaimed(e.target.checked));
+  initRepoMap();
   document.getElementById("issues-more").addEventListener("click", () => showMoreIssues());
   document.getElementById("issue-find").addEventListener("submit", (e) => {
     e.preventDefault();
@@ -315,6 +316,12 @@ function stateItem(html, { error = false, iconName = error ? "alert" : "inbox", 
 function handleRepoRefresh(url) {
   let urlObj;
   try { urlObj = new URL(url); } catch { return; }
+
+  // The flow map tab (map.html?repo=o/r) counts as being on that repo, so Ask works from it
+  if (url.startsWith(chrome.runtime?.getURL?.("map.html") || "\0")) {
+    const repo = urlObj.searchParams.get("repo");
+    if (repo && /^[\w.-]+\/[\w.-]+$/.test(repo)) return handleRepoRefresh(`https://github.com/${repo}`);
+  }
 
   if (urlObj.hostname !== "github.com" && urlObj.hostname !== "www.github.com") {
     showNotRepoMessage();
@@ -793,26 +800,49 @@ function labelDotHtml(l) {
   return `<span class="label-dot" style="--lc:#${color}">${escapeHtml(l.name)}</span>`;
 }
 
-// The whole row opens the brief; ↗ opens the issue on GitHub
+// An issue's kind from its labels ("bug", "type: feature", "documentation"…), for the ticket's quiet tag; "" when unclear
+function issueKind(labels) {
+  const names = (labels || []).map(l => normalizeLabel(l.name || ""));
+  const has = (re) => names.some(n => re.test(n));
+  if (has(/\b(bug|defect|regression|crash)\b/)) return "Bug";
+  if (has(/\b(feature|enhancement|feat|proposal|feature request)\b/)) return "Feature";
+  if (has(/\bdoc(s|umentation)?\b/)) return "Docs";
+  if (has(/\b(question|support)\b/)) return "Question";
+  return "";
+}
+
+// The ticket: a stub (number + one status word, tinted by status) torn from the body (title, then one line of
+// kind, stack, age and comments). A good-first issue gets a seal stamped on the tear.
+// The whole ticket opens the brief; ↗ opens the issue on GitHub.
+const TICKET_OLD_DAYS = 365; // older than this, the age shows in amber: it may be stale
+function ticketAge(iso) {
+  const old = Date.now() - Date.parse(iso) > TICKET_OLD_DAYS * DAY_MS;
+  return `<span class="ticket-age${old ? " is-old" : ""}"${old ? ' title="Over a year old: it may be stale"' : ""}>${daysAgo(iso)}</span>`;
+}
 function issueCard(issue) {
-  const labels = issue.labels.slice(0, 3).map(labelDotHtml).join("") +
-    (issue.labels.length > 3 ? `<span class="label-more" title="${escapeHtml(issue.labels.slice(3).map(l => l.name).join(", "))}">+${issue.labels.length - 3}</span>` : "");
-  const reactions = issue.reactions?.total_count || 0;
   const assignee = issue.assignees?.[0] || issue.assignee;
+  const kind = issueKind(issue.labels);
+  const open = issue.state !== "closed";
+  const first = open && issue.labels.some(l => labelMatchesFilter(l.name, "good-first-issue"));
+  const labels = issue.labels.map(l => l.name).join(", ");
+  const [tone, word] = issueTicketState(issue);
+  const who = assignee && open ? `<span class="ticket-meta">assigned to <img src="${avatarUrl(assignee.avatar_url, 32)}" class="avatar-sm" alt="">${escapeHtml(assignee.login)}</span>` : "";
   return `
-    <li class="list-row">
-      <button class="row-open start-issue-btn" data-issue="${issue.number}" title="Start this issue">
-        <span class="row-title"><span class="issue-number">#${issue.number}</span> ${escapeHtml(issue.title)}</span>
-        <span class="row-meta">
-          ${issue.state === "closed" ? `<span class="chip chip-closed">Closed</span>` : ""}
-          <span title="${issue.comments} comments">${icon("comment", "icon-xs")}${issue.comments}</span>
-          ${reactions ? `<span title="${reactions} reactions">${icon("heart", "icon-xs")}${reactions}</span>` : ""}
-          ${assignee ? `<span title="Assigned to ${escapeHtml(assignee.login)}"><img src="${avatarUrl(assignee.avatar_url, 32)}" class="avatar-sm" alt="">assigned</span>` : ""}
-          ${labels}
-          <span class="row-age">${daysAgo(issue.created_at)}</span>
+    <li class="list-row${first ? " has-seal" : ""}">
+      <button class="row-open start-issue-btn ${tone}" data-issue="${issue.number}" title="Start this issue${labels ? ` · ${escapeHtml(labels)}` : ""}">
+        <span class="ticket-stub"><span class="ticket-num">#${issue.number}</span><span class="ticket-status">${word}</span></span>
+        <span class="ticket-body">
+          <span class="row-title">${escapeHtml(issue.title)}</span>
+          <span class="ticket-line">
+            ${kind ? `<span class="ticket-kind">${kind}</span>` : ""}
+            ${stackLineHtml(stackFor(issue.number, "issue"))}
+            ${who}
+            ${ticketAge(issue.created_at)}
+            <span class="ticket-meta" title="${issue.comments} comments">${issue.comments} comment${issue.comments === 1 ? "" : "s"}</span>
+          </span>
         </span>
-        ${stackLineHtml(stackFor(issue.number, "issue"))}
       </button>
+      ${first ? `<span class="ticket-seal" aria-label="Good first issue">Good<br>first<br>issue</span>` : ""}
       <a class="row-external" href="${escapeHtml(issue.html_url)}" target="_blank" title="Open on GitHub" aria-label="Open #${issue.number} on GitHub">${icon("external", "icon-sm")}</a>
     </li>`;
 }
@@ -1250,7 +1280,12 @@ async function fetchRepoTab() {
   const health = repoCache[cacheKey]?.health
     ? (renderHealthCard(repoCache[cacheKey].health), true)
     : fetchRepoHealth();
-  return (await Promise.all([health, fetchTechStack(), fetchMaintainers()])).every(Boolean);
+  // The map has its own error state: a failure there never marks the Repo tab failed
+  const [ok] = await Promise.all([
+    Promise.all([health, fetchTechStack(), fetchMaintainers()]).then(r => r.every(Boolean)),
+    fetchRepoMap(),
+  ]);
+  return ok;
 }
 
 async function fetchRepoHealth() {
@@ -1360,7 +1395,7 @@ async function handleChat({ files = null } = {}) {
   const isStale = () => currentRepo !== repo;
   // Focused on an issue/PR from its brief? Answers are grounded in it (ask-focus.js)
   const item = focusedItem();
-  const tag = item ? { kind: item.kind, number: item.number } : null;
+  const tag = !item ? null : item.kind === "map" ? { kind: "map" } : { kind: item.kind, number: item.number };
 
   document.getElementById("chat-starters")?.remove();
   const userTime = Date.now();
@@ -1416,10 +1451,12 @@ async function handleChat({ files = null } = {}) {
     saveChatHistory(repo, messages);
     if (isStale()) return;
     botBubble.classList.remove("streaming");
-    botBubble.innerHTML = linkifyCitations(renderMarkdown(fullReply), meta.cite || repo, meta.ref, meta.sources);
+    botBubble.innerHTML = linkifyCitations(renderMarkdown(stripRolesBlock(fullReply)), meta.cite || repo, meta.ref, meta.sources);
     if (!streamStarted) chatHistEl.appendChild(botWrap); // empty reply: no chunk ever arrived
     appendBotFooter(botWrap, botTime, query, { ...m, text: fullReply });
     if (isNearBottom(chatHistEl)) chatHistEl.scrollTop = chatHistEl.scrollHeight;
+    // An answer about the map labels its areas: they go on the map (nothing changes if it gave none)
+    if (item?.kind === "map") saveMapRoles(item.key, parseAreaRoles(fullReply)).catch(() => {});
   };
 
   try {
@@ -1461,7 +1498,7 @@ async function handleChat({ files = null } = {}) {
         botBubble.classList.add("msg-entering", "streaming");
         chatHistEl.appendChild(botWrap);
       }
-      botBubble.innerHTML = renderMarkdown(partial) + '<span class="streaming-cursor"></span>';
+      botBubble.innerHTML = renderMarkdown(stripRolesBlock(partial)) + '<span class="streaming-cursor"></span>';
       if (isNearBottom(chatHistEl)) chatHistEl.scrollTop = chatHistEl.scrollHeight;
       else document.getElementById("chat-jump").hidden = false;
     }, { system, signal: controller.signal });
@@ -1561,8 +1598,8 @@ function appendChatMessage(role, text, save = true, animate = true, time = null,
   msg.className = `chat-msg chat-msg-${role}${meta.error ? " chat-msg-error" : ""}${animate ? " msg-entering" : ""}`;
   if (role === "bot") {
     msg.innerHTML = currentRepo && meta.sources?.length
-      ? linkifyCitations(renderMarkdown(text), meta.cite || currentRepo, meta.ref, meta.sources)
-      : renderMarkdown(text);
+      ? linkifyCitations(renderMarkdown(stripRolesBlock(text)), meta.cite || currentRepo, meta.ref, meta.sources)
+      : renderMarkdown(stripRolesBlock(text));
   } else {
     msg.textContent = text;
   }
@@ -1588,7 +1625,7 @@ const BOT_LABEL_HTML = `${icon("compass", "icon-sm")}Assistant`;
 const VIA_LABEL = {
   named: "named in the question or issue", issue: "from the issue's brief", picked: "chosen for the question", chosen: "chosen by you",
   import: "imported by a file that was read", search: "found by code search", name: "found by name",
-  changed: "changed by the PR (at its head)",
+  changed: "changed by the PR (at its head)", map: "on the map's reading path",
 };
 const FOLLOWED = new Set(["import", "search", "name"]);
 
@@ -1864,7 +1901,8 @@ function appendBotFooter(wrap, time, query, meta = {}) {
     const copyBtn = document.createElement("button");
     copyBtn.className = "regen-btn";
     copyBtn.innerHTML = `${icon("copy", "icon-sm")}Copy`;
-    copyBtn.addEventListener("click", () => navigator.clipboard.writeText(meta.text).then(() => {
+    // What's copied is what's shown: a map answer's roles block is hidden, so it isn't copied either
+    copyBtn.addEventListener("click", () => navigator.clipboard.writeText(stripRolesBlock(meta.text).trim()).then(() => {
       copyBtn.innerHTML = `${icon("check", "icon-sm")}Copied`;
       setTimeout(() => { copyBtn.innerHTML = `${icon("copy", "icon-sm")}Copy`; }, 1500);
     }));

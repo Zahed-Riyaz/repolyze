@@ -83,8 +83,8 @@ test("closed PRs are sorted by recent activity and marked merged or closed", asy
   await tick(5);
   assert.ok(gh.apiCalls.includes("/pulls?state=closed&sort=updated&direction=desc&per_page=15&page=1"));
   const html = panel.el("prs-list").innerHTML;
-  assert.match(html, /#7[\s\S]*chip-merged">Merged/);
-  assert.match(html, /#6[\s\S]*chip-closed">Closed/);
+  assert.match(html, /is-merged" data-pr="7"[\s\S]*ticket-status">Merged/);
+  assert.match(html, /is-closed" data-pr="6"[\s\S]*ticket-status">Closed/);
 });
 
 test("keywords search every PR in the repo; Clear goes back to the list", async () => {
@@ -238,7 +238,7 @@ test("issue keywords search every issue (open and closed), best match first, and
   assert.match(search, /q=repo:o\/r is:issue timer drift&per_page=30&page=1$/);
   assert.match(panel.el("issues-summary").innerHTML, /<strong>2<\/strong> issues matching “timer drift” · open and closed, best match first/);
   const list = panel.el("issues-list").innerHTML;
-  assert.match(list, /#31[\s\S]*#12[\s\S]*chip-closed">Closed/);
+  assert.match(list, /#31[\s\S]*is-closed" data-issue="12"[\s\S]*ticket-status">Closed/);
   assert.match(list, /data-issue="12"/, "closed issues can still be opened");
 
   panel.fn.clearIssueSearch();

@@ -70,10 +70,12 @@ function issueAvailability(issue, comments, timeline, now) {
   const mergedPrs = list.filter(pr => pr.state !== "open" && pr.pull_request.merged_at);
   const closedPrs = list.filter(pr => pr.state !== "open" && !pr.pull_request.merged_at);
   const recentClosed = closedPrs.filter(pr => recent(pr.closed_at));
-  for (const pr of openPrs) reasons.push({ tone: "bad", text: `Open PR #${pr.number}${at(pr.user?.login)}`, url: pr.html_url });
-  for (const pr of mergedPrs) reasons.push({ tone: "warn", text: `PR #${pr.number}${at(pr.user?.login)} merged`, url: pr.html_url });
+  // `group`, `num`, `who`, `when`: so a long run of one kind can fold into one line (reasonsHtml)
+  const fact = (pr, when) => ({ num: pr.number, who: pr.user?.login, when, url: pr.html_url });
+  for (const pr of openPrs) reasons.push({ tone: "bad", group: "open-pr", text: `Open PR #${pr.number}${at(pr.user?.login)}`, ...fact(pr, pr.created_at) });
+  for (const pr of mergedPrs) reasons.push({ tone: "warn", group: "merged-pr", text: `PR #${pr.number}${at(pr.user?.login)} merged`, ...fact(pr, pr.pull_request.merged_at) });
   for (const pr of closedPrs) {
-    reasons.push({ tone: recent(pr.closed_at) ? "warn" : "info", text: `PR #${pr.number}${at(pr.user?.login)} closed unmerged${pr.closed_at ? ` ${daysAgo(pr.closed_at)}` : ""}`, url: pr.html_url });
+    reasons.push({ tone: recent(pr.closed_at) ? "warn" : "info", group: "closed-pr", text: `PR #${pr.number}${at(pr.user?.login)} closed unmerged${pr.closed_at ? ` ${daysAgo(pr.closed_at)}` : ""}`, ...fact(pr, pr.closed_at) });
   }
 
   // A PR linked in the Development section leaves "connected" events (no PR named)
@@ -106,7 +108,7 @@ function issueAvailability(issue, comments, timeline, now) {
   const recentClaims = [...claims.values()].filter(c => recent(c.created_at));
   for (const c of claims.values()) {
     reasons.push({
-      tone: recent(c.created_at) ? "warn" : "info",
+      tone: recent(c.created_at) ? "warn" : "info", group: "claim", who: c.user.login, when: c.created_at,
       text: recent(c.created_at) ? `@${c.user.login} offered to take it ${daysAgo(c.created_at)}` : `@${c.user.login} offered ${daysAgo(c.created_at)}, no PR followed`,
       url: c.html_url,
     });
@@ -364,6 +366,7 @@ async function showIssueBrief(issueOrNumber, { auto = false, refresh = false } =
     }
     if (!live()) return;
     renderBrief(repo, brief.issue, brief);
+    await drawBriefMap(repo, brief, live);
     return brief;
   } catch (err) {
     if (!live()) return;
@@ -374,16 +377,26 @@ async function showIssueBrief(issueOrNumber, { auto = false, refresh = false } =
   }
 }
 
+// Where an issue stands, as its ticket says it (list and brief): [tone class, one word]
+function issueTicketState(issue) {
+  const assignee = issue.assignees?.[0] || issue.assignee;
+  return issue.state === "closed" ? ["is-closed", "Closed"] : assignee ? ["is-taken", "Taken"] : ["is-free", "Open"];
+}
+
+// The brief opens with the ticket you clicked, grown: stub (number, status) torn from the title and its facts
 function briefHeaderHtml(issue) {
+  const [tone, word] = issueTicketState(issue);
+  const kind = issueKind(issue.labels);
   const labels = issue.labels.map(labelDotHtml).join("");
+  const facts = [issue.user && `opened by ${escapeHtml(issue.user.login)}`, `${daysAgo(issue.created_at)}`, `${issue.comments} comment${issue.comments === 1 ? "" : "s"}`].filter(Boolean);
   return `
-    <div class="brief-head">
-      <a href="${escapeHtml(issue.html_url)}" target="_blank" class="brief-title"><span class="issue-number">#${issue.number}</span> ${escapeHtml(issue.title)}</a>
-      <div class="issue-meta">
-        <span title="Comments">${icon("comment", "icon-sm")}${issue.comments}</span>
-        <span class="issue-age">opened ${daysAgo(issue.created_at)}${issue.user ? ` by ${escapeHtml(issue.user.login)}` : ""}</span>
+    <div class="brief-head brief-ticket ${tone}">
+      <a class="brief-stub" href="${escapeHtml(issue.html_url)}" target="_blank" title="Open on GitHub"><span class="ticket-num">#${issue.number}</span><span class="ticket-status">${word}</span></a>
+      <div class="brief-ticket-body">
+        <a href="${escapeHtml(issue.html_url)}" target="_blank" class="brief-title">${escapeHtml(issue.title)}</a>
+        <div class="brief-by">${facts.join(" · ")}</div>
+        ${kind || labels ? `<div class="brief-chips">${kind ? `<span class="ticket-kind">${kind}</span>` : ""}${labels}</div>` : ""}
       </div>
-      ${labels ? `<div class="issue-labels">${labels}</div>` : ""}
     </div>`;
 }
 
@@ -392,53 +405,101 @@ const REASON_ICONS = { good: "check", bad: "x", warn: "alert", info: "inbox" };
 function renderBrief(repo, issue, brief) {
   const a = brief.availability;
   // Reasons as one quiet line (links kept); the verdict and the next step lead
-  const why = a.reasons.map(r => (r.url ? `<a href="${escapeHtml(r.url)}" target="_blank">${escapeHtml(r.text)}</a>` : escapeHtml(r.text))).join(" · ");
+  const why = reasonsHtml(a.reasons);
   document.getElementById("brief-body").innerHTML = `
     ${briefHeaderHtml(issue)}
     <section class="verdict verdict-${a.status}">
       <p class="verdict-line"><strong>${escapeHtml(a.verdict)}</strong></p>
-      ${why ? `<p class="verdict-why">${why}</p>` : ""}
+      ${why ? `<div class="verdict-why">${why}</div>` : ""}
       <p class="verdict-next">${icon("arrow-right", "icon-sm")}<span>${escapeHtml(a.advice)}</span></p>
     </section>
-    ${whereToStartHtml(repo, brief.fileSources, issueStack(issue, brief.likelyFiles))}
-    <section class="brief-section">
-      <h2 class="section-title">Who to ask</h2>
-      <div id="brief-people"></div>
-    </section>
-    ${askRowHtml("issue")}
-    ${flowHtml(repo, issue, brief.flow || EMPTY_FLOW)}`;
+    <div class="brief-rail">
+      ${whereToStartHtml(repo, brief.fileSources, issueStack(issue, brief.likelyFiles))}
+      <section class="brief-section">
+        <h2 class="section-title">Who to ask</h2>
+        <div id="brief-people"></div>
+      </section>
+      ${askRowHtml("issue")}
+      ${flowHtml(repo, issue, brief.flow || EMPTY_FLOW)}
+    </div>`;
   renderBriefPeople(brief.people);
 }
 
-// One line per file: its name (linked, full path on hover) and why. The folder
-// only shows when two files in the list share a name (errors.ts in core and cli).
-function fileRowHtml(repo, f, ref = null, sameName = new Set()) {
-  const { name, dir } = splitPath(f.path);
-  const folder = dir && sameName.has(name) ? `<span class="file-dir">${escapeHtml(dir.split("/").pop())}/</span>` : "";
+// Files that share a name are told apart by as many trailing folders as it takes:
+// four data/_profiles.py → openrouter/data/, anthropic/data/… (the full path is on hover)
+function distinctFolders(paths) {
+  const byName = new Map();
+  for (const p of paths) { const n = splitPath(p).name; (byName.get(n) || byName.set(n, []).get(n)).push(p); }
+  const out = new Map();
+  for (const group of byName.values()) {
+    if (group.length < 2) continue;
+    const segs = group.map(p => splitPath(p).dir.split("/").filter(Boolean));
+    const max = Math.max(...segs.map(s => s.length));
+    for (let k = 1; k <= max; k++) {
+      const tails = segs.map(s => s.slice(-k).join("/"));
+      if (new Set(tails).size === tails.length || k === max) {
+        group.forEach((p, i) => out.set(p, (segs[i].length > k ? "…/" : "") + (tails[i] ? tails[i] + "/" : "")));
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+// The verdict's reasons, for issues and PRs. A kind with 3 or more (open PRs, PRs closed without merging, offers
+// to help) folds into one line — the count and the latest — that opens to the full list, and so does a reason that
+// names a list of 3 or more (reviewers waiting, checks failing); fewer stay inline, as before.
+const REASON_FOLD_AT = 3;
+const REASON_GROUPS = {
+  "open-pr":   { label: (n) => `${n} open PRs`, latest: (r) => `newest #${r.num}${r.who ? ` by @${r.who}` : ""}` },
+  "merged-pr": { label: (n) => `${n} merged PRs`, latest: (r) => `latest #${r.num}${r.when ? `, ${daysAgo(r.when)}` : ""}` },
+  "closed-pr": { label: (n) => `${n} PRs closed without merging`, latest: (r) => `latest #${r.num}${r.when ? `, ${daysAgo(r.when)}` : ""}` },
+  "claim":     { label: (n) => `${n} people offered to take it`, latest: (r) => `latest @${r.who}${r.when ? `, ${daysAgo(r.when)}` : ""}` },
+};
+function reasonsHtml(reasons) {
+  const link = (r, text = r.text) => (r.url ? `<a href="${escapeHtml(r.url)}" target="_blank">${escapeHtml(text)}</a>` : escapeHtml(text));
+  const groups = new Map();
+  for (const r of reasons) if (r.group) (groups.get(r.group) || groups.set(r.group, []).get(r.group)).push(r);
+  const folded = new Set([...groups].filter(([, rs]) => rs.length >= REASON_FOLD_AT).map(([g]) => g));
+  // A reason that names a list (reviewers waiting, checks failing) folds the same way at 3 or more
+  const listFold = (r) => `<details class="verdict-fold"><summary><strong>${escapeHtml(r.label)}</strong><span> · ${escapeHtml(r.items.slice(0, 2).join(", "))}${r.items.length > 2 ? ` +${r.items.length - 2}` : ""}</span></summary>
+      <p class="verdict-fold-items">${r.items.map(i => `<span>${escapeHtml(i)}</span>`).join("")}</p></details>`;
+  const isList = (r) => r.items?.length >= REASON_FOLD_AT && r.label;
+  const lists = reasons.filter(isList).map(listFold).join("");
+  const inline = reasons.filter(r => !folded.has(r.group) && !isList(r)).map(r => link(r)).join(" · ");
+  const newest = (rs) => [...rs].sort((x, y) => String(y.when || "").localeCompare(String(x.when || "")));
+  const folds = [...folded].map(g => {
+    const rs = newest(groups.get(g)), def = REASON_GROUPS[g];
+    const item = (r) => link(r, r.num ? `#${r.num}${r.who ? ` @${r.who}` : ""}` : `@${r.who}${r.when ? ` · ${daysAgo(r.when)}` : ""}`);
+    return `<details class="verdict-fold"><summary><strong>${def.label(rs.length)}</strong><span> · ${escapeHtml(def.latest(rs[0]))}</span></summary>
+      <p class="verdict-fold-items">${rs.map(item).join("")}</p></details>`;
+  }).join("");
+  return folds + lists + inline;
+}
+
+// One line per file: its name (linked, full path on hover) and why. Folders only show
+// when files in the list share a name (errors.ts in core and cli).
+function fileRowHtml(repo, f, ref = null, folders = new Map()) {
+  const { name } = splitPath(f.path);
+  const folder = folders.get(f.path) ? `<span class="file-dir">${escapeHtml(folders.get(f.path))}</span>` : "";
   return `<li class="file-row file-${f.confidence}">
     <a class="file-name" href="${sourceUrl(repo, ref, f.path)}" target="_blank" title="${escapeHtml(f.path)}">${folder}<code>${escapeHtml(name)}</code></a>
     <span class="file-why">${escapeHtml(f.why)}</span>
   </li>`;
 }
 
-// Names that appear more than once in a list of files
-function repeatedNames(files) {
-  const seen = new Map();
-  for (const f of files) { const n = splitPath(f.path).name; seen.set(n, (seen.get(n) || 0) + 1); }
-  return new Set([...seen].filter(([, c]) => c > 1).map(([n]) => n));
-}
-
 // Files with a real signal, then name-matching guesses folded away (open only
 // when they're all there is); the stack the files need as a header note
-function whereToStartHtml(repo, fileSources, stack) {
+function whereToStartHtml(repo, fileSources, stack, extra = "") {
   const { start, guesses } = groupIssueFiles(fileSources || []);
   if (!start.length && !guesses.length) return "";
-  const same = repeatedNames([...start, ...guesses]);
-  const rows = (files) => `<ul class="file-list">${files.map(f => fileRowHtml(repo, f, null, same)).join("")}</ul>`;
+  const folders = distinctFolders([...start, ...guesses].map(f => f.path));
+  const rows = (files) => `<ul class="file-list">${files.map(f => fileRowHtml(repo, f, null, folders)).join("")}</ul>`;
   const plural = guesses.length === 1 ? "guess" : "guesses";
   return `<section class="brief-section">
       <div class="section-head"><h2 class="section-title">Where to start</h2>${stackLineHtml(stack)}</div>
       ${start.length ? rows(start) : `<p class="brief-note">Nothing in the issue or its PRs points at a file yet.</p>`}
+      ${extra}${start.length ? `<div id="brief-map" class="brief-map"></div>` : ""}
       ${guesses.length ? `<details class="file-guesses"${start.length ? "" : " open"}>
         <summary>${guesses.length} ${plural} by file name</summary>
         ${rows(guesses)}
@@ -611,6 +672,8 @@ function handleBriefClick(e) {
     return;
   }
   if (handleAskChip(e)) return;
+  const onMap = target.closest?.(".brief-map-open");
+  if (onMap) return openMapTab(currentRepo, onMap.dataset.file);
   const openPr = target.closest?.(".brief-open-pr");
   if (openPr) {
     showPrBrief(Number(openPr.dataset.pr));

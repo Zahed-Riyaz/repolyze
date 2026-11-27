@@ -12,7 +12,7 @@ No server and no account needed. It uses the GitHub API and, for questions, your
   - how to set up, what CI runs, and a PR in the repo's own format.
 
   Each pull request gets its status and what's still open. None of this uses AI.
-- **Repo.** A contributor-friendliness score with the evidence behind it, active maintainers, languages and tools.
+- **Repo.** A contributor-friendliness score with the evidence behind it, active maintainers, languages and tools. **Open the map** shows how the app runs as a flow diagram in its own tab: where it starts, what loads what, which files everything depends on, and what each file does (from its own comments; one click has your AI fill in the rest) — drawn from the code's imports, with no API quota on public repos.
 - **Ask.** Questions about the repo, or about one issue or PR, answered from the files it reads. Every citation links to the line on GitHub and is checked against what was actually read.
 - **On GitHub.** A small card on issue pages shows the same verdict, files and owners.
 

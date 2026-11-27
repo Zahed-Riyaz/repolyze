@@ -165,11 +165,11 @@ test("the PR brief shows status, activity, files with owners and people for 5 AP
   assert.match(body, /@ada requested changes/);
   assert.match(body, /Waiting on @bob/);
   assert.match(body, /All 1 checks passed/);
-  assert.match(body, /<code>dev:fix-drift<\/code> → <code>main<\/code>/);
+  assert.match(body, /title="dev:fix-drift → main"><b>fix-drift<\/b> → main/);
   assert.match(body, /Closes #1842/);
   assert.match(body, /<li class="pr-file" title="src\/launch\/timer\.ts\nOwned by @ada">[\s\S]*timer\.ts<\/span><\/span>[\s\S]*#i-comment"\/><\/svg>1 <span class="add">\+30<\/span>/, "one line per file, owners on hover");
   assert.match(body, /person-chip-name">ada<\/span><span class="person-chip-why tone-bad">requested changes[\s\S]*person-chip-name">bob<\/span><span class="person-chip-why tone-info">requested/);
-  assert.match(body, /What it touches[\s\S]*<strong>TypeScript<\/strong> <code>src\/launch\/timer\.ts<\/code>/, "the stack of the files it actually changes");
+  assert.match(body, /What it touches[\s\S]*<strong>TypeScript<\/strong> <code title="src\/launch\/timer\.ts">src\/launch\/timer\.ts<\/code>/, "the stack of the files it actually changes");
   const prCalls = gh.apiCalls.filter(u => /\/(pulls|issues|commits)\//.test(u));
   assert.equal(prCalls.length, 5, prCalls.join("\n"));
 });
@@ -214,11 +214,20 @@ test("with a token, long timelines are paged so no conversation is missed", asyn
 test("Understand this PR buttons are on the Contribute list and open the brief", async () => {
   const { panel } = prPanel({ routes: { "/pulls?state=open&sort=created&direction=desc&per_page=15&page=1": [basePr] } });
   await panel.fn.fetchPrList();
-  assert.match(panel.el("prs-list").innerHTML, /class="row-open pr-brief-btn" data-pr="42"/);
+  assert.match(panel.el("prs-list").innerHTML, /class="row-open pr-brief-btn[^"]*" data-pr="42"/);
   panel.fn.openPrBriefFromList("42");
   await tick(20);
   assert.equal(panel.el("contribute-browse").hidden, true);
   assert.equal(panel.el("pr-brief").hidden, false);
   panel.fn.closePrBrief();
   assert.equal(panel.el("contribute-browse").hidden, false);
+});
+test("a PR's long lists — reviewers waiting, checks failing — fold into one line; short ones stay inline", () => {
+  const many = { ...basePr, requested_reviewers: ["ann", "ben", "cat", "dan"].map(login => ({ login })) };
+  const failing = { total: 6, failed: ["lint", "unit", "e2e", "types", "build"], pending: [] };
+  const html = pure.reasonsHtml(plain(pure.prStatus(many, [], failing, NOW)).reasons);
+  assert.match(html, /<strong>Waiting on 4 reviewers<\/strong><span> · @ann, @ben \+2<\/span>/);
+  assert.match(html, /<strong>5 checks failing<\/strong>[\s\S]*<span>types<\/span><span>build<\/span>/, "every failing check, not just 3");
+  const few = { ...basePr, requested_reviewers: [{ login: "ann" }] };
+  assert.match(pure.reasonsHtml(plain(pure.prStatus(few, [], green, NOW)).reasons), /Waiting on @ann/);
 });

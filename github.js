@@ -135,11 +135,16 @@ function pruneGitHubCache({ force = false, maxChars = GH_PERSIST_MAX_CHARS } = {
 }
 
 // Forget stored responses for one auth mode ("auth" on sign-out: a signed-in
-// token may have read private repos) or all of them
+// token may have read private repos) or all of them. Clearing "auth" also drops
+// the repo maps (`map_{owner}_{repo}`) built from private repos, here and in memory.
 async function clearGitHubCache(mode = null) {
   for (const k of [...ghMemCache.keys()]) if (!mode || k.startsWith(`gh:${mode}:`)) ghMemCache.delete(k);
   const all = await chrome.storage.local.get(null);
   const keys = Object.keys(all).filter(k => (mode ? k.startsWith(`gh:${mode}:`) : k.startsWith("gh:")));
+  if (!mode || mode === "auth") {
+    keys.push(...Object.keys(all).filter(k => k.startsWith("map_") && all[k]?.private));
+    for (const c of Object.values(repoCache)) if (c.map?.private) delete c.map;
+  }
   if (keys.length) await chrome.storage.local.remove(keys);
 }
 

@@ -123,6 +123,28 @@ test("the rate-limit banner offers Sign in when it's available, a token otherwis
   assert.equal(tokenOnly.el("rate-banner-btn").textContent, "Get token");
 });
 
+test("signing out removes private repos' maps and keeps public ones", async () => {
+  const { panel } = signInPanel();
+  panel.fn.initSettingsTab();
+  await panel.fn.startGitHubSignIn();
+  const data = panel.chrome.storage.local.data;
+  data.map_o_secret = { sha: "t1", private: true, nodes: {}, edges: [] };
+  data.map_o_open = { sha: "t2", nodes: {}, edges: [] };
+  panel.run(`cacheFor("o/secret").map = { sha: "t1", private: true }; cacheFor("o/open").map = { sha: "t2" };`);
+  await panel.fn.signOutOfGitHub();
+  assert.equal(data.map_o_secret, undefined, "private map gone from storage");
+  assert.ok(data.map_o_open, "public map kept");
+  assert.equal(panel.run('cacheFor("o/secret").map'), undefined, "and from memory");
+  assert.ok(panel.run('cacheFor("o/open").map'));
+});
+
+test("dropping an old GitHub App token drops private maps too", async () => {
+  const panel = loadPanel({ chrome: { local: { githubToken: "ghu_old", map_o_secret: { private: true }, map_o_open: {} } } });
+  await panel.fn.retireGitHubAppToken("ghu_old");
+  assert.equal(panel.chrome.storage.local.data.map_o_secret, undefined);
+  assert.ok(panel.chrome.storage.local.data.map_o_open);
+});
+
 // ── Moving from the GitHub App to an OAuth App ───────────────────────────────
 test("a token from the old GitHub App is dropped with what it read; OAuth and pasted tokens stay", async () => {
   const panel = loadPanel({ chrome: { local: {

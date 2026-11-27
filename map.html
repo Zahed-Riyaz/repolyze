@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>How it runs · Repolyze</title>
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="map.css">
+</head>
+<body>
+  <header class="fm-head">
+    <div class="fm-title">
+      <span class="fm-repo" id="fm-repo"></span>
+      <span class="fm-sub">How it runs</span>
+    </div>
+    <div class="fm-summary" id="fm-summary"></div>
+    <div class="fm-switch" role="tablist" aria-label="View">
+      <button type="button" role="tab" id="fm-v-overview" aria-selected="true">Overview</button>
+      <button type="button" role="tab" id="fm-v-files" aria-selected="false">File map</button>
+    </div>
+    <div class="fm-tools">
+      <button type="button" class="fm-btn fm-files-only" id="fm-helpers" hidden></button>
+      <button type="button" class="fm-btn fm-files-only" id="fm-fit" title="Fit the whole map">Fit</button>
+      <button type="button" class="fm-btn fm-files-only" id="fm-out" aria-label="Zoom out">–</button>
+      <button type="button" class="fm-btn fm-files-only" id="fm-in" aria-label="Zoom in">+</button>
+      <button type="button" class="fm-btn fm-primary" id="fm-explain">Explain this map</button>
+    </div>
+  </header>
+  <form class="fm-ask" id="fm-ask" autocomplete="off" role="search" hidden>
+    <label for="fm-q">How does</label>
+    <input id="fm-q" type="text" placeholder="a submission get scored" aria-label="How does … work?" maxlength="200">
+    <span>work?</span>
+    <button type="submit" class="fm-btn fm-primary" id="fm-q-go">Trace it</button>
+  </form>
+  <section class="fm-trace" id="fm-trace" hidden aria-live="polite"></section>
+  <nav class="fm-legend" id="fm-legend" aria-label="Folders"></nav>
+  <div class="fm-note" id="fm-note" hidden></div>
+  <section class="fm-overview" id="fm-overview" hidden></section>
+  <main class="fm-stage" id="fm-stage" tabindex="-1">
+    <div class="fm-world" id="fm-world">
+      <svg class="fm-edges" id="fm-edges" aria-hidden="true"></svg>
+      <div class="fm-boxes" id="fm-boxes"></div>
+    </div>
+    <div class="fm-status" id="fm-status">Reading the repo's files…</div>
+    <div class="fm-hint" id="fm-hint" hidden>Point at a file: <b>violet</b> flows to what it loads · <em>amber</em> flows in from what loads it</div>
+  </main>
+
+  <script src="github.js"></script>
+  <script src="retrieval.js"></script>
+  <script src="insights.js"></script>
+  <script src="brief.js"></script>
+  <script src="ask-focus.js"></script>
+  <script src="stack.js"></script>
+  <script src="territory.js"></script>
+  <script src="feature.js"></script>
+  <script src="map.js"></script>
+</body>
+</html>

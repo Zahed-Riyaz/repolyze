@@ -15,10 +15,18 @@
   --fg-muted:       #59636e;
   --fg-subtle:      #818b98;
 
-  --accent:         #0969da;
-  --accent-hover:   #0860c7;
+  /* Brand: the logo's violet, with its cyan for the background sweep */
+  --accent:         #7c3aed;
+  --accent-hover:   #6d28d9;
   --accent-fg:      #ffffff;
-  --accent-subtle:  rgba(9, 105, 218, 0.09);
+  --accent-subtle:  rgba(124, 58, 237, 0.09);
+  --accent-ink:     #6d28d9;
+  --brand-cyan:     #06b6d4;
+  --surface:        rgba(255, 255, 255, 0.86);
+  --surface-shadow: 0 1px 2px rgba(29, 27, 38, 0.07), 0 6px 16px -10px rgba(29, 27, 38, 0.16);
+  --sweep-a:        14%;   /* how much violet in the top-left corner */
+  --sweep-b:        10%;   /* how much cyan in the bottom-right */
+  --grain:          rgba(29, 27, 38, 0.04);
   --success:        #1a7f37;
   --success-subtle: rgba(26, 127, 55, 0.10);
   --warning:        #9a6700;
@@ -57,10 +65,17 @@
     --fg:             #e6edf3;
     --fg-muted:       #9198a1;
     --fg-subtle:      #6e7681;
-    --accent:         #4493f8;
-    --accent-hover:   #5ba1fa;
+    --accent:         #8b5cf6;
+    --accent-hover:   #9d74f8;
     --accent-fg:      #ffffff;
-    --accent-subtle:  rgba(68, 147, 248, 0.13);
+    --accent-subtle:  rgba(139, 92, 246, 0.14);
+    --accent-ink:     #c4b5fd;
+    --brand-cyan:     #22d3ee;
+    --surface:        rgba(21, 27, 35, 0.82);
+    --surface-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 8px 22px -14px rgba(0, 0, 0, 0.9);
+    --sweep-a:        30%;
+    --sweep-b:        16%;
+    --grain:          rgba(255, 255, 255, 0.024);
     --success:        #3fb950;
     --success-subtle: rgba(63, 185, 80, 0.13);
     --warning:        #d29922;
@@ -87,10 +102,17 @@
   --fg:             #e6edf3;
   --fg-muted:       #9198a1;
   --fg-subtle:      #6e7681;
-  --accent:         #4493f8;
-  --accent-hover:   #5ba1fa;
+  --accent:         #8b5cf6;
+  --accent-hover:   #9d74f8;
   --accent-fg:      #ffffff;
-  --accent-subtle:  rgba(68, 147, 248, 0.13);
+  --accent-subtle:  rgba(139, 92, 246, 0.14);
+  --accent-ink:     #c4b5fd;
+  --brand-cyan:     #22d3ee;
+  --surface:        rgba(21, 27, 35, 0.82);
+  --surface-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 8px 22px -14px rgba(0, 0, 0, 0.9);
+  --sweep-a:        30%;
+  --sweep-b:        16%;
+  --grain:          rgba(255, 255, 255, 0.024);
   --success:        #3fb950;
   --success-subtle: rgba(63, 185, 80, 0.13);
   --warning:        #d29922;

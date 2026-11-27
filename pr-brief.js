@@ -74,12 +74,15 @@ function prStatus(pr, timeline, checks, now) {
   if (changes.length) {
     const since = Math.min(...changes.map(c => Date.parse(c.at)));
     const pushedAfter = commitTimes.filter(t => Date.parse(t) > since).length;
-    reasons.push({ tone: "bad", text: `${changes.map(c => `@${c.login}`).join(", ")} requested changes ${daysAgo(changes[0].at)}` });
+    // `items` + `label`: a list of 3 or more folds into one line in the brief (reasonsHtml); `text` stays whole
+    reasons.push({ tone: "bad", text: `${changes.map(c => `@${c.login}`).join(", ")} requested changes ${daysAgo(changes[0].at)}`,
+      label: `${changes.length} reviewers requested changes`, items: changes.map(c => `@${c.login}`) });
     if (pushedAfter) reasons.push({ tone: "info", text: `${pushedAfter} commit${pushedAfter === 1 ? "" : "s"} pushed since` });
     status ??= pushedAfter ? "review" : "changes";
   }
   if (checks?.failed.length) {
-    reasons.push({ tone: "bad", text: `${checks.failed.length} check${checks.failed.length === 1 ? "" : "s"} failing: ${checks.failed.slice(0, 3).join(", ")}${checks.failed.length > 3 ? "…" : ""}` });
+    reasons.push({ tone: "bad", text: `${checks.failed.length} check${checks.failed.length === 1 ? "" : "s"} failing: ${checks.failed.slice(0, 3).join(", ")}${checks.failed.length > 3 ? "…" : ""}`,
+      label: `${checks.failed.length} checks failing`, items: checks.failed });
     status ??= "blocked";
   }
   if (pr.mergeable_state === "dirty") {
@@ -87,7 +90,8 @@ function prStatus(pr, timeline, checks, now) {
     status ??= "blocked";
   }
   if (approvals.length) {
-    reasons.push({ tone: "good", text: `Approved by ${approvals.map(a => `@${a.login}`).join(", ")}` });
+    reasons.push({ tone: "good", text: `Approved by ${approvals.map(a => `@${a.login}`).join(", ")}`,
+      label: `Approved by ${approvals.length} reviewers`, items: approvals.map(a => `@${a.login}`) });
     status ??= checks?.pending.length ? "review" : "ready";
   }
   if (checks?.pending.length) reasons.push({ tone: "info", text: `${checks.pending.length} check${checks.pending.length === 1 ? "" : "s"} still running` });
@@ -95,7 +99,7 @@ function prStatus(pr, timeline, checks, now) {
 
   const pending = [...(pr.requested_reviewers || []).map(u => `@${u.login}`), ...(pr.requested_teams || []).map(t => `@${t.slug || t.name}`)];
   const open = pr.state !== "closed";
-  if (pending.length && open) reasons.push({ tone: "info", text: `Waiting on ${pending.join(", ")}` });
+  if (pending.length && open) reasons.push({ tone: "info", text: `Waiting on ${pending.join(", ")}`, label: `Waiting on ${pending.length} reviewers`, items: pending });
   if (!reviewed.length && open) reasons.push({ tone: "info", text: "No reviews yet" });
 
   const idleDays = lastActivity ? Math.floor((now - Date.parse(lastActivity)) / DAY_MS) : 0;
@@ -306,30 +310,32 @@ async function showPrBrief(prOrNumber, { auto = false } = {}) {
   }
 }
 
+// The brief opens with the PR's ticket, grown: stub torn from the title, author, size and branch
 function prHeaderHtml(pr, full = null) {
   const p = full || pr;
+  const [tone, word, why] = prTicketState(p);
   const linked = linkedIssueNumbers(p.body);
-  const size = full ? `<span>+${full.additions} −${full.deletions}</span><span>${full.changed_files} files</span><span>${full.commits} commits</span>` : "";
+  const size = full ? `<span class="ticket-kind"><span class="add">+${full.additions}</span> <span class="del">−${full.deletions}</span></span><span class="ticket-kind">${full.changed_files} file${full.changed_files === 1 ? "" : "s"}</span><span class="ticket-kind">${full.commits} commit${full.commits === 1 ? "" : "s"}</span>` : "";
+  const closes = linked.map(n => `<a class="ticket-kind" href="https://github.com/${currentRepo.owner}/${currentRepo.repo}/issues/${n}" target="_blank">Closes #${n}</a>`).join("");
   return `
-    <div class="brief-head">
-      <a href="${escapeHtml(p.html_url)}" target="_blank" class="brief-title"><span class="issue-number">#${p.number}</span> ${escapeHtml(p.title)}</a>
-      <div class="issue-meta">
-        <span><img src="${avatarUrl(p.user.avatar_url, 32)}" class="avatar-sm" alt="" loading="lazy">${escapeHtml(p.user.login)}</span>
-        ${p.draft ? `<span class="chip">Draft</span>` : ""}
-        ${size}
-        <span class="issue-age">opened ${daysAgo(p.created_at)}</span>
+    <div class="brief-head brief-ticket ${tone}">
+      <a class="brief-stub" href="${escapeHtml(p.html_url)}" target="_blank" title="${why ? `${escapeHtml(why)} · ` : ""}Open on GitHub"><span class="ticket-num">#${p.number}</span><span class="ticket-status">${word}</span></a>
+      <div class="brief-ticket-body">
+        <a href="${escapeHtml(p.html_url)}" target="_blank" class="brief-title">${escapeHtml(p.title)}</a>
+        <div class="brief-by"><img src="${avatarUrl(p.user.avatar_url, 32)}" class="avatar-sm" alt="" loading="lazy">${escapeHtml(p.user.login)} · ${daysAgo(p.created_at)}</div>
+        ${size || closes ? `<div class="brief-chips">${size}${closes}</div>` : ""}
+        ${full ? `<div class="pr-branch" title="${escapeHtml(full.head?.label || "")} → ${escapeHtml(full.base?.ref || "")}"><b>${escapeHtml(full.head?.ref || full.head?.label || "")}</b> → ${escapeHtml(full.base?.ref || "")}</div>` : ""}
       </div>
-      ${full ? `<div class="pr-branch"><code>${escapeHtml(full.head?.label || full.head?.ref || "")}</code> → <code>${escapeHtml(full.base?.ref || "")}</code></div>` : ""}
-      ${linked.length ? `<div class="issue-labels">${linked.map(n => `<a class="chip" href="https://github.com/${currentRepo.owner}/${currentRepo.repo}/issues/${n}" target="_blank">Closes #${n}</a>`).join("")}</div>` : ""}
     </div>`;
 }
 
+const PR_PEOPLE_SHOWN = 6; // reviewers and owners shown before the rest fold
 const PR_TONE = { ready: "free", merged: "free", review: "maybe", draft: "maybe", changes: "taken", blocked: "taken", closed: "taken" };
 
 function renderPrBrief(repo, brief) {
   const { pr, status, files, reviewComments } = brief;
   const tone = PR_TONE[status.status] || "maybe";
-  const why = status.reasons.map(r => escapeHtml(r.text)).join(" · ");
+  const why = reasonsHtml(status.reasons);
 
   // Key events, newest last: the latest few, the rest folded away
   const { events } = prEventLog(pr, brief.timeline, reviewComments, 200);
@@ -349,11 +355,11 @@ function renderPrBrief(repo, brief) {
   // One line per file; owners and full path on hover; the first 8, the rest folded
   const discussed = new Map();
   for (const c of reviewComments) discussed.set(c.path, (discussed.get(c.path) || 0) + 1);
-  const same = repeatedNames(files.map(f => ({ path: f.filename })));
+  const folders = distinctFolders(files.map(f => f.filename));
   const fileRow = (f) => {
     const owners = codeOwnersFor(f.filename, brief.codeOwnerRules);
-    const { name, dir } = splitPath(f.filename);
-    const folder = dir && same.has(name) ? `<span class="file-dir">${escapeHtml(dir.split("/").pop())}/</span>` : "";
+    const { name } = splitPath(f.filename);
+    const folder = folders.get(f.filename) ? `<span class="file-dir">${escapeHtml(folders.get(f.filename))}</span>` : "";
     return `<li class="pr-file" title="${escapeHtml(f.filename + (owners.length ? `\nOwned by ${owners.join(", ")}` : ""))}">
       <span class="pr-file-name"><span class="pr-file-status pr-file-${f.status}">${f.status[0].toUpperCase()}</span><span class="pr-file-path">${folder}${escapeHtml(name)}</span></span>
       <span class="pr-file-meta">${discussed.get(f.filename) ? `${icon("comment", "icon-xs")}${discussed.get(f.filename)} ` : ""}<span class="add">+${f.additions}</span> <span class="del">−${f.deletions}</span></span>
@@ -386,9 +392,10 @@ function renderPrBrief(repo, brief) {
     ${prHeaderHtml(pr, pr)}
     <section class="verdict verdict-${tone}">
       <p class="verdict-line"><strong>${escapeHtml(status.verdict)}</strong></p>
-      ${why ? `<p class="verdict-why">${why}</p>` : ""}
+      ${why ? `<div class="verdict-why">${why}</div>` : ""}
       <p class="verdict-next">${icon("arrow-right", "icon-sm")}<span>${escapeHtml(status.advice)}</span></p>
     </section>
+    <div class="brief-rail">
     ${askRowHtml("pr")}
     ${stackSectionHtml(prStack(pr, files), stackProfile, "What it touches")}
     <section class="brief-section">
@@ -403,8 +410,11 @@ function renderPrBrief(repo, brief) {
     </section>
     <section class="brief-section">
       <h2 class="section-title">People</h2>
-      ${chips.length ? `<ul class="people-chips">${chips.join("")}</ul>` : `<p class="brief-note">No reviewers yet.</p>`}
-    </section>`;
+      ${chips.length ? `<ul class="people-chips">${chips.slice(0, PR_PEOPLE_SHOWN).join("")}</ul>${chips.length > PR_PEOPLE_SHOWN
+        ? `<details class="fold"><summary>${chips.length - PR_PEOPLE_SHOWN} more</summary><ul class="people-chips">${chips.slice(PR_PEOPLE_SHOWN).join("")}</ul></details>` : ""}`
+        : `<p class="brief-note">No reviewers yet.</p>`}
+    </section>
+    </div>`;
 }
 
 function handlePrBriefClick(e) {
@@ -532,27 +542,35 @@ function showMorePrs() {
   fetchPrList(); // served from cache
 }
 
-function prCard(pr) {
+// Where a PR stands, as its ticket says it (list and brief), from what the list already carries (no extra
+// requests): drafts, pending review requests, PRs gone quiet → [tone class, one word, hover text, idle days]
+function prTicketState(pr) {
   const merged = pr.merged_at || pr.pull_request?.merged_at;
-  // Open PRs get hints the list already carries (no extra requests): drafts,
-  // pending review requests, and PRs gone quiet that someone could pick up
   const idleDays = Math.floor((Date.now() - Date.parse(pr.updated_at)) / DAY_MS);
-  const chip = pr.state === "closed"
-    ? `<span class="chip ${merged ? "chip-merged" : "chip-closed"}">${merged ? "Merged" : "Closed"}</span>`
-    : pr.draft ? `<span class="chip">Draft</span>`
-    : idleDays >= 21 ? `<span class="chip chip-stale" title="No activity for ${idleDays} days">Idle ${idleDays}d</span>`
-    : pr.requested_reviewers?.length ? `<span class="chip chip-review">Review requested</span>` : "";
-  // The whole row opens the brief; ↗ opens the PR on GitHub
+  return pr.state === "closed" ? (merged ? ["is-merged", "Merged", "", idleDays] : ["is-closed", "Closed", "", idleDays])
+    : pr.draft ? ["is-closed", "Draft", "", idleDays]
+    : idleDays >= 21 ? ["is-taken", "Idle", `No activity for ${idleDays} days`, idleDays]
+    : pr.requested_reviewers?.length ? ["is-review", "Review", "Review requested", idleDays]
+    : ["is-free", "Open", "", idleDays];
+}
+
+function prCard(pr) {
+  const [tone, word, why, idleDays] = prTicketState(pr);
+  // A ticket like an issue's; the whole ticket opens the brief, ↗ opens the PR on GitHub
   return `
     <li class="list-row">
-      <button class="row-open pr-brief-btn" data-pr="${pr.number}" title="Understand this PR">
-        <span class="row-title"><span class="issue-number">#${pr.number}</span> ${escapeHtml(pr.title)}</span>
-        <span class="row-meta">
-          <span><img src="${avatarUrl(pr.user.avatar_url, 32)}" class="avatar-sm" alt="" loading="lazy">${escapeHtml(pr.user.login)}</span>
-          ${chip}
-          <span class="row-age">${daysAgo(pr.state === "closed" ? (pr.closed_at || pr.updated_at) : pr.created_at)}</span>
+      <button class="row-open pr-brief-btn ${tone}" data-pr="${pr.number}" title="Understand this PR">
+        <span class="ticket-stub"><span class="ticket-num">#${pr.number}</span><span class="ticket-status"${why ? ` title="${why}"` : ""}>${word}</span></span>
+        <span class="ticket-body">
+          <span class="row-title">${escapeHtml(pr.title)}</span>
+          <span class="ticket-line">
+            <span class="ticket-kind">Pull request</span>
+            ${stackLineHtml(stackFor(pr.number, "pr"))}
+            <span class="ticket-meta">by <img src="${avatarUrl(pr.user.avatar_url, 32)}" class="avatar-sm" alt="" loading="lazy">${escapeHtml(pr.user.login)}</span>
+            ${idleDays >= 21 && pr.state !== "closed" && !pr.draft ? `<span class="ticket-meta">idle ${idleDays}d</span>` : ""}
+            ${ticketAge(pr.state === "closed" ? (pr.closed_at || pr.updated_at) : pr.created_at)}
+          </span>
         </span>
-        ${stackLineHtml(stackFor(pr.number, "pr"))}
       </button>
       <a class="row-external" href="${escapeHtml(pr.html_url)}" target="_blank" title="Open on GitHub" aria-label="Open PR #${pr.number} on GitHub">${icon("external", "icon-sm")}</a>
     </li>`;

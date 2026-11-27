@@ -7,17 +7,18 @@
 //   • PR    — its description, status, whole activity log and numbered diff
 // Removing the chip (✕) goes back to questions about the repo as a whole.
 
-let chatFocus = null; // { kind: "issue" | "pr", number, key, title }
+let chatFocus = null; // { kind: "issue" | "pr", number, key, title } or { kind: "map", key, title }
 
 // The focused item with its loaded brief, if it belongs to the repo on screen
 function focusedItem() {
   if (!chatFocus || !isCurrentRepo(chatFocus.key)) return null;
   const cache = cacheFor(chatFocus.key);
+  if (chatFocus.kind === "map") return cache.map ? { ...chatFocus, map: cache.map } : null;
   const brief = chatFocus.kind === "pr" ? cache.prBriefs?.[chatFocus.number] : cache.briefs?.[chatFocus.number];
   return brief ? { ...chatFocus, brief } : null;
 }
 
-const focusLabel = (f) => `${f.kind === "pr" ? "PR " : ""}#${f.number}`;
+const focusLabel = (f) => f.kind === "map" ? "the repo map" : `${f.kind === "pr" ? "PR " : ""}#${f.number}`;
 
 function setChatFocus(focus) {
   chatFocus = focus;
@@ -29,7 +30,7 @@ function renderChatFocus() {
   const f = focusedItem();
   el.hidden = !f;
   el.innerHTML = f
-    ? `${icon(f.kind === "pr" ? "pr" : "issue", "icon-sm")}<span class="chat-focus-text">About <strong>${focusLabel(f)}</strong> ${escapeHtml(f.title)}</span>` +
+    ? `${icon(f.kind === "pr" ? "pr" : f.kind === "map" ? "layers" : "issue", "icon-sm")}<span class="chat-focus-text">About <strong>${focusLabel(f)}</strong>${f.kind === "map" ? "" : ` ${escapeHtml(f.title)}`}</span>` +
       `<button class="chat-focus-clear" title="Ask about the whole repo instead" aria-label="Stop asking about ${focusLabel(f)}">${icon("x", "icon-sm")}</button>`
     : "";
   document.getElementById("chat-input").placeholder = f ? `Ask about ${focusLabel(f)}…` : "Ask about this repo…";
@@ -99,6 +100,10 @@ const FOCUS_RULES = {
     "The PR's changed files appear twice: as a diff (new line numbers, \"42+|\" added) and at the PR's head commit in <changed_files_at_head>. <related_code> is unchanged code from the default branch.",
     "Cite code as `path:line` and attribute points in the discussion to people (@name).",
   ],
+  map: [
+    "Start with a fenced block tagged roles: one line per file whose code is shown (full path), `path — what it does`, at most 12 words, in plain words a newcomer understands, from the code shown; write unclear if the excerpts don't show it.",
+    "Then walk through how the app starts and runs, following the reading path in order, citing `path:line`.",
+  ],
 };
 
 // → { context, sources, ref, cite, focus } for a question about the focused item.
@@ -113,6 +118,15 @@ const FOCUS_RULES = {
 // PR's head, often in the author's fork), so citations link to the right place.
 // `opts` ({ files, onFiles }) pass through to buildChatContext.
 async function buildFocusedContext(repo, item, question, previousQuestion, onStatus, previousFiles, opts = {}) {
+  if (item.kind === "map") {
+    onStatus("Reading the files on the reading path…");
+    const tree = await getRepoTree(repo);
+    // An edited file list ("Re-run with these files") replaces the reading path's files
+    const { context, sources } = await mapFocusContext(item.map, tree, contextBudget(), { repo, files: opts.files || null, onFiles: opts.onFiles });
+    const focus = ["The user is asking about the repo's map, shown in the <repo_map> block of the context: its folders, how they import each other, its entry points, core files and reading path. Answer about how the app is organised and runs.",
+      ...FOCUS_RULES.map].join("\n- ");
+    return { context, sources, ref: null, cite: null, focus };
+  }
   const isPr = item.kind === "pr";
   const noun = isPr ? "pull request" : "issue";
   const focus = [`The user is asking about ${noun} #${item.number} ("${item.title}"), shown in the <${isPr ? "pull_request" : "issue"}> block of the context. Answer about this ${noun} specifically.`,

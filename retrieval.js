@@ -21,6 +21,7 @@ function getRepoTree(repo = currentRepo) {
     .then(t => ({
       entries: (t.tree || []).map(e => ({ path: e.path, type: e.type, size: e.size || 0 })),
       truncated: !!t.truncated,
+      sha: t.sha,
     }))
     .catch(err => { delete cache.treePromise; throw err; });
   return cache.treePromise;
