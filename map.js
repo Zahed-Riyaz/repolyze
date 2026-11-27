@@ -1,6 +1,7 @@
-// map.js — the flow map in its own tab (map.html?repo=owner/name[&file=path]).
-// Boxes are files, arrows are "loads". The crawl and the layout (flowFiles, flowLayout) are in territory.js;
-// this file draws and handles the page. 0 API requests on public repos.
+// map.js — the repo map in its own tab (map.html?repo=owner/name[&file=path]).
+// Opens on the overview (how it runs, the main parts); the file map is one click away — boxes are files,
+// arrows are "loads". The crawl, the overview and the layout (mapOverview, flowFiles, flowLayout) are in
+// territory.js; this file draws and handles the page. 0 API requests on public repos.
 
 let currentRepo = null;
 const params = new URLSearchParams(location.search);
@@ -13,21 +14,32 @@ if (typeof escapeHtml !== "function") {
 }
 
 const $ = (id) => document.getElementById(id);
-const fm = { graph: null, branch: "HEAD", expanded: new Set(), extra: new Set(), sel: null, hover: null, folder: null, drawn: false, scale: 1, x: 0, y: 0, layout: null };
+const fm = { graph: null, branch: "HEAD", view: "overview", helpers: false, expanded: new Set(), extra: new Set(), sel: null, hover: null, folder: null, drawn: false, dirty: true, scale: 1, x: 0, y: 0, layout: null, colour: new Map() };
 
 // ── Drawing ──────────────────────────────────────────────────────────────────
 // Each folder (a top folder, or two levels under src/, apps/, packages/…) gets a colour, biggest first
 const FM_PALETTE = ["#4493f8", "#a371f7", "#2da44e", "#e5534b", "#d29922", "#1b9aaa", "#db61a2", "#768390"];
 const FM_USED_TOP = 6; // "Used by N files" only on the most-used few
-function fmArea(path) {
-  const s = path.split("/");
-  return s.length > 2 && CONTAINER_DIRS.has(s[0]) ? s[1] : s.length > 1 ? s[0] : "(root)";
-}
+const fmArea = (path) => mapAreaOf(path);
+// One colour per part, the same in both views: the overview's parts first, then the file map's other folders
 function fmColours(paths) {
   const count = new Map();
   for (const p of paths) count.set(fmArea(p), (count.get(fmArea(p)) || 0) + 1);
-  const order = [...count.keys()].sort((a, b) => count.get(b) - count.get(a) || a.localeCompare(b));
-  return new Map(order.map((a, i) => [a, FM_PALETTE[i % FM_PALETTE.length]]));
+  for (const a of [...count.keys()].sort((a, b) => count.get(b) - count.get(a) || a.localeCompare(b)))
+    if (!fm.colour.has(a)) fm.colour.set(a, FM_PALETTE[fm.colour.size % FM_PALETTE.length]);
+  return fm.colour;
+}
+// A long folder keeps its end, which is the part that tells folders apart: libs/core/langchain_core/messages/ → …/langchain_core/messages/
+function fmShortDir(dir) {
+  const segs = dir.replace(/\/$/, "").split("/").filter(Boolean);
+  return segs.length > 2 ? `…/${segs.slice(-2).join("/")}/` : dir;
+}
+// A package's front file (__init__.py, index.ts) is named after its folder: `prompts/`
+function fmName(path) {
+  const parts = path.split("/");
+  const name = mapShortName(path, fm.graph);
+  parts.splice(name.endsWith("/") ? -2 : -1);
+  return { name, dir: parts.length ? parts.join("/") + "/" : "" };
 }
 const fmOrdinal = (n) => n + (n === 1 ? "st" : n === 2 ? "nd" : n === 3 ? "rd" : "th");
 
@@ -35,8 +47,7 @@ function fileBoxHtml(graph, path, steps, look) {
   const n = graph.nodes[path];
   const entry = graph.entries.find(e => e.path === path);
   const step = steps.find(s => s.path === path);
-  const slash = path.lastIndexOf("/");
-  const name = path.slice(slash + 1), dir = slash < 0 ? "" : path.slice(0, slash + 1);
+  const { name, dir } = fmName(path);
   const used = look.used.has(path);
   const tags = [];
   if (entry) tags.push(`<span class="fm-tag start" title="${escapeHtml(entry.reason || "")}">▶ Starts here</span>`);
@@ -50,7 +61,7 @@ function fileBoxHtml(graph, path, steps, look) {
   const label = [path, entry && "starts here", step && `read ${fmOrdinal(step.step)}`, n.inDegree && `used by ${n.inDegree} files`, n.desc || role].filter(Boolean).join(" · ");
   return `<div class="fm-box${entry ? " entry" : ""}" data-path="${escapeHtml(path)}" data-area="${escapeHtml(fmArea(path))}" style="--c:${look.colour.get(fmArea(path))};--r:${look.r};--i:${look.i}" tabindex="0" role="button" aria-label="${escapeHtml(label)}" title="${escapeHtml(path)}${n.inDegree ? ` · used by ${n.inDegree} files` : ""}">
     <div class="fm-top"><span class="fm-name">${escapeHtml(name)}</span>${step ? `<span class="fm-step" title="Read ${fmOrdinal(step.step)}">${step.step}</span>` : ""}</div>
-    ${dir ? `<div class="fm-folder"><i></i><span>${escapeHtml(dir)}</span></div>` : ""}
+    ${dir ? `<div class="fm-folder" title="${escapeHtml(dir)}"><i></i><span>${escapeHtml(fmShortDir(dir))}</span></div>` : ""}
     ${tags.length ? `<div class="fm-tags">${tags.join("")}</div>` : ""}
     ${desc}
     <div class="fm-actions"><a href="${escapeHtml(url)}" target="_blank" rel="noopener">GitHub ↗</a><button type="button" data-ask="${escapeHtml(path)}">Ask about this file</button></div>
@@ -59,15 +70,20 @@ function fileBoxHtml(graph, path, steps, look) {
 
 function groupBoxHtml(g, look) {
   const n = g.files.size;
-  return `<div class="fm-box fm-group" data-group="${escapeHtml(g.dir)}" style="--r:${look.r};--i:${look.i}" tabindex="0" role="button" aria-label="${n} more files in ${escapeHtml(g.dir)}, click to show">
-    +${n} more in <b>${escapeHtml(g.dir === "(root)" ? "the root" : g.dir + "/")}</b><div class="fm-desc">click to show</div></div>`;
+  const segs = g.dir === "(root)" ? [] : g.dir.split("/");
+  const name = segs.length ? segs[segs.length - 1] + "/" : "the root";
+  const parent = segs.length > 1 ? fmShortDir(segs.slice(0, -1).join("/") + "/") : "";
+  return `<div class="fm-box fm-group" data-group="${escapeHtml(g.dir)}" style="--r:${look.r};--i:${look.i}" tabindex="0" role="button" title="${escapeHtml(g.dir === "(root)" ? "the root" : g.dir + "/")}" aria-label="${n} more files in ${escapeHtml(g.dir)}, click to show">
+    <span class="fm-group-n">+${n} more in</span><b>${escapeHtml(name)}</b>${parent ? `<span class="fm-group-dir">${escapeHtml(parent)}</span>` : ""}<div class="fm-desc">click to show</div></div>`;
 }
 
 const fmRowName = (d) => d === 0 ? "Starts here" : d === 1 ? "1 step away" : `${d} steps away`;
 
 function draw() {
-  const graph = fm.graph;
-  const files = flowFiles(graph, { expanded: fm.expanded, extra: fm.extra });
+  if (fm.view !== "files") { fm.dirty = true; return; } // boxes are measured, so drawn only when shown
+  fm.dirty = false;
+  const graph = mapView(fm.graph);
+  const files = flowFiles(graph, { expanded: fm.expanded, extra: fm.extra, helpers: fm.helpers });
   const lay = flowLayout(graph, files);
   fm.files = files; fm.layout = lay;
   const colour = fmColours([...files.shown]);
@@ -136,6 +152,8 @@ function draw() {
   $("fm-legend").innerHTML = [...colour].map(([a, c]) =>
     `<button type="button" class="fm-chip${fm.folder === a ? " on" : ""}" data-area="${escapeHtml(a)}" style="--c:${c}" aria-pressed="${fm.folder === a}"><i></i>${escapeHtml(a)}</button>`).join("");
   $("fm-hint").hidden = false;
+  $("fm-helpers").textContent = fm.helpers ? "Hide helpers" : `Show helpers (${files.helpers})`;
+  $("fm-helpers").hidden = !files.helpers;
   summary(files);
   applySelection();
 }
@@ -154,6 +172,59 @@ function summary(files) {
   if (g.untraced?.length) notes.push(`Not followed: ${escapeHtml(g.untraced.join(", "))} (only JavaScript, TypeScript and Python imports are traced).`);
   $("fm-note").hidden = !notes.length;
   $("fm-note").innerHTML = notes.join(" ");
+}
+
+// ── The overview: how it runs, the main parts ──────────────────────────────
+function renderOverview() {
+  const o = mapOverview(fm.graph);
+  fm.overview = o;
+  o.parts.forEach(p => { if (!fm.colour.has(p.name)) fm.colour.set(p.name, FM_PALETTE[fm.colour.size % FM_PALETTE.length]); });
+  const colourOf = (path) => fm.colour.get(fmArea(path)) || "var(--fg-subtle)";
+  const steps = o.steps.map((s, i) => {
+    const { name, dir } = fmName(s.path);
+    const where = s.pkg ? `${dir || ""}${dir ? " · " : ""}package` : dir;
+    return `<li class="fm-ov-step${i ? "" : " start"}" style="--i:${i};--c:${colourOf(s.path)}">
+      <div class="fm-ov-rail"><span class="fm-ov-num">${i ? i : "▶"}</span><span class="fm-ov-line"></span></div>
+      <button type="button" class="fm-ov-card" data-path="${escapeHtml(s.path)}" title="${escapeHtml(s.reason)}">
+        <span class="fm-ov-top"><span class="fm-ov-name">${escapeHtml(name)}</span>${i ? "" : `<span class="fm-tag start">▶ Starts here</span>`}</span>
+        ${where ? `<span class="fm-folder" title="${escapeHtml(dir)}"><i></i><span>${escapeHtml(s.pkg ? `${dir ? fmShortDir(dir) + " · " : ""}package` : fmShortDir(dir))}</span></span>` : ""}
+        ${s.desc ? `<span class="fm-ov-desc">${escapeHtml(s.desc)}</span>` : ""}
+        ${s.defs.length ? `<span class="fm-ov-defs"><span>defines</span>${s.defs.slice(0, 3).map(d => `<code>${escapeHtml(d)}</code>`).join("")}</span>` : ""}
+      </button></li>`;
+  }).join("");
+  const parts = o.parts.map((p, i) => `<button type="button" class="fm-ov-part" data-part="${escapeHtml(p.name)}" style="--i:${i};--c:${fm.colour.get(p.name)}">
+      <span class="fm-ov-top"><span class="fm-ov-pname">${escapeHtml(p.name)}</span><span class="fm-ov-n">${p.files} files</span></span>
+      ${p.desc ? `<span class="fm-ov-desc">${escapeHtml(p.desc)}</span>` : ""}
+      ${p.main.length ? `<span class="fm-ov-main">mainly ${p.main.map(m => `<code>${escapeHtml(m)}</code>`).join(" · ")}</span>` : ""}
+      <span class="fm-ov-open">Its files on the map →</span></button>`).join("");
+  const left = [o.hidden.helpers && `${o.hidden.helpers} helpers (utils, constants, types…)`, o.hidden.pass && `${o.hidden.pass} files that only pass imports along`].filter(Boolean);
+  $("fm-overview").innerHTML = `<div class="fm-ov">
+    <section><h2>How it runs</h2><p class="fm-ov-lede">Read these in order — each is loaded by one before it. Click one to see it on the file map.</p>
+      <ol class="fm-ov-chain">${steps || `<li class="fm-ov-empty">Couldn't trace how it runs.</li>`}</ol></section>
+    <aside><h2>Main parts</h2><p class="fm-ov-lede">The repo's shape, biggest first.</p>
+      <div class="fm-ov-parts">${parts || `<p class="fm-ov-empty">One part.</p>`}</div>
+      <div class="fm-ov-left">${left.length ? `Left out here: ${left.join(" and ")}. They're on the file map.` : "Everything read is on the file map."}
+        <button type="button" class="fm-btn" id="fm-ov-files">Open the file map</button></div></aside>
+  </div>`;
+}
+
+// Overview ⇄ file map
+function setView(view) {
+  fm.view = view;
+  $("fm-v-overview").setAttribute("aria-selected", view === "overview");
+  $("fm-v-files").setAttribute("aria-selected", view === "files");
+  $("fm-overview").hidden = view !== "overview";
+  $("fm-stage").hidden = view !== "files";
+  $("fm-legend").hidden = view !== "files";
+  for (const b of document.querySelectorAll(".fm-files-only")) b.hidden = view !== "files";
+  if (view === "files") {
+    if (fm.dirty) { draw(); fit(); }
+    else summary(fm.files);
+    $("fm-helpers").hidden = !fm.files?.helpers;
+  } else {
+    $("fm-summary").innerHTML = fm.overview?.steps.length ? `Starts in <code>${escapeHtml(fm.overview.steps[0].path)}</code> · ${fm.graph.read} files read` : "";
+    $("fm-note").hidden = true;
+  }
 }
 
 // ── Selection: a box, what loads it and what it loads ───────────────────────
@@ -183,7 +254,7 @@ function applySelection() {
 function select(path, { center = false } = {}) {
   fm.sel = path;
   applySelection();
-  if (center && fm.rect.has(path)) {
+  if (center && fm.rect?.has(path)) {
     const r = fm.rect.get(path), st = $("fm-stage");
     fm.x = st.clientWidth / 2 - (r.x + r.w / 2) * fm.scale;
     fm.y = st.clientHeight / 3 - (r.y + r.h / 2) * fm.scale;
@@ -256,16 +327,37 @@ function wire() {
   });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") { fm.folder = null; fm.hover = null; select(null); } });
   $("fm-explain").onclick = () => askPanel({ type: "map-explain" });
+  $("fm-v-overview").onclick = () => setView("overview");
+  $("fm-v-files").onclick = () => setView("files");
+  $("fm-helpers").onclick = () => { fm.helpers = !fm.helpers; fm.dirty = true; draw(); };
+  $("fm-overview").addEventListener("click", (e) => {
+    if (e.target.closest("#fm-ov-files")) return setView("files");
+    const step = e.target.closest("[data-path]");
+    if (step) { // the file on the file map, picked
+      fm.extra.add(step.dataset.path); fm.folder = null; fm.dirty = true;
+      setView("files");
+      return select(step.dataset.path, { center: true });
+    }
+    const part = e.target.closest("[data-part]");
+    if (part) { // the file map with that part picked out, its most-used files shown
+      const view = mapView(fm.graph);
+      Object.keys(view.nodes).filter(p => fmArea(p) === part.dataset.part && !view.nodes[p].helper && !TEST_PATH.test(p))
+        .sort((a, b) => view.nodes[b].inDegree - view.nodes[a].inDegree || a.localeCompare(b)).slice(0, 8).forEach(p => fm.extra.add(p));
+      fm.sel = null; fm.hover = null; fm.folder = part.dataset.part; fm.dirty = true;
+      setView("files");
+    }
+  });
 
   // Roles written by Explain land in storage: show them with an "AI" badge
   chrome.storage.onChanged.addListener((changes, area) => {
     const k = mapStoreKey(currentRepo.owner, currentRepo.repo);
-    if (area === "local" && changes[k]?.newValue && fm.graph) { fm.graph = changes[k].newValue; draw(); }
+    if (area === "local" && changes[k]?.newValue && fm.graph) { fm.graph = changes[k].newValue; renderOverview(); fm.dirty = true; draw(); }
     if (area === "local" && changes.githubToken) githubToken = changes.githubToken.newValue || "";
   });
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg?.type === "map-highlight" && msg.repo === repoKey() && fm.graph) {
-      if (!fm.rect.has(msg.file)) { fm.extra.add(msg.file); draw(); }
+      if (!fm.rect?.has(msg.file)) { fm.extra.add(msg.file); fm.dirty = true; }
+      setView("files");
       select(msg.file, { center: true });
     }
   });
@@ -308,8 +400,8 @@ async function start(allowPrivate = false) {
     status.hidden = true;
     const file = params.get("file");
     if (file) fm.extra.add(file);
-    draw();
-    fit();
+    renderOverview();
+    setView(file ? "files" : "overview"); // a file asked for opens the file map on it
     if (file) select(file, { center: true });
   } catch (err) {
     status.innerHTML = `${escapeHtml(err.message || "Couldn't load the map")} <button class="fm-btn" id="fm-retry">Try again</button>`;

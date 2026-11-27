@@ -123,7 +123,7 @@ test("parseLoads reads script tags and importScripts, not remote URLs", () => {
 });
 test("mapResolver follows HTML script tags in document order", () => {
   const r = pure.mapResolver({ known: new Set(["a.js", "b.js", "index.html"]), files: {} });
-  assert.deepEqual(plain(r("index.html", '<script src="b.js"></script><script src="a.js"></script>')), { edges: ["b.js", "a.js"], order: ["b.js", "a.js"] });
+  assert.deepEqual(plain(r("index.html", '<script src="b.js"></script><script src="a.js"></script>')), { edges: ["b.js", "a.js"], order: ["b.js", "a.js"], named: [] });
 });
 test("mapResolver links workspace packages and tsconfig paths", () => {
   const known = new Set(["packages/core/src/index.ts", "apps/web/src/app.ts", "apps/web/src/lib/db.ts"]);
@@ -386,19 +386,13 @@ test("rankCore keeps at most 10, most imported first", () => {
   assert.equal(c.length, 10);
   assert.equal(c[0].path, "m11.js"); assert.equal(c[0].importers, 14);
 });
-test("readingPath starts at the entry and follows the most-imported next file", () => {
+test("readingPath starts at the entry and follows what it loads, a file before the files it uses", () => {
   const p = plain(pure.readingPath(GRAPH, pure.rankCore(GRAPH)));
-  assert.deepEqual(p.map(s => s.path), ["src/index.ts", "src/app.ts", "src/db.ts", "src/router.ts"]);
+  assert.deepEqual(p.map(s => s.path), ["src/index.ts", "src/app.ts", "src/router.ts", "src/db.ts"]);
   assert.deepEqual(p.map(s => s.step), [1, 2, 3, 4]);
   assert.equal(p[0].reason, "entry point · package.json main");
   assert.equal(p[1].reason, "loaded by ① index.ts");
-  assert.equal(p[2].reason, "loaded by ② app.ts · imported by 2 files");
-});
-test("readingPath stops at 8 steps", () => {
-  const nodes = {}, edges = [];
-  for (let i = 0; i < 20; i++) { nodes[`f${i}.js`] = node(i ? 1 : 0, i); if (i) edges.push([`f${i - 1}.js`, `f${i}.js`]); }
-  const p = plain(pure.readingPath({ entries: [{ path: "f0.js", reason: "r" }], order: {}, nodes, edges }, []));
-  assert.equal(p.length, 8);
+  assert.equal(p[3].reason, "loaded by ② app.ts · used by 2 files");
 });
 test("readingPath fills from core when the chain is short", () => {
   const g = { entries: [{ path: "a.js", reason: "r" }], order: {}, nodes: { "a.js": node(0, 0), "core.js": node(3, 1) }, edges: [] };
@@ -578,13 +572,13 @@ test("the crawl stores each file's description on its node", async () => {
   const g = await mapFor({ "package.json": '{"main":"src/index.ts"}', "src/index.ts": '// Starts the app\nimport "./a"', "src/a.ts": "export const a = 1" });
   assert.equal(g.nodes["src/index.ts"].desc, "Starts the app");
   assert.equal(g.nodes["src/a.ts"].desc, undefined);
-  assert.equal(g.v, 3);
+  assert.equal(g.v, 4);
 });
 test("a stored map built by an older crawl is read again", async () => {
   const stored = { map_o_r: { sha: "t1", entries: [], nodes: {}, edges: [], order: {}, read: 0, descs: true } };
   const { panel, gh } = mapPanel(SMALL_REPO, { stored });
   const g = plain(await panel.fn.loadRepoMap(panel.run("currentRepo")));
-  assert.ok(g.v === 3 && g.nodes["src/index.ts"]);
+  assert.ok(g.v === 4 && g.nodes["src/index.ts"]);
   assert.ok(gh.rawCalls.some(u => u.endsWith("/src/index.ts")));
 });
 
@@ -600,13 +594,13 @@ function flowGraph() {
     ["routes/todos.js", "src/db.js"], ["routes/users.js", "src/db.js"], ["lib/x0.js", "src/db.js"], ["lib/x1.js", "src/db.js"], ["lib/x2.js", "src/db.js"]);
   return { entries: [{ path: "src/index.js", reason: "package.json main" }], nodes, edges, order: {}, read: 45 };
 }
-test("flowFiles shows the entry, reading path and core, caps at 25 and folds the rest by folder", () => {
+test("flowFiles shows the entry, reading path and core, caps at 12 and folds the rest by folder", () => {
   const f = pure.flowFiles(flowGraph(), {});
   const shown = [...f.shown];
   for (const p of ["src/index.js", "src/app.js", "routes/todos.js", "routes/users.js", "src/db.js"]) assert.ok(shown.includes(p), p);
-  assert.equal(shown.length, 25);
+  assert.equal(shown.length, 12);
   const lib = f.groups.find(g => g.dir === "lib");
-  assert.equal(lib.files.size, 40 - (25 - 5), "the files not shown are folded under lib/");
+  assert.equal(lib.files.size, 40 - (12 - 5), "the files not shown are folded under lib/");
 });
 test("expanding a folder shows its files, up to 60 boxes", () => {
   const f = pure.flowFiles(flowGraph(), { expanded: new Set(["lib"]) });
@@ -678,3 +672,155 @@ test("briefChain is the chain from the entry, or null when the file isn't reache
   assert.equal(pure.briefChain(null, "x.js"), null);
 });
 
+
+// ── What to read: pass-through files, helpers, what files define, the overview ─
+test("a Python __init__.py that only re-exports is a pass-through file; one with code isn't", () => {
+  const pass = (t) => pure.mapIsBarrel(t, "pkg/__init__.py");
+  assert.equal(pass(""), true);
+  assert.equal(pass('"""Prompts."""\nfrom .base import BasePrompt\nfrom .chat import (\n    Chat,\n    Human,\n)\n__all__ = ["BasePrompt", "Chat"]\n'), true);
+  assert.equal(pass('"""Lazy."""\nfrom typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from .base import A\n_dynamic_imports = {\n    "A": "base",\n}\ndef __getattr__(name):\n    return import_attr(name)\ndef __dir__():\n    return __all__\n'), true);
+  assert.equal(pass("from .base import A\n\nclass B(A):\n    pass\n"), false);
+  assert.equal(pass("from .base import A\n\ndef helper():\n    return 1\n"), false);
+  assert.equal(pure.mapIsBarrel("from .base import A\n", "pkg/base.py"), false, "only __init__.py");
+  assert.equal(pure.mapIsBarrel('export * from "./a";\nexport { b } from "./b";\n', "src/index.ts"), true);
+  assert.equal(pure.mapIsBarrel('export * from "./a";\nexport const c = 1;\n', "src/index.ts"), false);
+});
+test("helpers are recognised by name", () => {
+  for (const p of ["src/utils.ts", "pkg/helpers.py", "pkg/constants.py", "pkg/_types.py", "pkg/compat.py", "pkg/exceptions.py", "src/errors.ts", "pkg/logger.py", "pkg/__version__.py", "settings/common.py", "apps/a/admin.py", "pkg/utils/__init__.py"])
+    assert.ok(pure.mapIsHelper(p), p);
+  for (const p of ["pkg/sessions.py", "src/app.ts", "apps/a/models.py", "src/utilsx.ts"]) assert.ok(!pure.mapIsHelper(p), p);
+});
+test("mapDefines lists a file's top-level classes and functions", () => {
+  assert.deepEqual(plain(pure.mapDefines("class Session(Base):\n    def get(self): pass\n\ndef request(m):\n    pass\ndef _private(): pass\n", "a.py")), ["Session", "request"]);
+  assert.deepEqual(plain(pure.mapDefines("export class App {}\nexport async function start() {}\nexport const router = x;\nfunction local() {}\nexports.legacy = 1;\n", "a.ts")), ["App", "start", "router", "legacy"]);
+});
+test("the crawl records pass-through __init__ files, what each file defines (most imported first) and code files per part", async () => {
+  const g = await mapFor({
+    "pyproject.toml": '[project.scripts]\ntool = "pkg.cli:main"\n',
+    "pkg/__init__.py": '"""The pkg."""\nfrom .sessions import Session\n__all__ = ["Session"]\n',
+    "pkg/cli.py": "from pkg.sessions import Session, request\nfrom pkg.models import Response\n",
+    "pkg/sessions.py": "from .models import Response\nclass Helper:\n    pass\nclass Session:\n    pass\ndef request():\n    pass\n",
+    "pkg/models.py": "class Response:\n    pass\n",
+    "tests/test_x.py": "", "docs/conf.py": "",
+  });
+  assert.equal(g.nodes["pkg/__init__.py"]?.barrel ?? true, true);
+  assert.deepEqual(g.nodes["pkg/sessions.py"].defs, ["Session", "request", "Helper"]);
+  assert.deepEqual(g.parts, { pkg: 4 });
+  assert.equal(g.v, 4);
+});
+
+// A requests-like library: helpers everywhere, the work in sessions → adapters → models
+function libGraph() {
+  const nodes = {}, edges = [];
+  const n = (p, extra = {}) => { nodes[p] = { depth: 1, inDegree: 0, read: true, size: 100, ...extra }; };
+  ["pkg/__init__.py", "pkg/api.py", "pkg/sessions.py", "pkg/models.py", "pkg/adapters.py", "pkg/hooks.py", "pkg/utils.py", "pkg/compat.py"].forEach(p => n(p));
+  nodes["pkg/__init__.py"].depth = 0;
+  const e = (a, ...bs) => bs.forEach(b => edges.push([`pkg/${a}.py`, `pkg/${b}.py`]));
+  e("__init__", "api", "sessions", "models", "utils", "compat");
+  e("api", "sessions", "utils");
+  e("sessions", "models", "adapters", "utils", "compat");
+  e("models", "hooks", "utils", "compat");
+  e("adapters", "models", "utils", "compat");
+  for (const [, b] of edges) nodes[b].inDegree++;
+  return { entries: [{ path: "pkg/__init__.py", reason: "package" }], nodes, edges, order: {}, read: 8 };
+}
+test("readingPath follows the files that do the work, a file before the files it uses, never helpers", () => {
+  const g = libGraph();
+  const p = plain(pure.readingPath(g, pure.rankCore(g)));
+  assert.deepEqual(p.map(s => s.path.split("/")[1]), ["__init__.py", "api.py", "sessions.py", "adapters.py", "models.py", "hooks.py"]);
+  assert.equal(p[0].reason, "entry point · package");
+  assert.match(p[2].reason, /^loaded by ① __init__\.py/);
+  assert.ok(!plain(pure.rankCore(g)).some(c => /utils|compat/.test(c.path)), "helpers are never core");
+});
+test("readingPath stops at 6 steps", () => {
+  const nodes = {}, edges = [];
+  for (let i = 0; i < 20; i++) { nodes[`f${i}.js`] = node(i ? 1 : 0, i); if (i) edges.push([`f${i - 1}.js`, `f${i}.js`]); }
+  assert.equal(plain(pure.readingPath({ entries: [{ path: "f0.js", reason: "r" }], order: {}, nodes, edges }, [])).length, 6);
+});
+test("when the start loads no code (Django's manage.py), the reading path begins at the file that ties the most together", () => {
+  const nodes = {}, edges = [];
+  for (const p of ["manage.py", "apps/jobs/views.py", "apps/jobs/models.py", "apps/jobs/serializers.py", "apps/base/models.py", "apps/base/utils.py"]) nodes[p] = node(0, p === "manage.py" ? 0 : 1);
+  edges.push(["apps/jobs/views.py", "apps/jobs/models.py"], ["apps/jobs/views.py", "apps/jobs/serializers.py"], ["apps/jobs/views.py", "apps/base/utils.py"],
+    ["apps/jobs/serializers.py", "apps/jobs/models.py"], ["apps/jobs/models.py", "apps/base/models.py"]);
+  const p = plain(pure.readingPath({ entries: [{ path: "manage.py", reason: "manage.py" }], nodes, edges, order: {}, read: 6 }, []));
+  assert.deepEqual(p.map(s => s.path), ["manage.py", "apps/jobs/views.py", "apps/jobs/serializers.py", "apps/jobs/models.py", "apps/base/models.py"]);
+});
+test("of several packages, the reading path starts at the one the others depend on", () => {
+  const nodes = {}, edges = [];
+  for (const p of ["libs/app/app_pkg/__init__.py", "libs/app/app_pkg/run.py", "libs/core/core_pkg/__init__.py", "libs/core/core_pkg/base.py"]) nodes[p] = node(0, 0);
+  edges.push(["libs/app/app_pkg/__init__.py", "libs/app/app_pkg/run.py"], ["libs/app/app_pkg/run.py", "libs/core/core_pkg/base.py"], ["libs/core/core_pkg/__init__.py", "libs/core/core_pkg/base.py"]);
+  const g = { entries: [{ path: "libs/app/app_pkg/__init__.py", reason: "a" }, { path: "libs/core/core_pkg/__init__.py", reason: "b" }], nodes, edges, order: {}, read: 4 };
+  assert.equal(plain(pure.readingPath(g, []))[0].path, "libs/core/core_pkg/__init__.py");
+});
+test("mapView follows imports through pass-through files and marks helpers", () => {
+  const nodes = {
+    "a.py": node(0, 0), "b.py": node(0, 1), "pkg/__init__.py": node(2, 1, { barrel: true }), "pkg/base.py": node(1, 2), "pkg/chat.py": node(1, 2), "pkg/utils.py": node(1, 2),
+  };
+  const g = { entries: [{ path: "a.py", reason: "r" }], nodes, order: {}, read: 6,
+    edges: [["a.py", "pkg/__init__.py"], ["b.py", "pkg/__init__.py"], ["pkg/__init__.py", "pkg/base.py"], ["pkg/__init__.py", "pkg/chat.py"], ["pkg/chat.py", "pkg/utils.py"]] };
+  const v = plain(pure.mapView(g));
+  assert.ok(!("pkg/__init__.py" in v.nodes));
+  assert.deepEqual(v.edges.filter(([a]) => a === "a.py").map(([, b]) => b).sort(), ["pkg/base.py", "pkg/chat.py"]);
+  assert.equal(v.nodes["pkg/base.py"].inDegree, 2);
+  assert.equal(v.nodes["pkg/utils.py"].helper, true);
+  assert.ok(!v.nodes["pkg/chat.py"].helper);
+});
+test("the file map shows about 12 files, without pass-through files, and helpers only when asked", () => {
+  const g = libGraph();
+  const f = pure.flowFiles(g, {});
+  assert.ok(!f.shown.has("pkg/utils.py") && !f.shown.has("pkg/compat.py"));
+  assert.equal(f.helpers, 2);
+  const h = pure.flowFiles(g, { helpers: true });
+  assert.ok(h.shown.has("pkg/utils.py"));
+  assert.equal(pure.FLOW?.DEFAULT_BOXES ?? 12, 12);
+});
+test("mapOverview: how it runs with what each file defines, the main parts, and what was left out", () => {
+  const g = libGraph();
+  g.nodes["pkg/sessions.py"].defs = ["Session", "request"];
+  g.nodes["pkg/__init__.py"].desc = "The pkg library";
+  g.parts = { pkg: 8, cli: 2 };
+  g.nodes["cli/main.py"] = node(0, 1); g.nodes["cli/main.py"].desc = "Command line";
+  const o = plain(pure.mapOverview(g));
+  assert.deepEqual(o.steps.map(s => s.path.split("/")[1]), ["__init__.py", "api.py", "sessions.py", "adapters.py", "models.py", "hooks.py"]);
+  assert.deepEqual(o.steps[2].defs, ["Session", "request"]);
+  assert.deepEqual(o.parts.map(p => [p.name, p.files]), [["pkg", 8], ["cli", 2]]);
+  assert.equal(o.parts[0].desc, "The pkg library");
+  assert.deepEqual(o.parts[0].main.slice(0, 2), ["models", "sessions"]);
+  assert.deepEqual(o.hidden, { helpers: 2, pass: 0 });
+});
+test("an import through a pass-through package links only to the files that define the names it asks for", () => {
+  const nodes = {
+    "app.py": node(0, 0), "pkg/__init__.py": node(1, 1, { barrel: true, exports: { Runnable: "pkg/base.py", History: "pkg/history.py" } }),
+    "pkg/base.py": node(1, 2), "pkg/history.py": node(1, 2), "other.py": node(0, 1),
+  };
+  const g = { entries: [{ path: "app.py", reason: "r" }], nodes, order: {}, read: 5,
+    edges: [["app.py", "pkg/__init__.py"], ["other.py", "pkg/__init__.py"], ["pkg/__init__.py", "pkg/base.py"], ["pkg/__init__.py", "pkg/history.py"]],
+    via: { "app.py": { "pkg/__init__.py": ["Runnable"] } } };
+  const v = plain(pure.mapView(g));
+  assert.deepEqual(v.edges.filter(([a]) => a === "app.py").map(([, b]) => b), ["pkg/base.py"]);
+  assert.deepEqual(v.edges.filter(([a]) => a === "other.py").map(([, b]) => b).sort(), ["pkg/base.py", "pkg/history.py"], "names unknown: every file it passes along");
+  assert.equal(v.nodes["pkg/history.py"].inDegree, 1);
+});
+test("the crawl records which names pass through a package, including lazy-import tables", async () => {
+  const g = await mapFor({
+    "pyproject.toml": '[project.scripts]\ntool = "app.main:run"\n',
+    "app/__init__.py": "", "app/main.py": "from pkg import Runnable\nfrom pkg import lazy_thing\n",
+    "pkg/__init__.py": 'from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from .base import Runnable\n_dynamic_imports = {\n    "Runnable": "base",\n    "lazy_thing": "lazy",\n}\ndef __getattr__(n):\n    pass\n',
+    "pkg/base.py": "class Runnable:\n    pass\n", "pkg/lazy.py": "def lazy_thing():\n    pass\n",
+  });
+  assert.equal(g.nodes["pkg/__init__.py"].barrel, true);
+  assert.deepEqual(g.nodes["pkg/__init__.py"].exports, { Runnable: "pkg/base.py", lazy_thing: "pkg/lazy.py" });
+  assert.deepEqual(g.via["app/main.py"]["pkg/__init__.py"].sort(), ["Runnable", "lazy_thing"]);
+  const v = plain(pure.mapView(g));
+  assert.deepEqual(v.edges.filter(([a]) => a === "app/main.py").map(([, b]) => b).sort(), ["pkg/base.py", "pkg/lazy.py"]);
+});
+test("when no package uses another, the reading path starts in the biggest part, not a playground or a scaffolding tool", () => {
+  const nodes = {}, edges = [];
+  for (const p of ["packages/create-app/index.js", "playground/a/index.js", "packages/core/src/index.ts", "packages/core/src/server.ts"]) nodes[p] = node(0, 0);
+  edges.push(["packages/core/src/index.ts", "packages/core/src/server.ts"]);
+  const g = { entries: ["packages/create-app/index.js", "playground/a/index.js", "packages/core/src/index.ts"].map(path => ({ path, reason: "r" })),
+    nodes, edges, order: {}, read: 4, parts: { playground: 900, core: 140, "create-app": 30 } };
+  assert.equal(plain(pure.readingPath(g, []))[0].path, "packages/core/src/index.ts");
+  assert.ok(pure.mapIsHelper("src/flask/debughelpers.py") && pure.mapIsHelper("apps/challenges/aws_utils.py"));
+  assert.equal(pure.fileSummary("/**\n * Module dependencies.\n * @private\n */\nvar x = require('x');\n", "lib/app.js"), null);
+});

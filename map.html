@@ -14,15 +14,21 @@
       <span class="fm-sub">How it runs</span>
     </div>
     <div class="fm-summary" id="fm-summary"></div>
+    <div class="fm-switch" role="tablist" aria-label="View">
+      <button type="button" role="tab" id="fm-v-overview" aria-selected="true">Overview</button>
+      <button type="button" role="tab" id="fm-v-files" aria-selected="false">File map</button>
+    </div>
     <div class="fm-tools">
-      <button type="button" class="fm-btn" id="fm-fit" title="Fit the whole map">Fit</button>
-      <button type="button" class="fm-btn" id="fm-out" aria-label="Zoom out">–</button>
-      <button type="button" class="fm-btn" id="fm-in" aria-label="Zoom in">+</button>
+      <button type="button" class="fm-btn fm-files-only" id="fm-helpers" hidden></button>
+      <button type="button" class="fm-btn fm-files-only" id="fm-fit" title="Fit the whole map">Fit</button>
+      <button type="button" class="fm-btn fm-files-only" id="fm-out" aria-label="Zoom out">–</button>
+      <button type="button" class="fm-btn fm-files-only" id="fm-in" aria-label="Zoom in">+</button>
       <button type="button" class="fm-btn fm-primary" id="fm-explain">Explain this map</button>
     </div>
   </header>
   <nav class="fm-legend" id="fm-legend" aria-label="Folders"></nav>
   <div class="fm-note" id="fm-note" hidden></div>
+  <section class="fm-overview" id="fm-overview" hidden></section>
   <main class="fm-stage" id="fm-stage" tabindex="-1">
     <div class="fm-world" id="fm-world">
       <svg class="fm-edges" id="fm-edges" aria-hidden="true"></svg>

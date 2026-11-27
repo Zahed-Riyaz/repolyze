@@ -269,16 +269,26 @@ function mapResolver({ known, files = {} }) {
     return found;
   };
 
+  // `named`: [file, names] per import, so a pass-through package can later be followed name by name
   return (fromPath, text) => {
     const edges = new Set();
     const order = [];
+    const named = [];
     const dir = mapDirOf(fromPath);
     for (const imp of parseImports(text, fromPath)) {
       let hits = resolveImport(imp, fromPath, known);
       if (!hits.length && imp.py && !imp.spec.startsWith(".")) hits = viaPyPackage(imp, fromPath);
       if (!hits.length && !imp.py && !imp.spec.startsWith(".")) hits = viaPackage(imp.spec);
       if (!hits.length && !imp.py && !imp.spec.startsWith(".")) hits = viaPaths(imp.spec, fromPath);
-      hits.forEach(h => { if (h !== fromPath) edges.add(h); });
+      hits.forEach(h => { if (h !== fromPath) { edges.add(h); if (imp.names.length) named.push([h, imp.names]); } });
+    }
+    // A lazy-import table in an __init__.py (`_dynamic_imports = {"Runnable": "base"}` behind __getattr__): real links
+    if (/(^|\/)__init__\.py$/.test(fromPath) && /def\s+__getattr__/.test(text)) {
+      for (const m of text.matchAll(/["'](\w+)["']\s*:\s*["'](\.?[\w.]+)["']/g)) {
+        const mod = m[2].replace(/^\./, "").replace(/\./g, "/");
+        const hit = [`${dir ? dir + "/" : ""}${mod}.py`, `${dir ? dir + "/" : ""}${mod}/__init__.py`].find(p => known.has(p));
+        if (hit && hit !== fromPath) { edges.add(hit); named.push([hit, [m[1]]]); }
+      }
     }
     const isHtml = /\.html?$/i.test(fromPath);
     for (const spec of parseLoads(text, fromPath)) {
@@ -289,14 +299,15 @@ function mapResolver({ known, files = {} }) {
         if (isHtml && !order.includes(path)) order.push(path);
       }
     }
-    return { edges: [...edges], order };
+    return { edges: [...edges], order, named };
   };
 }
 
 // ── The crawl ────────────────────────────────────────────────────────────────
 // Bump when the crawl changes what it finds: stored maps built by an older crawl are read again
-// (1 = descriptions; 2 = Python packages anywhere in the tree; 3 = main code folders when imports reach little)
-const MAP_CRAWL_VERSION = 3;
+// (1 = descriptions; 2 = Python packages anywhere in the tree; 3 = main code folders when imports reach little;
+// 4 = Python pass-through files, what files define, code files per part)
+const MAP_CRAWL_VERSION = 4;
 const MAP_CAP_PUBLIC = 300;
 const MAP_CAP_PRIVATE = 60;
 const MAP_READS_IN_FLIGHT = 8;
@@ -361,10 +372,42 @@ async function mapReadManifests(repo, paths) {
   return files;
 }
 
-const mapIsBarrel = (text) => {
-  const lines = text.split("\n").filter(l => l.trim());
-  return lines.length > 0 && lines.every(l => /^export .* from /.test(l));
-};
+// A file that only passes imports along: JS/TS whose every line re-exports, or a Python __init__.py whose
+// top-level statements are only imports, __all__, a docstring, TYPE_CHECKING blocks and lazy-import plumbing.
+function mapIsBarrel(text, path = "") {
+  if (/\.py$/.test(path)) {
+    if (!/(^|\/)__init__\.py$/.test(path)) return false;
+    const body = String(text).replace(/^\s*[rRuU]?("""|\'\'\')[\s\S]*?\1/, "").replace(/#.*$/gm, "");
+    const defs = [...body.matchAll(/^(?:async\s+)?(?:class|def)\s+(\w+)/gm)].map(m => m[1]);
+    if (defs.some(d => d !== "__getattr__" && d !== "__dir__")) return false;
+    return body.split("\n").filter(l => /^\S/.test(l)).every(l =>
+      /^(from\s|import\s|__all__|if\s+(typing\.)?TYPE_CHECKING|_\w+\s*[:=]|(async\s+)?def\s+__(getattr|dir)__|[)\]}]|try:|except\b|else:|logger\s*=|__version__)/.test(l));
+  }
+  const lines = String(text).split("\n").filter(l => l.trim() && !/^\s*(\/\/|\/\*|\*)/.test(l));
+  return lines.length > 0 && lines.every(l => /^export .* from /.test(l) || /^export\s*\*/.test(l));
+}
+
+// Files to look up rather than read first: named as plumbing by convention (and Django's settings/admin/apps)
+const MAP_HELPER = /(^|\/)_?_?(\w*(?:utils?|helpers?)|constants?|consts|types|typing|_types|compat|exceptions|errors|logger|logging|globals|version|status_codes|structures|deprecation|import_utils|internal_utils|settings|config|conf|admin|apps)_?_?(\/__init__)?\.[^/]+$/i;
+const mapIsHelper = (path) => MAP_HELPER.test(path) || /(^|\/)settings\//.test(path);
+
+// A file's own top-level names: Python classes and public functions, JS/TS exports. In order of appearance.
+function mapDefines(text, path) {
+  const out = [];
+  const t = String(text ?? "");
+  if (/\.py$/.test(path)) {
+    for (const m of t.matchAll(/^(?:class\s+([A-Za-z]\w*)|(?:async\s+)?def\s+([a-zA-Z]\w*))/gm)) out.push(m[1] || m[2]);
+  } else {
+    for (const m of t.matchAll(/^export\s+(?:default\s+)?(?:abstract\s+)?(?:async\s+)?(?:class|function\*?|const|let|interface|type|enum)\s+([A-Za-z_$][\w$]*)|^(?:module\.)?exports\.([A-Za-z_$][\w$]*)\s*=/gm)) out.push(m[1] || m[2]);
+  }
+  return [...new Set(out)];
+}
+
+// A file's part of the repo: its top folder, or two levels under src/, apps/, libs/, packages/…
+function mapAreaOf(path) {
+  const s = path.split("/");
+  return s.length > 2 && CONTAINER_DIRS.has(s[0]) ? s[1] : s.length > 1 ? s[0] : "(root)";
+}
 
 // When the imports from the start reach little of the code (Django's manage.py names its settings in a
 // string; frameworks load files by folder or by name), the crawl also reads the main code folders' files.
@@ -372,7 +415,7 @@ const mapIsBarrel = (text) => {
 const MAP_TOPUP_BELOW = 25;
 const MAP_TOPUP_TO = 150;
 const MAP_TOPUP_CODE = /\.(m?[jt]sx?|cjs|py|vue|svelte)$/i;
-const MAP_TOPUP_SKIP = /(^|\/)(migrations|docs?|scripts?|static|assets|public|examples?|samples?|\.[^/]+)(\/|$)|(^|\/)(setup|conftest|noxfile|[\w.-]+\.config)\.[^/]+$/i;
+const MAP_TOPUP_SKIP = /(^|\/)(migrations|docs?|scripts?|static|assets|public|examples?|samples?|playgrounds?|demos?|sandbox|templates?|template-[^/]+|\.[^/]+)(\/|$)|(^|\/)(setup|conftest|noxfile|[\w.-]+\.config)\.[^/]+$/i;
 
 // The files to add, in reading order: round-robin over code areas (a top folder, or two levels under
 // src/, apps/, packages/…), biggest area first; in each, shallower then bigger files first.
@@ -410,7 +453,7 @@ function mapUntraced(entries) {
 // Crawl the import graph breadth-first from the entry points. Plain objects, so it survives chrome.storage.
 // What a file says about itself: its header comment or docstring, first sentence, ≤ 120 chars.
 // No AI — the text is already in hand during the crawl. null when the file doesn't say.
-const MAP_DESC_SKIP = /(copyright|license|licence|spdx|@ts-|eslint|prettier|jshint|generated|do not edit|auto-?generated|@flow|^#!)/i;
+const MAP_DESC_SKIP = /(^module dependencies|copyright|license|licence|spdx|@ts-|eslint|prettier|jshint|generated|do not edit|auto-?generated|@flow|^#!)/i;
 function fileSummary(text, path = "") {
   if (!text) return null;
   const pick = (raw) => {
@@ -462,6 +505,8 @@ async function buildImportGraph(repo = currentRepo, { cap = MAP_CAP_PUBLIC, isSt
   const enqueue = (path, d) => { if (!seen.has(path)) { seen.add(path); depth.set(path, d); queue.push(path); } };
   entries.forEach(e => enqueue(e.path, 0));
 
+  const nameUses = new Map(); // how many files import each name, to rank what a file defines
+  const via = {}; // { from: { package file: [names] } }
   let read = 0, topup = 0, extra = null;
   for (;;) {
     if (!queue.length && !isStale() && read < Math.min(cap, MAP_TOPUP_TO)) {
@@ -483,10 +528,23 @@ async function buildImportGraph(repo = currentRepo, { cap = MAP_CAP_PUBLIC, isSt
       if (text == null) { failed.add(path); return; }
       read++;
       nodes[path] = { inDegree: 0, depth: depth.get(path), size: sizes.get(path) || 0, read: true };
-      if (mapIsBarrel(text)) nodes[path].barrel = true;
+      if (mapIsBarrel(text, path)) nodes[path].barrel = true;
+      const defs = mapDefines(text, path);
+      if (defs.length) nodes[path].defs = defs;
+      for (const imp of parseImports(text, path)) for (const n of imp.names) nameUses.set(n, (nameUses.get(n) || 0) + 1);
       const desc = fileSummary(text, path);
       if (desc) nodes[path].desc = desc;
-      const { edges, order: loads } = resolve(path, text);
+      const { edges, order: loads, named } = resolve(path, text);
+      // Which names go through which package file, and which file a package file gets each name from
+      for (const [to, names] of named) if (MAP_PKG_FILE.test(to)) {
+        const v = ((via[path] ||= {})[to] ||= []);
+        for (const n of names) if (!v.includes(n)) v.push(n);
+      }
+      if (nodes[path].barrel) {
+        const ex = {};
+        for (const [to, names] of named) for (const n of names) ex[n] ??= to;
+        nodes[path].exports = ex;
+      }
       if (loads.length) order[path] = loads;
       edgeSet.set(path, edges);
       edges.forEach(to => enqueue(to, depth.get(path) + 1));
@@ -503,8 +561,24 @@ async function buildImportGraph(repo = currentRepo, { cap = MAP_CAP_PUBLIC, isSt
     edges.push([from, to]);
     nodes[to].inDegree++;
   }
+  // What each file defines, most imported first, ≤ 4
+  for (const n of Object.values(nodes)) {
+    if (n.defs) n.defs = n.defs.map((d, i) => [d, nameUses.get(d) || 0, i]).sort((a, b) => b[1] - a[1] || a[2] - b[2]).slice(0, 4).map(x => x[0]);
+  }
+  // Code files per part, from the whole tree (tests, scripts, docs, static and vendored files don't count)
+  const parts = {};
+  for (const p of paths) {
+    if (!MAP_TOPUP_CODE.test(p) || NOISE_PATH.test(p) || TEST_PATH.test(p) || MAP_TOPUP_SKIP.test(p) || NOT_CODE.test(p)) continue;
+    const a = mapAreaOf(p);
+    if (a !== "(root)") parts[a] = (parts[a] || 0) + 1;
+  }
+  // Keep the names only where they go through a pass-through file
+  for (const from of Object.keys(via)) {
+    for (const to of Object.keys(via[from])) if (!nodes[to]?.barrel) delete via[from][to];
+    if (!Object.keys(via[from]).length) delete via[from];
+  }
   return {
-    sha: tree.sha, entries, nodes, edges, order, read, v: MAP_CRAWL_VERSION,
+    sha: tree.sha, entries, nodes, edges, order, read, parts, via, v: MAP_CRAWL_VERSION,
     topup, truncated: queue.length > 0 || (read >= cap && !!extra?.length), treeTruncated: !!tree.truncated,
     untraced: mapUntraced(tree.entries),
   };
@@ -559,7 +633,7 @@ async function loadRepoMap(repo = currentRepo, { allowPrivate = false, isStale }
 
 const MAP_CORE_LIMIT = 10;
 const MAP_CORE_MIN_IMPORTERS = 3;
-const MAP_PATH_LIMIT = 8;
+const MAP_PATH_LIMIT = 6;
 const mapCircled = (n) => String.fromCharCode(0x2460 + n - 1);
 const mapBase = (p) => p.split("/").pop();
 
@@ -574,8 +648,49 @@ function globalScripts(graph) {
   return [...scripts];
 }
 
-// Most-imported files, counting through barrels, without tests or type declarations
+// The map as a reader should see it: imports followed through pass-through files (which drop out unless they
+// are a start point), importer counts redone, helpers marked. Idempotent; the stored graph is never changed.
+function mapView(graph) {
+  if (!graph || graph.viewed) return graph;
+  const nodes0 = graph.nodes || {};
+  const starts = new Set((graph.entries || []).map(e => e.path));
+  const out = new Map();
+  for (const [a, b] of graph.edges || []) (out.get(a) || out.set(a, []).get(a)).push(b);
+  const pass = (p) => !!nodes0[p]?.barrel;
+  // Through a pass-through file: to the files that define the names asked for, when known; else to all it passes along
+  const through = (p, seen, names) => {
+    if (seen.has(p)) return [];
+    seen.add(p);
+    if (!pass(p)) return [p];
+    const ex = nodes0[p].exports;
+    const tos = names?.length && ex ? [...new Set(names.map(n => ex[n]).filter(Boolean))] : [];
+    return tos.length ? tos.flatMap(q => through(q, seen, names)) : (out.get(p) || []).flatMap(q => through(q, seen, null));
+  };
+  const nodes = {};
+  for (const [p, n] of Object.entries(nodes0)) if (!pass(p) || starts.has(p)) nodes[p] = { ...n, inDegree: 0 };
+  const edges = [], seen = new Set(), importers = new Map();
+  for (const [a, tos] of out) {
+    if (pass(a) && !starts.has(a)) continue;
+    for (const b of tos) for (const t of through(b, new Set([a]), graph.via?.[a]?.[b])) {
+      const k = a + "\n" + t;
+      if (t === a || seen.has(k)) continue;
+      seen.add(k);
+      edges.push([a, t]);
+      (importers.get(t) || importers.set(t, new Set()).get(t)).add(a);
+    }
+  }
+  for (const [t, s] of importers) if (nodes[t]) nodes[t].inDegree = s.size;
+  // Helpers: plumbing by name, or a private (_x) file or folder that ties fewer than 3 other files together
+  const named = (p) => mapIsHelper(p) && !starts.has(p);
+  const privateLeaf = (p) => /(^|\/)_(?!_)[^/]*(\/|$)/.test(p) && !starts.has(p)
+    && edges.filter(([a, b]) => a === p && nodes[b] && !named(b) && !TEST_PATH.test(b)).length < 3;
+  for (const p of Object.keys(nodes)) if (named(p) || privateLeaf(p)) nodes[p].helper = true;
+  return { ...graph, nodes, edges, viewed: true };
+}
+
+// Most-imported files, counting through barrels, without tests, type declarations or helpers
 function rankCore(graph) {
+  graph = mapView(graph);
   const scripts = globalScripts(graph);
   if (scripts) {
     return scripts.map((path, i) => ({ path, i, size: graph.nodes[path]?.size || 0 }))
@@ -583,108 +698,154 @@ function rankCore(graph) {
       .map(({ path }) => ({ path, importers: 0, reason: "largest script" }));
   }
   const nodes = graph.nodes || {};
-  const into = new Map(), out = new Map();
-  for (const [from, to] of graph.edges || []) {
-    if (!into.has(to)) into.set(to, new Set());
-    into.get(to).add(from);
-    if (!out.has(from)) out.set(from, []);
-    out.get(from).push(to);
-  }
   const importers = new Map();
-  const credit = (file, from, seen) => {
-    if (seen.has(file)) return;
-    seen.add(file);
-    if (nodes[file]?.barrel) { for (const to of out.get(file) || []) credit(to, from, seen); return; }
-    if (!importers.has(file)) importers.set(file, new Set());
-    importers.get(file).add(from);
-  };
-  for (const [file, froms] of into) {
-    for (const from of froms) {
-      if (TEST_PATH.test(from) || nodes[from]?.barrel) continue;
-      credit(file, from, new Set());
-    }
+  for (const [from, to] of graph.edges || []) {
+    if (TEST_PATH.test(from)) continue;
+    (importers.get(to) || importers.set(to, new Set()).get(to)).add(from);
   }
   return [...importers]
-    .filter(([p, s]) => !nodes[p]?.barrel && !TEST_PATH.test(p) && !/\.d\.ts$/i.test(p) && s.size >= MAP_CORE_MIN_IMPORTERS)
+    .filter(([p, s]) => !nodes[p]?.barrel && !nodes[p]?.helper && !TEST_PATH.test(p) && !/\.d\.ts$/i.test(p) && s.size >= MAP_CORE_MIN_IMPORTERS)
     .map(([path, s]) => ({ path, importers: s.size }))
     .sort((a, b) => b.importers - a.importers || a.path.localeCompare(b.path))
     .slice(0, MAP_CORE_LIMIT);
 }
 
-// ≤ 8 files to read, in order: the entry, then whatever the files so far import (most imported first), then core files
+// ≤ 6 files to read, in order — how it runs. It starts at the start point the other parts depend on most;
+// each next file is loaded by a step so far, chosen by importance: used by
+// many real files plus twice the real files it ties together. Never a helper, a pass-through file or a test.
+// When the start loads no real file (Django's manage.py), the chain begins at the file that ties the most
+// together. Then a file comes before the files it uses.
 function readingPath(graph, core = []) {
-  const entry = graph.entries?.[0];
-  if (!entry) return [];
+  graph = mapView(graph);
   const nodes = graph.nodes || {};
   const scripts = globalScripts(graph);
   if (scripts) {
+    const entry = graph.entries[0];
     return [entry.path, ...scripts].slice(0, MAP_PATH_LIMIT).map((path, i) => ({
       step: i + 1, path,
       reason: i === 0 ? "entry point · " + entry.reason : `script ${i} of ${scripts.length} on ${entry.path}`,
     }));
   }
-  const path = [entry.path];
-  const why = [{ step: 1, path: entry.path, reason: "entry point · " + entry.reason }];
-  const have = new Set(path);
-  const imports = new Map();
-  for (const [from, to] of graph.edges || []) {
-    if (!imports.has(from)) imports.set(from, []);
-    imports.get(from).push(to);
+  const users = {};
+  for (const [a, b] of graph.edges || []) { const x = mapAreaOf(a), y = mapAreaOf(b); if (x !== y) (users[y] ||= new Set()).add(x); }
+  // Ties: not in a playground or example folder, then the start in the biggest part (vite's own package, not create-vite)
+  const size = (p) => graph.parts?.[mapAreaOf(p)] || 0;
+  const aside = (p) => MAP_TOPUP_SKIP.test(p) || TEST_PATH.test(p);
+  const entry = (graph.entries || []).map((e, i) => ({ e, i }))
+    .sort((a, b) => (users[mapAreaOf(b.e.path)]?.size || 0) - (users[mapAreaOf(a.e.path)]?.size || 0)
+      || aside(a.e.path) - aside(b.e.path) || size(b.e.path) - size(a.e.path) || a.i - b.i)[0]?.e;
+  if (!entry) return [];
+  const out = new Map();
+  for (const [a, b] of graph.edges || []) (out.get(a) || out.set(a, new Set()).get(a)).add(b);
+  const real = (p) => p in nodes && !nodes[p].helper && !nodes[p].barrel && !TEST_PATH.test(p) && nodes[p].read !== false;
+  const fan = (p) => [...(out.get(p) || [])].filter(real).length;
+  const score = (p) => (nodes[p].inDegree || 0) + 2 * fan(p);
+  const path = [entry.path], have = new Set(path);
+  const next = (from) => [...(out.get(from) || [])].filter(q => !have.has(q) && real(q)).sort((a, b) => score(b) - score(a) || a.localeCompare(b))[0];
+  if (!next(entry.path)) {
+    const pick = (ok) => Object.keys(nodes).filter(p => !have.has(p) && real(p) && ok(p)).sort((a, b) => fan(b) - fan(a) || score(b) - score(a) || a.localeCompare(b))[0];
+    const area = mapAreaOf(entry.path);
+    const best = (area !== "(root)" && pick(p => mapAreaOf(p) === area)) || pick(p => mapAreaOf(p) !== "(root)") || pick(() => true);
+    if (best) { path.push(best); have.add(best); }
   }
-  while (path.length < MAP_PATH_LIMIT) {
-    let best = null;
-    path.forEach((from, fi) => {
-      for (const to of imports.get(from) || []) {
-        if (have.has(to)) continue;
-        const n = nodes[to] || {};
-        const c = { to, fi, inDegree: n.inDegree || 0, depth: n.depth ?? Infinity };
-        if (!best || c.inDegree > best.inDegree || (c.inDegree === best.inDegree && (c.depth < best.depth || (c.depth === best.depth && c.fi < best.fi)))) best = c;
-      }
-    });
-    if (!best) break;
-    // earliest step whose file imports it
-    const by = path.findIndex(f => (imports.get(f) || []).includes(best.to));
-    let reason = `loaded by ${mapCircled(by + 1)} ${mapBase(path[by])}`;
-    if (best.inDegree > 1) reason += ` · imported by ${best.inDegree} files`;
-    path.push(best.to); have.add(best.to);
-    why.push({ step: path.length, path: best.to, reason });
+  while (path.length < MAP_PATH_LIMIT) { // the best file loaded by any step so far
+    const q = path.map(next).filter(Boolean).sort((a, b) => score(b) - score(a) || a.localeCompare(b))[0];
+    if (!q) break;
+    path.push(q); have.add(q);
   }
-  // The brief's rule gives both branches the same fill (up to 8), so it is applied unconditionally
-  for (const c of core) {
-    if (why.length >= MAP_PATH_LIMIT) break;
-    if (have.has(c.path)) continue;
-    have.add(c.path);
-    why.push({ step: why.length + 1, path: c.path, reason: `core file · imported by ${c.importers} files` });
+  for (const c of core) { // a short chain is filled with the files most others use
+    if (path.length >= MAP_PATH_LIMIT) break;
+    if (!have.has(c.path) && real(c.path)) { path.push(c.path); have.add(c.path); }
   }
-  return why;
+  // A file before the files it uses (otherwise in the order found)
+  const rest = path.slice(1), ordered = [];
+  while (rest.length) {
+    const i = rest.findIndex(p => !rest.some(q => q !== p && out.get(q)?.has(p)));
+    ordered.push(...rest.splice(i < 0 ? 0 : i, 1));
+  }
+  const steps = [entry.path, ...ordered];
+  return steps.map((p, i) => {
+    if (!i) return { step: 1, path: p, reason: "entry point · " + entry.reason };
+    const used = nodes[p].inDegree || 0;
+    const by = steps.findIndex((f, j) => j < i && out.get(f)?.has(p));
+    const reason = by >= 0 ? `loaded by ${mapCircled(by + 1)} ${mapBase(steps[by])}${used > 1 ? ` · used by ${used} files` : ""}`
+      : fan(p) ? `ties ${fan(p)} files together${used > 1 ? ` · used by ${used} files` : ""}` : `used by ${used} files`;
+    return { step: i + 1, path: p, reason };
+  });
+}
+
+// The overview the map tab opens on: how it runs (the reading path, with what each file defines), the main
+// parts (code files per part, a description from the part's package, the files it mainly is), what was left out.
+const MAP_PARTS_LIMIT = 6;
+const MAP_VAGUE_DESC = /^this (file|module)\b|^(the )?(main )?entry ?point\b|^(package|module) (init|initiali[sz]ation)\b|^init\b/i;
+const MAP_PKG_FILE = /(^|\/)(__init__\.py|index\.[mc]?[jt]sx?)$/;
+// A package's front file — an __init__.py, or an index file that only passes imports along — reads as its folder
+const mapIsPackageFront = (path, graph) => path.includes("/") && (/(^|\/)__init__\.py$/.test(path) || (!!graph?.nodes?.[path]?.barrel && MAP_PKG_FILE.test(path)));
+function mapShortName(path, graph) {
+  const s = path.split("/");
+  return mapIsPackageFront(path, graph) ? s[s.length - 2] + "/" : s[s.length - 1];
+}
+function mapOverview(graph) {
+  const view = mapView(graph);
+  const nodes = graph.nodes || {};
+  const steps = readingPath(view, rankCore(view)).map(s => ({
+    ...s, defs: nodes[s.path]?.defs || [], desc: nodes[s.path]?.desc || graph.roles?.[s.path] || null,
+    pkg: mapIsPackageFront(s.path, graph),
+  }));
+  let counts = graph.parts;
+  if (!counts || !Object.keys(counts).length) { // maps saved before parts were counted
+    counts = {};
+    for (const p of Object.keys(nodes)) { const a = mapAreaOf(p); if (a !== "(root)" && !TEST_PATH.test(p)) counts[a] = (counts[a] || 0) + 1; }
+  }
+  const depth = (p) => p.split("/").length;
+  const parts = Object.keys(counts).sort((a, b) => counts[b] - counts[a] || a.localeCompare(b)).slice(0, MAP_PARTS_LIMIT).map(name => {
+    const inPart = Object.keys(nodes).filter(p => mapAreaOf(p) === name);
+    // The part's own package description; none when it holds several packages side by side, or says nothing
+    const pkgs = inPart.filter(p => MAP_PKG_FILE.test(p) && nodes[p].desc).sort((a, b) => depth(a) - depth(b) || a.localeCompare(b));
+    const pkg = pkgs.length && !(pkgs[1] && depth(pkgs[1]) === depth(pkgs[0])) && !MAP_VAGUE_DESC.test(nodes[pkgs[0]].desc) ? pkgs[0] : null;
+    const main = [...new Set(inPart.filter(p => view.nodes[p] && !view.nodes[p].helper && !view.nodes[p].barrel && !TEST_PATH.test(p) && !MAP_PKG_FILE.test(p))
+      .sort((a, b) => view.nodes[b].inDegree - view.nodes[a].inDegree || a.localeCompare(b))
+      .map(p => mapBase(p).replace(/\.[^.]+$/, "")))].slice(0, 3);
+    return { name, files: counts[name], desc: pkg ? nodes[pkg].desc : null, main };
+  });
+  const starts = new Set((graph.entries || []).map(e => e.path));
+  const hidden = {
+    helpers: Object.keys(view.nodes).filter(p => view.nodes[p].helper).length,
+    pass: Object.keys(nodes).filter(p => nodes[p].barrel && !starts.has(p)).length,
+  };
+  return { steps, parts, hidden };
 }
 
 // ── The flow map: which files are boxes and where they go (drawn by map.js) ──
 const FLOW = {
   BOX_W: 230, GAP_X: 36, GAP_Y: 64, PAD: 40,
-  DEFAULT_BOXES: 25, MAX_BOXES: 60, NEAR_DEPTH: 3, PER_ROW: 6, MAX_INCOMING: 4, MAX_GROUPS: 8,
+  DEFAULT_BOXES: 12, MAX_BOXES: 60, NEAR_DEPTH: 3, PER_ROW: 6, MAX_INCOMING: 4, MAX_GROUPS: 8,
 };
 
 // ── Which files are boxes ────────────────────────────────────────────────────
-function flowFiles(graph, { expanded = new Set(), extra = new Set() } = {}) {
+function flowFiles(graph, { expanded = new Set(), extra = new Set(), helpers = false } = {}) {
+  graph = mapView(graph);
   const nodes = graph.nodes;
+  const starts = new Set(graph.entries.map(e => e.path));
+  // Helpers stay off the map until asked for (a file the brief asks for still shows)
+  const hidden = (p) => !helpers && nodes[p]?.helper && !starts.has(p);
   const core = rankCore(graph);
   const steps = readingPath(graph, core);
   const shown = new Set();
-  const add = (p) => { if (p in nodes && shown.size < FLOW.MAX_BOXES) shown.add(p); };
+  const add = (p, force = false) => { if (p in nodes && (force || !hidden(p)) && shown.size < FLOW.MAX_BOXES) shown.add(p); };
   graph.entries.forEach(e => add(e.path));
   steps.forEach(s => add(s.path));
   core.forEach(c => add(c.path));
   const near = Object.keys(nodes)
-    .filter(p => !shown.has(p) && (nodes[p].depth ?? 99) <= FLOW.NEAR_DEPTH && !TEST_PATH.test(p) && !nodes[p].barrel)
+    .filter(p => !shown.has(p) && !hidden(p) && (nodes[p].depth ?? 99) <= FLOW.NEAR_DEPTH && !TEST_PATH.test(p) && !nodes[p].barrel)
     .sort((a, b) => nodes[b].inDegree - nodes[a].inDegree || nodes[a].depth - nodes[b].depth || a.localeCompare(b));
   for (const p of near) { if (shown.size >= FLOW.DEFAULT_BOXES) break; add(p); }
-  for (const p of extra) for (const q of chainTo(graph, p)) add(q);
+  for (const p of extra) for (const q of chainTo(graph, p)) add(q, q === p);
 
   // Files that shown boxes load but that aren't shown: folded per folder
   const groups = new Map();
   for (const [from, to] of graph.edges) {
-    if (!shown.has(from) || shown.has(to) || TEST_PATH.test(to)) continue;
+    if (!shown.has(from) || shown.has(to) || TEST_PATH.test(to) || hidden(to)) continue;
     const dir = mapDirOf(to) || "(root)";
     if (expanded.has(dir)) { add(to); continue; }
     const g = groups.get(dir) || { dir, files: new Set(), from: new Set() };
@@ -694,11 +855,13 @@ function flowFiles(graph, { expanded = new Set(), extra = new Set() } = {}) {
   // Expanding can make more files shown, which may reveal edges into still-folded groups — recompute once
   for (const g of groups.values()) for (const f of [...g.files]) if (shown.has(f)) g.files.delete(f);
   const groupList = [...groups.values()].filter(g => g.files.size).sort((a, b) => b.files.size - a.files.size).slice(0, FLOW.MAX_GROUPS);
-  return { shown, steps, core, groups: groupList };
+  const helperCount = Object.keys(nodes).filter(p => nodes[p].helper && !starts.has(p)).length;
+  return { shown, steps, core, groups: groupList, helpers: helperCount };
 }
 
 // The shortest import chain from an entry to `path` (inclusive), or [] when it isn't reached
 function chainTo(graph, path) {
+  graph = mapView(graph);
   if (!(path in graph.nodes)) return [];
   const out = new Map();
   for (const [from, to] of graph.edges) (out.get(from) || out.set(from, []).get(from)).push(to);
@@ -717,6 +880,7 @@ function chainTo(graph, path) {
 
 // ── Layout: rows by import depth, barycentre ordering ───────────────────────
 function flowLayout(graph, files) {
+  graph = mapView(graph);
   const { shown, groups } = files;
   const items = [...shown].map(p => ({ id: p, kind: "file", depth: graph.nodes[p].depth ?? 0 }));
   groups.forEach(g => {
@@ -938,8 +1102,9 @@ let mapState = null; // { key, graph } of the card on screen
 function mapCardHtml(graph) {
   const core = rankCore(graph);
   const steps = readingPath(graph, core);
-  const name = (p) => `<code>${escapeHtml(p.split("/").pop())}</code>`;
-  const start = graph.entries[0]?.path;
+  // A package's front file reads as its folder (`prompts/`); the start is the reading path's
+  const name = (p) => `<code>${escapeHtml(mapShortName(p, graph))}</code>`;
+  const start = steps[0]?.path || graph.entries[0]?.path;
   const chain = steps.slice(0, 4).map(s => name(s.path)).join(" → ") + (steps.length > 4 ? " → …" : "");
   return `<div class="map-card-head"><h2 class="section-title">How it runs</h2></div>
     <p class="map-card-line">${start ? `Starts in <code>${escapeHtml(start)}</code>${steps.length > 1 ? ` · ${chain}` : ""}` : "Couldn't find where this app starts."}</p>
