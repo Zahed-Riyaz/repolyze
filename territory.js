@@ -306,8 +306,8 @@ function mapResolver({ known, files = {} }) {
 // ── The crawl ────────────────────────────────────────────────────────────────
 // Bump when the crawl changes what it finds: stored maps built by an older crawl are read again
 // (1 = descriptions; 2 = Python packages anywhere in the tree; 3 = main code folders when imports reach little;
-// 4 = Python pass-through files, what files define, code files per part)
-const MAP_CRAWL_VERSION = 4;
+// 4 = Python pass-through files, what files define, code files per part; 5 = up to 12 names per file)
+const MAP_CRAWL_VERSION = 5;
 const MAP_CAP_PUBLIC = 300;
 const MAP_CAP_PRIVATE = 60;
 const MAP_READS_IN_FLIGHT = 8;
@@ -561,9 +561,9 @@ async function buildImportGraph(repo = currentRepo, { cap = MAP_CAP_PUBLIC, isSt
     edges.push([from, to]);
     nodes[to].inDegree++;
   }
-  // What each file defines, most imported first, ≤ 4
+  // What each file defines, most imported first, ≤ 12 (the overview shows 3; How does X work? searches them all)
   for (const n of Object.values(nodes)) {
-    if (n.defs) n.defs = n.defs.map((d, i) => [d, nameUses.get(d) || 0, i]).sort((a, b) => b[1] - a[1] || a[2] - b[2]).slice(0, 4).map(x => x[0]);
+    if (n.defs) n.defs = n.defs.map((d, i) => [d, nameUses.get(d) || 0, i]).sort((a, b) => b[1] - a[1] || a[2] - b[2]).slice(0, 12).map(x => x[0]);
   }
   // Code files per part, from the whole tree (tests, scripts, docs, static and vendored files don't count)
   const parts = {};
@@ -1155,10 +1155,35 @@ async function openMapTab(repo, file = "") {
 }
 
 // Requests from the map tab: AI work stays in Ask, here in the panel
+// Messages from the map tab. "map-feature-ai" answers (a promise): the AI keys live here, not in the tab.
 function handleMapTabMessage(msg) {
   if (!msg || !currentRepo || msg.repo !== repoKey()) return;
   if (msg.type === "map-ask-file") askAboutFile(msg.file);
   if (msg.type === "map-explain") explainMap();
+  if (msg.type === "map-feature-ai") return featurePickWithAI(msg.question, msg.found || [], msg.index || []);
+  if (msg.type === "map-feature-explain") askAboutFeature(msg.question, msg.steps || []);
+}
+
+// "How does X work?" past the threshold: the AI picks from the numbered index only (signatures, never files)
+async function featurePickWithAI(question, found, index) {
+  if (!aiConfigured()) return { error: "no-ai" };
+  if (!index.length) return { picks: [] };
+  const reply = await callAIStreaming([{ role: "user", parts: [{ text: featurePickPrompt(question, found, index) }] }],
+    () => {}, { system: FEATURE_PICK_SYSTEM, temperature: 0 });
+  return { picks: parseFeaturePicks(reply, index.length) };
+}
+
+// Explain the code: one visible question in Ask; @path reads each step's file directly
+function askAboutFeature(question, steps) {
+  if (!steps.length) return;
+  setChatFocus(null);
+  switchTab("chat");
+  const input = document.getElementById("chat-input");
+  const list = steps.slice(0, 6).map((s, i) => `${String.fromCharCode(0x2460 + i)} @${s.path} ${s.name}()${s.line ? ` (line ${s.line})` : ""}`).join("\n");
+  input.value = `${question.trim()}\nWalk me through it step by step, in this order, quoting the lines that matter:\n${list}`;
+  autosizeChatInput();
+  if (!document.getElementById("send-btn").disabled) return void handleChat();
+  input.focus();
 }
 
 function handleMapClick(e) {
@@ -1171,5 +1196,10 @@ function handleMapClick(e) {
 
 function initRepoMap() {
   document.getElementById("repo-map").addEventListener("click", handleMapClick);
-  chrome.runtime?.onMessage?.addListener((msg) => { handleMapTabMessage(msg); });
+  chrome.runtime?.onMessage?.addListener((msg, _sender, sendResponse) => {
+    const r = handleMapTabMessage(msg);
+    if (!(r instanceof Promise)) return;
+    r.then(sendResponse, (err) => sendResponse({ error: err.message || "AI request failed" }));
+    return true; // the reply comes later
+  });
 }

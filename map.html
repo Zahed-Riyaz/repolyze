@@ -26,6 +26,13 @@
       <button type="button" class="fm-btn fm-primary" id="fm-explain">Explain this map</button>
     </div>
   </header>
+  <form class="fm-ask" id="fm-ask" autocomplete="off" role="search" hidden>
+    <label for="fm-q">How does</label>
+    <input id="fm-q" type="text" placeholder="a submission get scored" aria-label="How does … work?" maxlength="200">
+    <span>work?</span>
+    <button type="submit" class="fm-btn fm-primary" id="fm-q-go">Trace it</button>
+  </form>
+  <section class="fm-trace" id="fm-trace" hidden aria-live="polite"></section>
   <nav class="fm-legend" id="fm-legend" aria-label="Folders"></nav>
   <div class="fm-note" id="fm-note" hidden></div>
   <section class="fm-overview" id="fm-overview" hidden></section>
@@ -45,6 +52,7 @@
   <script src="ask-focus.js"></script>
   <script src="stack.js"></script>
   <script src="territory.js"></script>
+  <script src="feature.js"></script>
   <script src="map.js"></script>
 </body>
 </html>

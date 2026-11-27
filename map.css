@@ -100,6 +100,39 @@ body { display: flex; flex-direction: column; background: var(--bg-subtle); }
 .fm-hint em { color: var(--warning); font-style: normal; }
 .fm-hint[hidden] { display: none; }
 
+/* ── How does X work? ── */
+.fm-ask { display: flex; align-items: center; gap: 8px; padding: 10px 18px; background: var(--bg); border-bottom: 1px solid var(--border); position: relative; z-index: 2; color: var(--fg-muted); }
+.fm-ask label, .fm-ask span { flex: none; font-weight: 600; color: var(--fg); }
+.fm-ask input { flex: 1; min-width: 120px; max-width: 520px; font: inherit; padding: 6px 10px; border-radius: var(--r-md, 6px); border: 1px solid var(--border-strong); background: var(--bg-subtle); color: var(--fg); }
+.fm-ask input:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
+.fm-trace { padding: 12px 18px 14px; background: color-mix(in srgb, var(--accent) 4%, var(--bg)); border-bottom: 1px solid var(--border); position: relative; z-index: 2; max-height: 45vh; overflow: auto; }
+.fm-trace-head { display: flex; align-items: center; gap: 10px; }
+.fm-trace-head strong { min-width: 0; overflow-wrap: anywhere; }
+.fm-trace-close { margin-left: auto; flex: none; border: 0; background: none; color: var(--fg-muted); cursor: pointer; font-size: 13px; padding: 2px 6px; border-radius: 6px; }
+.fm-trace-close:hover { background: var(--bg-hover); color: var(--fg); }
+.fm-trace-label { margin: 4px 0 8px; font-size: 12px; color: var(--fg-muted); cursor: help; }
+.fm-trace-label.confident { color: var(--success); }
+.fm-trace-label.partial { color: var(--warning); }
+.fm-trace-label.ai { color: var(--accent); }
+.fm-trace-label b { font-weight: 600; }
+.fm-trace-note { margin: 6px 0; font-size: 12px; color: var(--fg-muted); }
+.fm-trace-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.fm-trace-steps li { display: grid; grid-template-columns: minmax(0, auto) auto 1fr; align-items: baseline; gap: 4px 12px; min-width: 0; }
+.fm-trace-step { display: flex; align-items: baseline; gap: 8px; min-width: 0; font: inherit; color: inherit; background: none; border: 0; padding: 2px 4px; border-radius: 6px; cursor: pointer; text-align: left; }
+.fm-trace-step:hover, .fm-trace-step:focus-visible { background: var(--bg-hover); outline: none; }
+.fm-trace-n { color: var(--accent); font-weight: 700; }
+.fm-trace-fn { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.fm-trace-fn code { font: 600 13px var(--mono, ui-monospace, Menlo, monospace); color: var(--fg); overflow-wrap: anywhere; }
+.fm-trace-file { font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
+.fm-trace-line { font: 12px var(--mono, ui-monospace, Menlo, monospace); color: var(--accent); text-decoration: none; white-space: nowrap; }
+.fm-trace-line:hover { text-decoration: underline; }
+.fm-trace-doc { font-size: 12px; color: var(--fg-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-trace-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.fm-trace-actions:empty { display: none; }
+.fm-box[data-trace] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 8px 24px -8px color-mix(in srgb, var(--accent) 45%, transparent); }
+.fm-box[data-trace]::after { content: attr(data-trace); position: absolute; top: -1px; left: -1px; padding: 0 7px; border-radius: 12px 0 10px 0; background: var(--accent); color: var(--accent-fg); font-weight: 700; font-size: 12px; line-height: 20px; }
+.fm-box[data-trace] .fm-top { padding-left: 22px; }
+
 /* ── Overview ⇄ file map switch ── */
 .fm-switch { display: flex; padding: 2px; border-radius: var(--r-full, 999px); background: var(--bg-subtle); border: 1px solid var(--border); }
 .fm-switch button { font: inherit; font-size: 12px; padding: 4px 12px; border: 0; border-radius: var(--r-full, 999px); background: transparent; color: var(--fg-muted); cursor: pointer; }

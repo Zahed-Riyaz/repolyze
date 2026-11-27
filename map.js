@@ -227,6 +227,101 @@ function setView(view) {
   }
 }
 
+// ── How does X work? ─────────────────────────────────────────────────────────
+// Step 1 here, without AI (feature.js); past the threshold the side panel asks the AI to pick from the index.
+const FM_CIRCLED = (i) => String.fromCharCode(0x2460 + i);
+function fmBlobUrl(path, line) {
+  return `https://github.com/${encodeURIComponent(currentRepo.owner)}/${encodeURIComponent(currentRepo.repo)}/blob/${encodeURIComponent(fm.branch)}/${path.split("/").map(encodeURIComponent).join("/")}${line ? `#L${line}` : ""}`;
+}
+// Stems back to the asker's own words: "scor" → "scored"
+function fmWordsFor(terms, question) {
+  const words = question.split(/[^A-Za-z0-9_]+/).filter(Boolean);
+  return terms.map(t => words.find(w => queryTerms(w).includes(t)) || t);
+}
+
+async function traceQuestion(text) {
+  const question = `How does ${text.trim().replace(/\?+$/, "")} work?`;
+  fm.trace = { question, loading: "Reading the likely files…" };
+  renderTrace();
+  try {
+    const t = await traceFeature(question, currentRepo, fm.graph, { isPrivate: !!fm.graph.private });
+    if (fm.trace?.question !== question) return; // a newer question
+    fm.trace = { question, ...t, found: t.verdict.kind === "none" ? null : "name" };
+    renderTrace();
+    if (t.verdict.kind === "none" && t.terms.length) await traceWithAI(); // nothing to show without the AI
+  } catch (err) {
+    fm.trace = { question, error: err.message || "Couldn't read the files" };
+    renderTrace();
+  }
+}
+
+async function traceWithAI() {
+  const t = fm.trace;
+  if (!t?.index?.length) return;
+  t.loading = `Asking your AI to pick from ${t.index.length} functions…`;
+  renderTrace();
+  let r;
+  try {
+    r = await chrome.runtime.sendMessage({ type: "map-feature-ai", repo: repoKey(), question: t.question, found: t.steps || [], index: t.index });
+  } catch { r = { error: "no-panel" }; }
+  if (fm.trace !== t) return;
+  t.loading = null;
+  if (!r || r.error) t.aiError = r?.error || "no-panel";
+  else {
+    const steps = featureStepsFromPicks(r.picks, t.index);
+    if (steps.length) { t.steps = steps; t.found = t.found === "name" ? "name+ai" : "ai"; }
+    else t.aiError = "nothing";
+  }
+  renderTrace();
+  if (fm.traceOn) { fm.dirty = true; showTraceOnMap(); }
+}
+
+function renderTrace() {
+  const box = $("fm-trace");
+  const t = fm.trace;
+  box.hidden = !t;
+  if (!t) return;
+  const head = `<div class="fm-trace-head"><strong>${escapeHtml(t.question)}</strong><button type="button" class="fm-trace-close" aria-label="Close">✕</button></div>`;
+  if (t.error) { box.innerHTML = head + `<p class="fm-trace-note">${escapeHtml(t.error)}</p>`; return; }
+  if (!t.verdict) { box.innerHTML = head + `<p class="fm-trace-note">${escapeHtml(t.loading)}</p>`; return; }
+  const v = t.verdict;
+  const words = (ts) => fmWordsFor(ts, t.question).map(w => `<b>${escapeHtml(w)}</b>`).join(", ");
+  const why = `${v.nameMatches} functions with a question word in their name · ${Math.round(v.coverage * 100)}% of the question's words matched · ${v.linked} linked by calls`;
+  let label = "";
+  if (t.found === "name") label = v.kind === "confident" ? `Found by name — no AI` : `Partial — only ${words(v.matched)} matched${v.missing.length ? `, not ${words(v.missing)}` : ""}`;
+  if (t.found === "name+ai") label = "Found by name, completed by your AI";
+  if (t.found === "ai") label = "Picked by your AI — no function mentions those words";
+  const aiNote = t.aiError === "no-ai" ? "Set up an AI provider in the Repolyze side panel's Settings to search past the names."
+    : t.aiError === "no-panel" ? "Open the Repolyze side panel (toolbar icon) — it holds your AI key — then try again."
+    : t.aiError === "nothing" ? "Your AI found nothing on the list that fits." : t.aiError ? escapeHtml(t.aiError) : "";
+  const steps = (t.steps || []).map((s, i) => `<li>
+      <button type="button" class="fm-trace-step" data-path="${escapeHtml(s.path)}"><span class="fm-trace-n">${FM_CIRCLED(i)}</span>
+        <span class="fm-trace-fn"><code>${escapeHtml(s.name)}()</code><span class="fm-trace-file">${escapeHtml(mapBase(s.path))}</span></span></button>
+      <a class="fm-trace-line" href="${escapeHtml(fmBlobUrl(s.path, s.line))}" target="_blank" rel="noopener" title="${escapeHtml(s.path)}">L${s.line || "?"} ↗</a>
+      ${s.why || s.doc ? `<span class="fm-trace-doc">${escapeHtml(s.why || s.doc)}</span>` : ""}</li>`).join("");
+  const none = !steps && !t.loading ? `<p class="fm-trace-note">No function mentions ${words(t.terms)}. Try a word from the code${t.aiError ? "" : ", or ask your AI"}.</p>` : "";
+  const canFill = t.found === "name" && v.kind === "partial" && !t.loading;
+  box.innerHTML = head
+    + (label ? `<p class="fm-trace-label ${t.found === "name" ? v.kind : "ai"}" title="${escapeHtml(why)}">${label}</p>` : "")
+    + (steps ? `<ol class="fm-trace-steps">${steps}</ol>` : none)
+    + (t.loading ? `<p class="fm-trace-note">${escapeHtml(t.loading)}</p>` : "")
+    + (aiNote ? `<p class="fm-trace-note">${aiNote}</p>` : "")
+    + `<div class="fm-trace-actions">
+        ${canFill ? `<button type="button" class="fm-btn fm-primary" data-trace="fill">Fill the gaps with AI</button>` : ""}
+        ${steps ? `<button type="button" class="fm-btn" data-trace="map">Show on the file map</button><button type="button" class="fm-btn" data-trace="explain">Explain the code</button>` : ""}
+      </div>`;
+}
+
+// The steps' files on the file map, numbered; everything else fades
+function showTraceOnMap() {
+  const steps = fm.trace?.steps || [];
+  if (!steps.length) return;
+  fm.traceOn = true;
+  steps.forEach(s => fm.extra.add(s.path));
+  fm.sel = null; fm.hover = null; fm.folder = null; fm.dirty = true;
+  setView("files");
+}
+
 // ── Selection: a box, what loads it and what it loads ───────────────────────
 // fm.sel is the picked file (click); fm.hover the one pointed at while nothing is picked; fm.folder a picked folder
 function applySelection() {
@@ -241,12 +336,15 @@ function applySelection() {
     p.setAttribute("class", "fm-e" + (out ? " out" : inn ? " in" : within ? " faint" : ""));
     if (out || inn) p.setAttribute("marker-end", `url(#fm-m-${out ? "out" : "in"})`); else p.removeAttribute("marker-end");
   }
+  const trace = fm.traceOn ? (fm.trace?.steps || []).map(s => s.path) : [];
   for (const b of $("fm-boxes").querySelectorAll(".fm-box")) {
     const id = b.dataset.path || `group:${b.dataset.group}`;
+    const n = trace.indexOf(id);
+    if (n >= 0) b.dataset.trace = FM_CIRCLED(n); else delete b.dataset.trace;
     b.classList.toggle("sel", id === focus);
     b.classList.toggle("out", outs.has(id));
     b.classList.toggle("in", ins.has(id) && !outs.has(id));
-    b.classList.toggle("dim", focus ? id !== focus && !outs.has(id) && !ins.has(id) : !!fm.folder && b.dataset.area !== fm.folder);
+    b.classList.toggle("dim", focus ? id !== focus && !outs.has(id) && !ins.has(id) : fm.folder ? b.dataset.area !== fm.folder : trace.length ? n < 0 : false);
   }
   for (const c of $("fm-legend").children) { const on = c.dataset.area === fm.folder; c.classList.toggle("on", on); c.setAttribute("aria-pressed", on); }
 }
@@ -325,8 +423,21 @@ function wire() {
   $("fm-boxes").addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.target.click(); }
   });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { fm.folder = null; fm.hover = null; select(null); } });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || e.target.closest?.("#fm-ask")) return;
+    fm.folder = null; fm.hover = null; fm.traceOn = false; select(null);
+  });
   $("fm-explain").onclick = () => askPanel({ type: "map-explain" });
+  $("fm-ask").addEventListener("submit", (e) => { e.preventDefault(); const q = $("fm-q").value.trim(); if (q) traceQuestion(q); });
+  $("fm-trace").addEventListener("click", (e) => {
+    if (e.target.closest(".fm-trace-close")) { fm.trace = null; fm.traceOn = false; renderTrace(); return applySelection(); }
+    const act = e.target.closest("[data-trace]")?.dataset.trace;
+    if (act === "fill") return traceWithAI();
+    if (act === "map") return showTraceOnMap();
+    if (act === "explain") return askPanel({ type: "map-feature-explain", question: fm.trace.question, steps: fm.trace.steps.map(s => ({ path: s.path, name: s.name, line: s.line })) });
+    const step = e.target.closest(".fm-trace-step");
+    if (step) { showTraceOnMap(); select(step.dataset.path, { center: true }); }
+  });
   $("fm-v-overview").onclick = () => setView("overview");
   $("fm-v-files").onclick = () => setView("files");
   $("fm-helpers").onclick = () => { fm.helpers = !fm.helpers; fm.dirty = true; draw(); };
@@ -401,6 +512,7 @@ async function start(allowPrivate = false) {
     const file = params.get("file");
     if (file) fm.extra.add(file);
     renderOverview();
+    $("fm-ask").hidden = false;
     setView(file ? "files" : "overview"); // a file asked for opens the file map on it
     if (file) select(file, { center: true });
   } catch (err) {

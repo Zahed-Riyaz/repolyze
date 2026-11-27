@@ -572,13 +572,13 @@ test("the crawl stores each file's description on its node", async () => {
   const g = await mapFor({ "package.json": '{"main":"src/index.ts"}', "src/index.ts": '// Starts the app\nimport "./a"', "src/a.ts": "export const a = 1" });
   assert.equal(g.nodes["src/index.ts"].desc, "Starts the app");
   assert.equal(g.nodes["src/a.ts"].desc, undefined);
-  assert.equal(g.v, 4);
+  assert.equal(g.v, 5);
 });
 test("a stored map built by an older crawl is read again", async () => {
   const stored = { map_o_r: { sha: "t1", entries: [], nodes: {}, edges: [], order: {}, read: 0, descs: true } };
   const { panel, gh } = mapPanel(SMALL_REPO, { stored });
   const g = plain(await panel.fn.loadRepoMap(panel.run("currentRepo")));
-  assert.ok(g.v === 4 && g.nodes["src/index.ts"]);
+  assert.ok(g.v === 5 && g.nodes["src/index.ts"]);
   assert.ok(gh.rawCalls.some(u => u.endsWith("/src/index.ts")));
 });
 
@@ -706,7 +706,7 @@ test("the crawl records pass-through __init__ files, what each file defines (mos
   assert.equal(g.nodes["pkg/__init__.py"]?.barrel ?? true, true);
   assert.deepEqual(g.nodes["pkg/sessions.py"].defs, ["Session", "request", "Helper"]);
   assert.deepEqual(g.parts, { pkg: 4 });
-  assert.equal(g.v, 4);
+  assert.equal(g.v, 5);
 });
 
 // A requests-like library: helpers everywhere, the work in sessions → adapters → models
