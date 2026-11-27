@@ -364,6 +364,7 @@ async function showIssueBrief(issueOrNumber, { auto = false, refresh = false } =
     }
     if (!live()) return;
     renderBrief(repo, brief.issue, brief);
+    await drawBriefMap(repo, brief, live);
     return brief;
   } catch (err) {
     if (!live()) return;
@@ -430,7 +431,7 @@ function repeatedNames(files) {
 
 // Files with a real signal, then name-matching guesses folded away (open only
 // when they're all there is); the stack the files need as a header note
-function whereToStartHtml(repo, fileSources, stack) {
+function whereToStartHtml(repo, fileSources, stack, extra = "") {
   const { start, guesses } = groupIssueFiles(fileSources || []);
   if (!start.length && !guesses.length) return "";
   const same = repeatedNames([...start, ...guesses]);
@@ -439,6 +440,7 @@ function whereToStartHtml(repo, fileSources, stack) {
   return `<section class="brief-section">
       <div class="section-head"><h2 class="section-title">Where to start</h2>${stackLineHtml(stack)}</div>
       ${start.length ? rows(start) : `<p class="brief-note">Nothing in the issue or its PRs points at a file yet.</p>`}
+      ${extra}${start.length ? `<div id="brief-map" class="brief-map"></div>` : ""}
       ${guesses.length ? `<details class="file-guesses"${start.length ? "" : " open"}>
         <summary>${guesses.length} ${plural} by file name</summary>
         ${rows(guesses)}
@@ -611,6 +613,8 @@ function handleBriefClick(e) {
     return;
   }
   if (handleAskChip(e)) return;
+  const onMap = target.closest?.(".brief-map-open");
+  if (onMap) return openMapTab(currentRepo, onMap.dataset.file);
   const openPr = target.closest?.(".brief-open-pr");
   if (openPr) {
     showPrBrief(Number(openPr.dataset.pr));

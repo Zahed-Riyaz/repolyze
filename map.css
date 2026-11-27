@@ -1,0 +1,57 @@
+/* Flow map tab (map.html) — prototype */
+html, body { margin: 0; height: 100%; background: var(--bg-subtle); color: var(--fg); font: 13px/1.45 var(--font, -apple-system, system-ui, sans-serif); }
+body { display: flex; flex-direction: column; }
+
+.fm-head { display: flex; align-items: center; gap: 16px; padding: 10px 16px; background: var(--bg); border-bottom: 1px solid var(--hairline); flex-wrap: wrap; }
+.fm-title { display: flex; flex-direction: column; }
+.fm-repo { font-weight: 600; font-size: 14px; }
+.fm-sub { color: var(--fg-muted); font-size: 12px; }
+.fm-summary { flex: 1; color: var(--fg-muted); min-width: 200px; }
+.fm-summary code { font-family: var(--mono, ui-monospace, Menlo, monospace); color: var(--fg); }
+.fm-tools { display: flex; gap: 6px; }
+.fm-btn { font: inherit; padding: 4px 10px; border-radius: var(--r-md, 6px); border: 1px solid var(--border); background: var(--bg); color: var(--fg); cursor: pointer; }
+.fm-btn:hover { background: var(--bg-hover); }
+.fm-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.fm-primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.fm-primary:hover { background: var(--accent-hover); }
+
+.fm-note { padding: 6px 16px; background: var(--bg); border-bottom: 1px solid var(--hairline); color: var(--fg-muted); font-size: 12px; }
+
+.fm-stage { position: relative; flex: 1; overflow: hidden; cursor: grab; outline: none; }
+.fm-stage.dragging { cursor: grabbing; }
+.fm-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.fm-edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.fm-edges path { fill: none; stroke: var(--border-strong); stroke-width: 1.5; }
+.fm-edges path.dashed { stroke-dasharray: 4 4; }
+.fm-edges path.hl { stroke: var(--accent); stroke-width: 2; }
+.fm-edges path.dim { opacity: .15; }
+.fm-edges marker path { fill: var(--border-strong); stroke: none; }
+.fm-status { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--fg-muted); pointer-events: none; }
+.fm-status[hidden] { display: none; }
+.fm-status button { pointer-events: auto; }
+
+.fm-box { position: absolute; box-sizing: border-box; width: 230px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-lg, 8px); box-shadow: var(--shadow-sm); cursor: pointer; transition: opacity .15s; }
+.fm-box:hover { border-color: var(--border-strong); }
+.fm-box:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fm-box.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-subtle); }
+.fm-box.near { border-color: var(--accent); }
+.fm-box.dim { opacity: .3; }
+.fm-box.entry { border-width: 2px; border-color: var(--success); }
+.fm-path { font-family: var(--mono, ui-monospace, Menlo, monospace); font-size: 12px; font-weight: 600; word-break: break-all; }
+.fm-path .fm-dir { color: var(--fg-muted); font-weight: 400; }
+.fm-tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 2px; }
+.fm-tag { font-size: 11px; padding: 0 7px; border-radius: var(--r-full, 999px); line-height: 18px; }
+.fm-tag.start { background: var(--success-subtle); color: var(--success); }
+.fm-tag.core { background: var(--warning-subtle); color: var(--warning); }
+.fm-desc { color: var(--fg-muted); font-size: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.fm-desc.none { color: var(--fg-subtle); font-style: italic; }
+.fm-ai { font-size: 10px; font-weight: 600; color: var(--accent); margin-right: 4px; }
+.fm-actions { display: none; gap: 10px; margin-top: 6px; font-size: 12px; }
+.fm-box:hover .fm-actions, .fm-box.sel .fm-actions, .fm-box:focus-within .fm-actions { display: flex; }
+.fm-actions a, .fm-actions button { color: var(--accent); background: none; border: 0; padding: 0; font: inherit; cursor: pointer; text-decoration: none; }
+.fm-actions a:hover, .fm-actions button:hover { text-decoration: underline; }
+
+.fm-group { border-style: dashed; background: var(--bg-subtle); color: var(--fg-muted); text-align: center; padding: 10px; }
+.fm-group b { color: var(--fg); font-family: var(--mono, ui-monospace, Menlo, monospace); font-weight: 500; }
+
+@media (prefers-reduced-motion: reduce) { .fm-box { transition: none; } }

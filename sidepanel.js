@@ -84,6 +84,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   document.getElementById("issue-sort").addEventListener("change", (e) => { issueView.sort = e.target.value; fetchIssues(); });
   document.getElementById("issue-unclaimed").addEventListener("change", (e) => setUnclaimed(e.target.checked));
+  initRepoMap();
   document.getElementById("issues-more").addEventListener("click", () => showMoreIssues());
   document.getElementById("issue-find").addEventListener("submit", (e) => {
     e.preventDefault();
@@ -315,6 +316,12 @@ function stateItem(html, { error = false, iconName = error ? "alert" : "inbox", 
 function handleRepoRefresh(url) {
   let urlObj;
   try { urlObj = new URL(url); } catch { return; }
+
+  // The flow map tab (map.html?repo=o/r) counts as being on that repo, so Ask works from it
+  if (url.startsWith(chrome.runtime?.getURL?.("map.html") || "\0")) {
+    const repo = urlObj.searchParams.get("repo");
+    if (repo && /^[\w.-]+\/[\w.-]+$/.test(repo)) return handleRepoRefresh(`https://github.com/${repo}`);
+  }
 
   if (urlObj.hostname !== "github.com" && urlObj.hostname !== "www.github.com") {
     showNotRepoMessage();
@@ -1250,7 +1257,12 @@ async function fetchRepoTab() {
   const health = repoCache[cacheKey]?.health
     ? (renderHealthCard(repoCache[cacheKey].health), true)
     : fetchRepoHealth();
-  return (await Promise.all([health, fetchTechStack(), fetchMaintainers()])).every(Boolean);
+  // The map has its own error state: a failure there never marks the Repo tab failed
+  const [ok] = await Promise.all([
+    Promise.all([health, fetchTechStack(), fetchMaintainers()]).then(r => r.every(Boolean)),
+    fetchRepoMap(),
+  ]);
+  return ok;
 }
 
 async function fetchRepoHealth() {
@@ -1360,7 +1372,7 @@ async function handleChat({ files = null } = {}) {
   const isStale = () => currentRepo !== repo;
   // Focused on an issue/PR from its brief? Answers are grounded in it (ask-focus.js)
   const item = focusedItem();
-  const tag = item ? { kind: item.kind, number: item.number } : null;
+  const tag = !item ? null : item.kind === "map" ? { kind: "map" } : { kind: item.kind, number: item.number };
 
   document.getElementById("chat-starters")?.remove();
   const userTime = Date.now();
@@ -1416,10 +1428,12 @@ async function handleChat({ files = null } = {}) {
     saveChatHistory(repo, messages);
     if (isStale()) return;
     botBubble.classList.remove("streaming");
-    botBubble.innerHTML = linkifyCitations(renderMarkdown(fullReply), meta.cite || repo, meta.ref, meta.sources);
+    botBubble.innerHTML = linkifyCitations(renderMarkdown(stripRolesBlock(fullReply)), meta.cite || repo, meta.ref, meta.sources);
     if (!streamStarted) chatHistEl.appendChild(botWrap); // empty reply: no chunk ever arrived
     appendBotFooter(botWrap, botTime, query, { ...m, text: fullReply });
     if (isNearBottom(chatHistEl)) chatHistEl.scrollTop = chatHistEl.scrollHeight;
+    // An answer about the map labels its areas: they go on the map (nothing changes if it gave none)
+    if (item?.kind === "map") saveMapRoles(item.key, parseAreaRoles(fullReply)).catch(() => {});
   };
 
   try {
@@ -1461,7 +1475,7 @@ async function handleChat({ files = null } = {}) {
         botBubble.classList.add("msg-entering", "streaming");
         chatHistEl.appendChild(botWrap);
       }
-      botBubble.innerHTML = renderMarkdown(partial) + '<span class="streaming-cursor"></span>';
+      botBubble.innerHTML = renderMarkdown(stripRolesBlock(partial)) + '<span class="streaming-cursor"></span>';
       if (isNearBottom(chatHistEl)) chatHistEl.scrollTop = chatHistEl.scrollHeight;
       else document.getElementById("chat-jump").hidden = false;
     }, { system, signal: controller.signal });
@@ -1561,8 +1575,8 @@ function appendChatMessage(role, text, save = true, animate = true, time = null,
   msg.className = `chat-msg chat-msg-${role}${meta.error ? " chat-msg-error" : ""}${animate ? " msg-entering" : ""}`;
   if (role === "bot") {
     msg.innerHTML = currentRepo && meta.sources?.length
-      ? linkifyCitations(renderMarkdown(text), meta.cite || currentRepo, meta.ref, meta.sources)
-      : renderMarkdown(text);
+      ? linkifyCitations(renderMarkdown(stripRolesBlock(text)), meta.cite || currentRepo, meta.ref, meta.sources)
+      : renderMarkdown(stripRolesBlock(text));
   } else {
     msg.textContent = text;
   }
@@ -1588,7 +1602,7 @@ const BOT_LABEL_HTML = `${icon("compass", "icon-sm")}Assistant`;
 const VIA_LABEL = {
   named: "named in the question or issue", issue: "from the issue's brief", picked: "chosen for the question", chosen: "chosen by you",
   import: "imported by a file that was read", search: "found by code search", name: "found by name",
-  changed: "changed by the PR (at its head)",
+  changed: "changed by the PR (at its head)", map: "on the map's reading path",
 };
 const FOLLOWED = new Set(["import", "search", "name"]);
 
@@ -1864,7 +1878,8 @@ function appendBotFooter(wrap, time, query, meta = {}) {
     const copyBtn = document.createElement("button");
     copyBtn.className = "regen-btn";
     copyBtn.innerHTML = `${icon("copy", "icon-sm")}Copy`;
-    copyBtn.addEventListener("click", () => navigator.clipboard.writeText(meta.text).then(() => {
+    // What's copied is what's shown: a map answer's roles block is hidden, so it isn't copied either
+    copyBtn.addEventListener("click", () => navigator.clipboard.writeText(stripRolesBlock(meta.text).trim()).then(() => {
       copyBtn.innerHTML = `${icon("check", "icon-sm")}Copied`;
       setTimeout(() => { copyBtn.innerHTML = `${icon("copy", "icon-sm")}Copy`; }, 1500);
     }));

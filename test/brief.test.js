@@ -337,3 +337,75 @@ test("a saved brief older than 10 minutes is rebuilt", async () => {
   assert.ok(panel.run("cacheFor(repoKey()).briefs[7].loadedAt") > Date.now() - 5000, "rebuilt");
   assert.ok(gh.apiCalls.length >= calls, "served by the GitHub layer: re-checked only if its copy is stale too");
 });
+
+// ── Where the issue's files sit on the map ───────────────────────────────────
+const MAP_RAW = { "package.json": '{"main":"src/index.ts"}', "src/index.ts": 'import "./app"', "src/app.ts": 'import "./db"\nimport "./router"',
+  "src/router.ts": 'import "./db"', "src/db.ts": "export const db = 1", "lib/x.ts": "export const x = 1" };
+function mapBriefPanel() {
+  const gh = githubMock({
+    "": { default_branch: "main" },
+    "/git/trees/HEAD?recursive=1": { sha: "t1", tree: Object.keys(MAP_RAW).map(p => ({ path: p, type: "blob", size: MAP_RAW[p].length })) },
+    "/issues/7/comments?per_page=100": [],
+    "/issues/7/timeline?per_page=100": [],
+  }, { raw: MAP_RAW });
+  const panel = loadPanel({ fetch: gh.fetch });
+  panel.setRepo();
+  return { gh, panel };
+}
+const routerIssue = { ...baseIssue, body: "The bug is in `src/router.ts` when routing." };
+const mapLine = (panel) => panel.el("brief-map").innerHTML;
+
+test("the brief shows the import chain to the issue's file and a way onto the map", async () => {
+  const { panel } = mapBriefPanel();
+  await panel.fn.loadRepoMap(panel.run("currentRepo"), {});
+  await panel.fn.showIssueBrief(routerIssue);
+  assert.match(mapLine(panel), /index\.ts → app\.ts → <strong>router\.ts<\/strong>/);
+  assert.match(mapLine(panel), /brief-map-open[^>]*data-file="src\/router\.ts"[^>]*>Open on the map/);
+});
+
+test("a file the crawl never reached says so", async () => {
+  const { panel } = mapBriefPanel();
+  await panel.fn.loadRepoMap(panel.run("currentRepo"), {});
+  await panel.fn.showIssueBrief({ ...baseIssue, body: "See `lib/x.ts`." });
+  assert.match(mapLine(panel), /x\.ts isn't reached from where the app starts/);
+});
+
+test("opening a brief still costs 2 requests and reads no files for the map", async () => {
+  const { gh, panel } = mapBriefPanel();
+  await panel.fn.showIssueBrief(routerIssue);
+  assert.match(mapLine(panel), /Open on the map/);
+  assert.doesNotMatch(mapLine(panel), /→/, "no chain before the map is built");
+  assert.equal(gh.rawCalls.filter(u => !/README|package\.json|CODEOWNERS|\.github/.test(u)).length, 0, `raw: ${gh.rawCalls.join(", ")}`);
+  assert.deepEqual(gh.apiCalls.filter(u => u.startsWith("/issues/7/")).sort(), ["/issues/7/comments?per_page=100", "/issues/7/timeline?per_page=100"]);
+});
+
+test("Open on the map opens the map tab on that file", async () => {
+  const { panel } = mapBriefPanel();
+  await panel.fn.showIssueBrief(routerIssue);
+  const opened = [];
+  panel.run("openMapTab = (repo, file) => { globalThis.__opened = [repo.owner + '/' + repo.repo, file]; }");
+  await panel.fn.handleBriefClick({ target: { closest: (s) => (s === ".brief-map-open" ? { dataset: { file: "src/router.ts" } } : null) }, preventDefault() {} });
+  opened.push(...globalThis.__opened);
+  assert.deepEqual(opened, ["o/r", "src/router.ts"]);
+});
+
+test("a brief line drawn after the brief is gone draws nothing", async () => {
+  const { panel } = mapBriefPanel();
+  const repo = panel.run("currentRepo");
+  await panel.fn.loadRepoMap(repo, {});
+  await panel.fn.showIssueBrief(routerIssue);
+  const brief = panel.fn.currentBrief();
+  panel.el("brief-map").innerHTML = "";
+  await panel.fn.drawBriefMap(repo, brief, () => false);
+  assert.equal(mapLine(panel), "");
+});
+
+test("a map problem never replaces the rendered brief", async () => {
+  const { panel } = mapBriefPanel();
+  await panel.fn.loadRepoMap(panel.run("currentRepo"), {});
+  panel.run(`briefChain = () => { throw new Error("draw failed"); }`);
+  await panel.fn.showIssueBrief(routerIssue);
+  const html = panel.el("brief-body").innerHTML;
+  assert.match(html, /Where to start[\s\S]*From clone to pull request/);
+  assert.doesNotMatch(html, /draw failed|state-error|Something went wrong/);
+});
